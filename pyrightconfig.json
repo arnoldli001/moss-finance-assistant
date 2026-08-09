@@ -1,0 +1,8 @@
+{
+  "pythonPath": "d:\\code\\deep-search-pro-master\\.venv\\Scripts\\python.exe",
+  "extraPaths": [
+    "d:\\code\\deep-search-pro-master\\.venv\\Lib\\site-packages",
+    "d:\\code\\deep-search-pro-master"
+  ],
+  "typeCheckingMode": "basic"
+}
