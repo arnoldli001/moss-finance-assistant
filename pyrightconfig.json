@@ -1,8 +1,8 @@
 {
-  "pythonPath": "d:\\code\\deep-search-pro-master\\.venv\\Scripts\\python.exe",
+  "pythonPath": "d:\\code\\moss-finance-assistant\\.venv\\Scripts\\python.exe",
   "extraPaths": [
-    "d:\\code\\deep-search-pro-master\\.venv\\Lib\\site-packages",
-    "d:\\code\\deep-search-pro-master"
+    "d:\\code\\moss-finance-assistant\\.venv\\Lib\\site-packages",
+    "d:\\code\\moss-finance-assistant"
   ],
   "typeCheckingMode": "basic",
   "reportNoReturn": "none",

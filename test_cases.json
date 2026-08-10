@@ -1,22 +1,44 @@
 {
   "_schema_version": 1,
-  "_description": "deep-search-pro 多智能体系统 API /api/task 回归测试用例集。通过 POST query 触发，检查子智能体调用链、IMA 知识库、Tavily 网络搜索的连通性与健壮性。新增用例时追加到 cases 数组末尾，保持 case_id 自增且唯一。执行工具见 scripts/run_test_cases.py（如不存在可按 payload 直接 curl 到 /api/task）。",
+  "_description": "MOSS Finance Assistant 多智能体系统 API /api/task 回归测试用例集。通过 POST query 触发，检查子智能体调用链、IMA 知识库、Tavily 网络搜索的连通性与健壮性。新增用例时追加到 cases 数组末尾，保持 case_id 自增且唯一。执行工具见 scripts/run_test_cases.py（如不存在可按 payload 直接 curl 到 /api/task）。",
   "_created_at": "2026-08-09",
   "cases": [
     {
       "case_id": 1,
       "title": "国产替代知识库-带目标价个股列表输出",
       "query": "搜索一下我的IMA的RAG知识库，搜“国产替代”知识库，输出带目标价的个股，输出形式：个股名称：目标价+相关买入逻辑，精简输出为list，输出内容控制在3000字以内",
-      "tags": ["RAGFlow", "IMA", "国产替代", "长输出格式", "基础冒烟"],
+      "tags": [
+        "RAGFlow",
+        "IMA",
+        "国产替代",
+        "长输出格式",
+        "基础冒烟"
+      ],
       "priority": "P0",
       "expected": {
-        "subagents": ["RAGFlow助手"],
-        "tools_called_at_least_once": ["IMA知识库搜索工具"],
-        "final_answer_should_contain_keywords": ["个股", "买入逻辑"],
-        "forbidden_error_patterns": ["InvalidAPIKeyError", "ConnectionResetError", "RuntimeError: no running event loop"]
+        "subagents": [
+          "RAGFlow助手"
+        ],
+        "tools_called_at_least_once": [
+          "IMA知识库搜索工具"
+        ],
+        "final_answer_should_contain_keywords": [
+          "个股",
+          "买入逻辑"
+        ],
+        "forbidden_error_patterns": [
+          "InvalidAPIKeyError",
+          "ConnectionResetError",
+          "RuntimeError: no running event loop"
+        ]
       },
       "coverage": {
-        "covers": ["RAGFlow子智能体LLM调用", "IMA search_knowledge", "IMA get_media_info", "IMA get_doc_content (media_type=11)"]
+        "covers": [
+          "RAGFlow子智能体LLM调用",
+          "IMA search_knowledge",
+          "IMA get_media_info",
+          "IMA get_doc_content (media_type=11)"
+        ]
       },
       "first_run_at": "2026-08-09",
       "status": "historical_passed"
@@ -25,16 +47,34 @@
       "case_id": 2,
       "title": "国产替代知识库-精简个股列表（不带目标价）",
       "query": "搜索一下我的IMA的RAG知识库，搜“国产替代”知识库，给出国产替代提到的个股，输出个股列表",
-      "tags": ["RAGFlow", "IMA", "国产替代", "列表输出"],
+      "tags": [
+        "RAGFlow",
+        "IMA",
+        "国产替代",
+        "列表输出"
+      ],
       "priority": "P1",
       "expected": {
-        "subagents": ["RAGFlow助手"],
-        "tools_called_at_least_once": ["IMA知识库搜索工具"],
-        "final_answer_should_contain_keywords": ["个股"],
-        "forbidden_error_patterns": ["InvalidAPIKeyError", "ConnectionResetError", "RuntimeError: no running event loop"]
+        "subagents": [
+          "RAGFlow助手"
+        ],
+        "tools_called_at_least_once": [
+          "IMA知识库搜索工具"
+        ],
+        "final_answer_should_contain_keywords": [
+          "个股"
+        ],
+        "forbidden_error_patterns": [
+          "InvalidAPIKeyError",
+          "ConnectionResetError",
+          "RuntimeError: no running event loop"
+        ]
       },
       "coverage": {
-        "covers": ["RAGFlow子智能体重复调用限制 (MAX_CALLS=3)", "search_knowledge 0条结果分支"]
+        "covers": [
+          "RAGFlow子智能体重复调用限制 (MAX_CALLS=3)",
+          "search_knowledge 0条结果分支"
+        ]
       },
       "first_run_at": "2026-08-09",
       "status": "historical_passed"
@@ -43,16 +83,39 @@
       "case_id": 3,
       "title": "跨领域混合查询（天气+术后护理）- 知识库无结果应走网络搜索且不卡住",
       "query": "上海明天下雨吗，流产术后要做什么保护措施？",
-      "tags": ["Tavily", "网络搜索", "跨领域", "长尾关键词", "RAG空搜不循环"],
+      "tags": [
+        "Tavily",
+        "网络搜索",
+        "跨领域",
+        "长尾关键词",
+        "RAG空搜不循环"
+      ],
       "priority": "P1",
       "expected": {
-        "subagents": ["RAGFlow助手", "网络搜索助手"],
-        "tools_called_at_least_once": ["网络搜索工具"],
-        "final_answer_should_contain_keywords": ["上海", "雨", "流产"],
-        "forbidden_error_patterns": ["InvalidAPIKeyError", "ConnectionResetError", "RuntimeError: no running event loop"]
+        "subagents": [
+          "RAGFlow助手",
+          "网络搜索助手"
+        ],
+        "tools_called_at_least_once": [
+          "网络搜索工具"
+        ],
+        "final_answer_should_contain_keywords": [
+          "上海",
+          "雨",
+          "流产"
+        ],
+        "forbidden_error_patterns": [
+          "InvalidAPIKeyError",
+          "ConnectionResetError",
+          "RuntimeError: no running event loop"
+        ]
       },
       "coverage": {
-        "covers": ["RAGFlow 对知识库不含领域时 0 条结果快速收敛", "Tavily API Key 加载（find_dotenv 修复点）", "thinking 事件推送"]
+        "covers": [
+          "RAGFlow 对知识库不含领域时 0 条结果快速收敛",
+          "Tavily API Key 加载（find_dotenv 修复点）",
+          "thinking 事件推送"
+        ]
       },
       "notes": "此用例用于捕获历史 bug：RAGFlow子智能体在投资类知识库重复搜索医学关键词导致浪费时间；Tavily 使用 load_dotenv() 找不到 .env 导致 InvalidAPIKeyError。",
       "first_run_at": "2026-08-09",
@@ -62,16 +125,36 @@
       "case_id": 4,
       "title": "盛科通信-研报+最新新闻（单请求，RAG+网络）",
       "query": "搜索盛科通信相关的研报信息，特别是最新的新闻",
-      "tags": ["Tavily", "RAGFlow", "盛科通信", "联网新闻时效性"],
+      "tags": [
+        "Tavily",
+        "RAGFlow",
+        "盛科通信",
+        "联网新闻时效性"
+      ],
       "priority": "P0",
       "expected": {
-        "subagents": ["RAGFlow助手", "网络搜索助手"],
-        "tools_called_at_least_once": ["IMA知识库搜索工具", "网络搜索工具"],
-        "final_answer_should_contain_keywords": ["盛科通信"],
-        "forbidden_error_patterns": ["InvalidAPIKeyError", "ConnectionResetError", "RuntimeError: no running event loop"]
+        "subagents": [
+          "RAGFlow助手",
+          "网络搜索助手"
+        ],
+        "tools_called_at_least_once": [
+          "IMA知识库搜索工具",
+          "网络搜索工具"
+        ],
+        "final_answer_should_contain_keywords": [
+          "盛科通信"
+        ],
+        "forbidden_error_patterns": [
+          "InvalidAPIKeyError",
+          "ConnectionResetError",
+          "RuntimeError: no running event loop"
+        ]
       },
       "coverage": {
-        "covers": ["主智能体多子智能体串联编排", "RAGFlow+网络搜索信息合并生成最终答案"]
+        "covers": [
+          "主智能体多子智能体串联编排",
+          "RAGFlow+网络搜索信息合并生成最终答案"
+        ]
       },
       "first_run_at": "2026-08-09",
       "status": "historical_passed"
@@ -85,14 +168,29 @@
         "搜索盛科通信相关的研报信息，特别是最新的新闻",
         "搜索IMA里“国产替代”知识库中关于盛科通信相关的研报信息，并且互联网搜最新的相关新闻"
       ],
-      "tags": ["并发", "压力测试", "Tavily连接重置", "ConnectionResetError-10054", "指数退避重试"],
+      "tags": [
+        "并发",
+        "压力测试",
+        "Tavily连接重置",
+        "ConnectionResetError-10054",
+        "指数退避重试"
+      ],
       "priority": "P0",
       "expected": {
-        "forbidden_error_patterns": ["ConnectionResetError", "WinError 10054", "远程主机强迫关闭", "ProtocolError"],
+        "forbidden_error_patterns": [
+          "ConnectionResetError",
+          "WinError 10054",
+          "远程主机强迫关闭",
+          "ProtocolError"
+        ],
         "both_tasks_should_complete_with_task_result_event": true
       },
       "coverage": {
-        "covers": ["Tavily _CONNECTION_ERRORS 指数退避重试 (2s/4s/8s, 3次)", "IMA _request_with_retry 新增 ConnectionResetError 捕获", "IMA PDF/docx 下载连接重试分支"]
+        "covers": [
+          "Tavily _CONNECTION_ERRORS 指数退避重试 (2s/4s/8s, 3次)",
+          "IMA _request_with_retry 新增 ConnectionResetError 捕获",
+          "IMA PDF/docx 下载连接重试分支"
+        ]
       },
       "notes": "历史 bug：两请求间隔 20s，第二次请求触发 requests.exceptions.ConnectionError / WinError 10054。修复后相同场景下两条任务均正常完成。",
       "first_run_at": "2026-08-09",
@@ -102,15 +200,32 @@
       "case_id": 6,
       "title": "IMA PDF/docx 正文下载提取 - 盛科通信国产替代知识库",
       "query": "搜索IMA里“国产替代”知识库中关于盛科通信相关的研报信息",
-      "tags": ["IMA", "PDF下载", "docx解析", "url_info", "盛科通信"],
+      "tags": [
+        "IMA",
+        "PDF下载",
+        "docx解析",
+        "url_info",
+        "盛科通信"
+      ],
       "priority": "P1",
       "expected": {
-        "subagents": ["RAGFlow助手"],
-        "forbidden_error_patterns": ["(无正文内容)"],
-        "final_answer_should_contain_keywords": ["盛科通信"]
+        "subagents": [
+          "RAGFlow助手"
+        ],
+        "forbidden_error_patterns": [
+          "(无正文内容)"
+        ],
+        "final_answer_should_contain_keywords": [
+          "盛科通信"
+        ]
       },
       "coverage": {
-        "covers": ["_download_and_extract_text url_info.url 下载", "media_type=1(PDF) pypdf 提取", "media_type=3(docx) python-docx 提取", "下载连接重置重试"]
+        "covers": [
+          "_download_and_extract_text url_info.url 下载",
+          "media_type=1(PDF) pypdf 提取",
+          "media_type=3(docx) python-docx 提取",
+          "下载连接重置重试"
+        ]
       },
       "notes": "当 search_knowledge 前 max_content 条结果中包含 PDF/docx 时触发。历史版本只对 media_type=11（笔记）获取正文，PDF/docx 仅返回标题。",
       "first_run_at": "2026-08-09",

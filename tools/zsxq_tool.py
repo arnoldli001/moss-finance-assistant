@@ -200,7 +200,7 @@ def _fetch_topics_via_browser(
                             print(msg)
                     except Exception as e:
                         # 响应可能不是 JSON（如图片、CSS 等）
-                        pass
+                        print(f"[ZSXQ] 响应解析失败: {e}")
             except Exception:
                 # 浏览器关闭后的响应会抛异常，忽略即可
                 pass
@@ -288,12 +288,12 @@ def _fetch_topics_via_browser(
                                     clicked_this_round += 1
                                     total_expanded += 1
                                     time.sleep(0.3)
-                            except Exception:
-                                pass
+                            except Exception as e:
+                                print(f"[ZSXQ] 展开按钮点击失败: {e}")
                         if clicked_this_round:
                             print(f"[ZSXQ] 第{pass_idx+1}轮点击了 {clicked_this_round} 个展开全部按钮")
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"[ZSXQ] 展开轮次异常: {e}")
 
                 # 滚动到下一批
                 page.evaluate("window.scrollBy(0, Math.floor(window.innerHeight * 0.7))")

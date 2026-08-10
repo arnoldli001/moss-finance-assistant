@@ -217,7 +217,7 @@ async def run_deep_agent(task_query,session_id,user_id=None):
 
     except Exception as e :
         # 报错推送错误信息给前端
-        monitor._emit("error",f"执行主智能发生异常信息：{str(e)}")
+        monitor.report_error(f"执行主智能体发生异常：{str(e)}")
     finally:
         # 释放存储的地址和session_id
         reset_session_context(session_dir_token, session_id_token)
@@ -260,7 +260,8 @@ async def get_session_history(session_id: str, limit: int = 50):
                 # 盘前小作文热度总结以特定标题开头，标记 type 供前端靠右显示
                 msg_type = "zsxq" if content.startswith("知识星球财经资讯分析总结") else "assistant"
                 msgs.append({"role": "assistant", "content": content, "type": msg_type})
-        return msgs
+        # 只返回最新的 limit 条消息，避免历史过长
+        return msgs[-limit:]
     except Exception as e:
         print(f"[main_agent] 读取会话历史失败: {e}")
         return []

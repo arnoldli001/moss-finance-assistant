@@ -107,6 +107,10 @@ class ToolMonitor:
         """报告任务工作目录"""
         self._emit("session_created", f"工作目录已创建: {path}", {"path": path})
 
+    def report_error(self, message: str):
+        """报告错误信息（公共方法，供外部调用，避免直接调用私有 _emit）"""
+        self._emit("error", message)
+
 
 # 全局单例实例
 monitor = ToolMonitor()

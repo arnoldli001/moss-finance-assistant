@@ -61,6 +61,7 @@ def _call_ollama_chat(model: str, user_prompt: str, system_prompt: str = "",
         method="POST",
         headers={"Content-Type": "application/json"},
     )
+    body = None  # 预声明，确保异常分支中可安全引用
     try:
         with request.urlopen(req, timeout=timeout) as resp:
             body = _json.loads(resp.read().decode("utf-8"))
@@ -68,7 +69,41 @@ def _call_ollama_chat(model: str, user_prompt: str, system_prompt: str = "",
     except error.URLError as e:
         raise RuntimeError(f"Ollama 连接失败，请确认已运行 `ollama serve` 并拉取了模型: {e}")
     except (KeyError, IndexError, _json.JSONDecodeError) as e:
-        raise RuntimeError(f"Ollama 返回格式异常: {e}, 原始响应: {body if 'body' in dir() else 'N/A'}")
+        raise RuntimeError(f"Ollama 返回格式异常: {e}, 原始响应: {body}")
+
+
+def _extract_item(item: dict) -> dict | None:
+    """从单个条目 dict 中提取并归一化 name/sentiment/count 三字段，无效则返回 None。"""
+    # 兼容多种字段名
+    name = str(
+        item.get("name") or item.get("股票名") or item.get("stock")
+        or item.get("股票") or item.get("公司") or item.get("公司名")
+        or ""
+    ).strip()
+    sentiment = str(
+        item.get("sentiment") or item.get("利好利空") or item.get("分析")
+        or item.get("判断") or item.get("情绪") or item.get("倾向")
+        or item.get("类型") or item.get("方向") or ""
+    ).strip()
+    count_raw = (
+        item.get("count") or item.get("次数") or item.get("出现次数")
+        or item.get("提及次数") or 0
+    )
+    try:
+        count = int(count_raw)
+    except (TypeError, ValueError):
+        m = re.search(r'\d+', str(count_raw))
+        count = int(m.group(0)) if m else 1
+    if not name or not sentiment:
+        return None
+    # 归一化情绪：只保留"利好"/"利空"，其他跳过
+    if "利空" in sentiment:
+        sentiment = "利空"
+    elif "利好" in sentiment:
+        sentiment = "利好"
+    else:
+        return None
+    return {"name": name, "sentiment": sentiment, "count": count}
 
 
 def _parse_analysis(raw: str) -> list[dict]:
@@ -108,38 +143,13 @@ def _parse_analysis(raw: str) -> list[dict]:
         arr = _collect_items(parsed_obj)
         for item in arr:
             if isinstance(item, dict):
-                # 兼容多种字段名
-                name = str(
-                    item.get("name") or item.get("股票名") or item.get("stock")
-                    or item.get("股票") or item.get("公司") or item.get("公司名")
-                    or ""
-                ).strip()
-                sentiment = str(
-                    item.get("sentiment") or item.get("利好利空") or item.get("分析")
-                    or item.get("判断") or item.get("情绪") or item.get("倾向")
-                    or item.get("类型") or item.get("方向") or ""
-                ).strip()
-                count_raw = (
-                    item.get("count") or item.get("次数") or item.get("出现次数")
-                    or item.get("提及次数") or 0
-                )
-                try:
-                    count = int(count_raw)
-                except (TypeError, ValueError):
-                    m = re.search(r'\d+', str(count_raw))
-                    count = int(m.group(0)) if m else 1
-                if name and sentiment:
-                    if "利空" in sentiment:
-                        sentiment = "利空"
-                    elif "利好" in sentiment:
-                        sentiment = "利好"
-                    else:
-                        continue
-                    results.append({"name": name, "sentiment": sentiment, "count": count})
+                extracted = _extract_item(item)
+                if extracted:
+                    results.append(extracted)
     except json.JSONDecodeError:
         pass
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[解析] 回退失败: {e}")
 
     if results:
         return results
@@ -152,36 +162,11 @@ def _parse_analysis(raw: str) -> list[dict]:
             if isinstance(arr, list):
                 for item in arr:
                     if isinstance(item, dict):
-                        # 兼容多种字段名
-                        name = str(
-                            item.get("name") or item.get("股票名") or item.get("stock")
-                            or item.get("股票") or item.get("公司") or item.get("公司名")
-                            or ""
-                        ).strip()
-                        sentiment = str(
-                            item.get("sentiment") or item.get("利好利空") or item.get("分析")
-                            or item.get("判断") or item.get("情绪") or item.get("倾向")
-                            or item.get("类型") or item.get("方向") or ""
-                        ).strip()
-                        count_raw = (
-                            item.get("count") or item.get("次数") or item.get("出现次数")
-                            or item.get("提及次数") or 0
-                        )
-                        try:
-                            count = int(count_raw)
-                        except (TypeError, ValueError):
-                            m = re.search(r'\d+', str(count_raw))
-                            count = int(m.group(0)) if m else 1
-                        if name and sentiment:
-                            if "利空" in sentiment:
-                                sentiment = "利空"
-                            elif "利好" in sentiment:
-                                sentiment = "利好"
-                            else:
-                                continue
-                            results.append({"name": name, "sentiment": sentiment, "count": count})
-    except Exception:
-        pass
+                        extracted = _extract_item(item)
+                        if extracted:
+                            results.append(extracted)
+    except Exception as e:
+        print(f"[解析] 回退失败: {e}")
 
     if results:
         return results
@@ -193,7 +178,7 @@ def _parse_analysis(raw: str) -> list[dict]:
         # 去除前后空白和装饰符
         name = name.strip().strip('【】"\'「」()（）[]<>《》·•').strip()
         # 去除开头的列表序号，如 "1.", "2、", "3)", "①", "-", "•"
-        name = re.sub(r'^[\s]*([一二三四五六七八九十百0-9]+[\.、\)\）·]|[①-⑳]|[\-*•▲■▶◆▶])\s*', '', name)
+        name = re.sub(r'^[\s]*([一二三四五六七八九十百0-9]+[\.、\)\）·]|[①-⑳]|[\-*•▲■▶◆])\s*', '', name)
         # 再次去除前后空白和装饰符
         return name.strip().strip('【】"\'「」()（）[]<>《》·•').strip()
 

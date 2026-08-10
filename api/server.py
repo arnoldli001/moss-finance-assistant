@@ -246,7 +246,7 @@ class SecurityMiddleware(BaseHTTPMiddleware):
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["X-XSS-Protection"] = "1; mode=block"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-        response.headers["X-Powered-By"] = "DeepSearch-Pro"  # 隐藏真实服务器信息
+        response.headers["X-Powered-By"] = "MOSS-Finance-Assistant"  # 隐藏真实服务器信息
         return response
 
 
@@ -279,6 +279,10 @@ async def run_task(request: TaskRequest):
 
 
 # ======================== 盘前小作文热度分析接口 ========================
+
+# 后台任务引用集合：防止 asyncio.create_task 返回的 Task 被 GC 中断
+_background_tasks: set = set()
+
 
 class ZsxqAnalysisRequest(BaseModel):
     thread_id: str
@@ -368,18 +372,18 @@ async def _run_zsxq_analysis(thread_id: str):
         if process.returncode != 0:
             tail = "\n".join(stdout_lines[-20:])
             print(f"[ZSXQ分析] test_zsxq.py 执行失败（退出码 {process.returncode}）\n{tail}")
-            monitor._emit("error", "分析失败，请稍后重试")
+            monitor.report_error("分析失败，请稍后重试")
             return
 
         # 4. 读取刚生成的最新 txt 总结文件（精确到秒命名）
         latest_txt = _find_latest_today_txt(news_dir, today_prefix)
         if not latest_txt:
-            monitor._emit("error", "未找到总结文件")
+            monitor.report_error("未找到总结文件")
             return
 
         txt_content = latest_txt.read_text(encoding="utf-8")
         if not txt_content.strip():
-            monitor._emit("error", "总结文件内容为空")
+            monitor.report_error("总结文件内容为空")
             return
 
         # 5. 推送最终结果到前端对话区（作为 assistant 消息显示）
@@ -387,11 +391,11 @@ async def _run_zsxq_analysis(thread_id: str):
         await _save_zsxq_to_history(thread_id, txt_content)
     except FileNotFoundError as e:
         print(f"[ZSXQ分析] 脚本或 Python 解释器不存在: {e}")
-        monitor._emit("error", "分析脚本未找到，请联系管理员")
+        monitor.report_error("分析脚本未找到，请联系管理员")
     except Exception as e:
         import traceback
         traceback.print_exc()
-        monitor._emit("error", "分析过程出现异常，请稍后重试")
+        monitor.report_error("分析过程出现异常，请稍后重试")
     finally:
         reset_session_context(None, thread_token)
 
@@ -404,7 +408,9 @@ async def run_zsxq_analysis(req: ZsxqAnalysisRequest):
     """
     thread_id = req.thread_id
     # 后台异步执行，不阻塞响应
-    asyncio.create_task(_run_zsxq_analysis(thread_id))
+    task = asyncio.create_task(_run_zsxq_analysis(thread_id))
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
     return {"status": "started", "thread_id": thread_id}
 
 

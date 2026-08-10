@@ -32,8 +32,9 @@ from typing import Optional
 # - 场景 ：当 Agent 打印日志或者通过 WebSocket 给前端发消息时，它需要知道：“我现在是正在服务张三，还是李四？” 这样消息才不会发错人。
 _session_dir_ctx: ContextVar[Optional[str]] = ContextVar("session_dir", default=None)
 
-# - 作用 ：用来记录 “当前是谁在执行任务” 。
-# - 场景 ：当 Agent 打印日志或者通过 WebSocket 给前端发消息时，它需要知道：“我现在是正在服务张三，还是李四？” 这样消息才不会发错人。
+# - 作用 ：记录当前请求链路的 thread_id（会话线程标识）。
+# - 场景 ：LangGraph checkpointer 按 thread_id 隔离读写会话状态，确保不同会话的对话历史互不串扰；
+#          同时 WebSocket 推送也依赖它定位目标连接。
 _thread_id_ctx: ContextVar[Optional[str]] = ContextVar("thread_id", default=None)
 
 
