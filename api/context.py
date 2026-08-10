@@ -70,11 +70,13 @@ def get_thread_context() -> Optional[str]:
     return _thread_id_ctx.get()
 
 
-def reset_session_context(session_token, thread_token=None):
+def reset_session_context(session_token=None, thread_token=None):
     """
     清理/重置上下文。
     通常在请求处理结束 (finally 块) 中调用，防止内存泄漏或污染后续请求。
+    session_token / thread_token 为 None 时跳过对应重置（仅设置了其中之一时使用）。
     """
-    _session_dir_ctx.reset(session_token)
-    if thread_token:
+    if session_token is not None:
+        _session_dir_ctx.reset(session_token)
+    if thread_token is not None:
         _thread_id_ctx.reset(thread_token)

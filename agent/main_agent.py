@@ -257,7 +257,9 @@ async def get_session_history(session_id: str, limit: int = 50):
                 if cleaned:  # 被完全剥离的情况（如测试数据）不显示
                     msgs.append({"role": "user", "content": cleaned, "type": "user"})
             elif role in ("assistant", "ai") and content and not getattr(m, "tool_calls", None):
-                msgs.append({"role": "assistant", "content": content, "type": "assistant"})
+                # 盘前小作文热度总结以特定标题开头，标记 type 供前端靠右显示
+                msg_type = "zsxq" if content.startswith("知识星球财经资讯分析总结") else "assistant"
+                msgs.append({"role": "assistant", "content": content, "type": msg_type})
         return msgs
     except Exception as e:
         print(f"[main_agent] 读取会话历史失败: {e}")

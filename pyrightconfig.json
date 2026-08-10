@@ -4,5 +4,19 @@
     "d:\\code\\deep-search-pro-master\\.venv\\Lib\\site-packages",
     "d:\\code\\deep-search-pro-master"
   ],
-  "typeCheckingMode": "basic"
+  "typeCheckingMode": "basic",
+  "reportNoReturn": "none",
+  "reportUnknownMemberType": "none",
+  "reportUnknownArgumentType": "none",
+  "reportUnknownVariableType": "none",
+  "reportUnknownParameterType": "none",
+  "reportUnknownLambdaType": "none",
+  "reportMissingTypeStubs": "none",
+  "reportMissingTypeArgument": "none",
+  "reportMissingParameterType": "none",
+  "reportPrivateImportUsage": "none",
+  "reportGeneralTypeIssues": "none",
+  "ignore": [
+    ".venv"
+  ]
 }

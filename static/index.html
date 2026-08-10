@@ -157,13 +157,13 @@
   #send-btn:disabled { background: #b0b0b5; cursor: not-allowed; }
   /* 快捷操作栏（底部左侧） */
   #quick-actions { display: flex; gap: 8px; flex-wrap: wrap; }
-  #pre-market-btn {
+  #pre-market-btn, #zsxq-hot-btn {
     background: #f5f5f7; color: #1d1d1f; border: 1px solid #d2d2d7;
     padding: 6px 14px; border-radius: 16px; cursor: pointer; font-size: 13px;
     transition: all 0.15s;
   }
-  #pre-market-btn:hover { background: #0a84ff; color: #fff; border-color: #0a84ff; }
-  #pre-market-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  #pre-market-btn:hover, #zsxq-hot-btn:hover { background: #0a84ff; color: #fff; border-color: #0a84ff; }
+  #pre-market-btn:disabled, #zsxq-hot-btn:disabled { opacity: 0.5; cursor: not-allowed; }
   /* ============ 弹窗 ============ */
   .modal-mask { position: fixed; inset: 0; background: rgba(0,0,0,0.4); display: none; align-items: center; justify-content: center; z-index: 100; }
   .modal-mask.show { display: flex; }
@@ -216,6 +216,21 @@
     /* 弹窗适配 */
     .modal { width: 92vw; padding: 14px; }
     #drop-zone { padding: 16px; font-size: 13px; }
+    /* 多选模式下：侧边栏展开为 85% 宽，覆盖主区域，确保按钮可正常点击 */
+    #sidebar.multi-mode {
+      width: 85%;
+      position: absolute;
+      z-index: 100;
+      height: 100vh;
+      box-shadow: 2px 0 12px rgba(0,0,0,0.3);
+    }
+    #sidebar.multi-mode .session-item {
+      padding: 10px 12px; font-size: 13px; text-align: left;
+    }
+    #sidebar.multi-mode .smb-btn {
+      min-width: auto; padding: 8px 10px; font-size: 12px;
+    }
+    #sidebar.multi-mode #toggle-multi-btn { font-size: 13px; padding: 10px; }
   }
 </style>
 </head>
@@ -261,6 +276,7 @@
       </div>
       <div id="quick-actions">
         <button id="pre-market-btn" onclick="sendPreMarketNews()">📰 盘前新闻</button>
+        <button id="zsxq-hot-btn" onclick="sendZsxqHotNews()">🔥 盘前小作文热度</button>
       </div>
     </div>
 
@@ -292,10 +308,6 @@
             <span class="ctx-icon">📄</span>
             <span class="ctx-label">复制为文字</span>
           </div>
-          <div class="ctx-item" data-action="share-native">
-            <span class="ctx-icon">📱</span>
-            <span class="ctx-label">系统分享</span>
-          </div>
         </div>
       </div>
     </div>
@@ -307,7 +319,6 @@
     <img id="image-preview-img" src="" style="max-width:90%;max-height:75vh;border-radius:8px;object-fit:contain;" />
     <div style="margin-top:16px;display:flex;gap:12px;">
       <button id="image-preview-save" style="padding:10px 24px;background:#4CAF50;color:#fff;border:none;border-radius:8px;font-size:14px;cursor:pointer;">保存图片</button>
-      <button id="image-preview-share" style="display:none;padding:10px 24px;background:#2196F3;color:#fff;border:none;border-radius:8px;font-size:14px;cursor:pointer;">系统分享</button>
       <button id="image-preview-close" style="padding:10px 24px;background:#666;color:#fff;border:none;border-radius:8px;font-size:14px;cursor:pointer;">关闭</button>
     </div>
   </div>
@@ -343,6 +354,7 @@ let currentUserId = localStorage.getItem('dsp_user_id') || '';
 let currentSessionId = null;
 let ws = null;
 let isRunning = false;
+let currentTaskType = 'normal'; // 'normal' | 'zsxq'，控制 task_result 靠左/靠右显示
 let wsReconnectCount = 0;
 let _wsReconnectMsg = null;  // 重连提示消息元素（复用，避免多条）
 let wsHeartbeatTimer = null;
@@ -463,17 +475,39 @@ function selectAllSessions(select) {
 
 let _deleteConfirmTimer = null;
 async function confirmDeleteSelectedSessions() {
+  const delBtn = document.querySelector('.smb-delete');
   if (selectedSessionIds.size === 0) { showToast('请先选择要删除的会话'); return; }
 
-  // 二次确认：第一次点击提示，3 秒内再点才真正删除（替代 confirm 弹窗，移动端兼容性更好）
+  // 二次确认：第一次点击改变按钮文字+样式，3 秒内再点才真正删除
+  // 按钮状态变化比 toast 更直观，避免手机端用户错过提示
   if (!_deleteConfirmTimer) {
     const count = selectedSessionIds.size;
+    if (delBtn) {
+      delBtn.textContent = `⚠️ 再次点击确认删除 ${count} 项`;
+      delBtn.style.background = '#ff9500';
+      delBtn.style.border = '1px solid #ff9500';
+      delBtn.style.color = '#fff';
+    }
     showToast(`再次点击确认删除 ${count} 个会话`, 3000);
-    _deleteConfirmTimer = setTimeout(() => { _deleteConfirmTimer = null; }, 3000);
+    _deleteConfirmTimer = setTimeout(() => {
+      _deleteConfirmTimer = null;
+      if (delBtn) {
+        delBtn.textContent = '🗑 删除所选';
+        delBtn.style.background = '';
+        delBtn.style.border = '';
+        delBtn.style.color = '';
+      }
+    }, 3000);
     return;
   }
   clearTimeout(_deleteConfirmTimer);
   _deleteConfirmTimer = null;
+  if (delBtn) {
+    delBtn.textContent = '🗑 删除所选';
+    delBtn.style.background = '';
+    delBtn.style.border = '';
+    delBtn.style.color = '';
+  }
 
   const ids = Array.from(selectedSessionIds);
   const containedCurrent = ids.includes(currentSessionId);
@@ -655,7 +689,11 @@ async function switchSession(sid, title) {
     const r = await fetch(`/api/sessions/${sid}/history`);
     const data = await r.json();
     $('chat').innerHTML = '';
-    (data.messages || []).forEach(m => appendMessage(m.role, m.content));
+    (data.messages || []).forEach(m => {
+      // 盘前小作文热度结果靠右显示（与实时展示一致）
+      const role = m.type === 'zsxq' ? 'user' : m.role;
+      appendMessage(role, m.content);
+    });
     if ((data.messages || []).length === 0) {
       appendMessage('system', '会话已就绪，输入问题开始对话。');
     }
@@ -777,7 +815,10 @@ function handleWSMessage(p) {
       // 最终结果
       clearThinkingTimer();
       const result = (p.data && p.data.result) ? p.data.result : msg;
-      appendMessage('assistant', result);
+      // 盘前小作文热度结果靠右显示，普通任务结果靠左
+      const resultRole = currentTaskType === 'zsxq' ? 'user' : 'assistant';
+      currentTaskType = 'normal';
+      appendMessage(resultRole, result);
       setRunning(false);
       // 刷新会话列表（标题可能已更新）
       loadSessions();
@@ -848,11 +889,48 @@ async function sendPreMarketNews() {
   }
 }
 
+// ============ 盘前小作文热度：调用 test_zsxq.py 抓取知识星球 + LLM 分析 ============
+async function sendZsxqHotNews() {
+  if (!currentSessionId) { alert('请先选择或新建会话'); return; }
+  if (isRunning) { alert('当前任务进行中，请等待完成'); return; }
+
+  // 等待 WebSocket 连接就绪（最多等 3 秒）
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    appendMessage('system', '正在建立连接...');
+    let waited = 0;
+    while ((!ws || ws.readyState !== WebSocket.OPEN) && waited < 3000) {
+      await new Promise(r => setTimeout(r, 200));
+      waited += 200;
+    }
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      appendMessage('error', 'WebSocket 未连接，请检查服务是否正常后重试');
+      return;
+    }
+  }
+
+  appendMessage('user', '盘前小作文热度');
+  currentTaskType = 'zsxq';
+  setRunning(true);
+  try {
+    const r = await fetch('/api/zsxq-analysis', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({thread_id: currentSessionId, user_id: currentUserId})
+    });
+    if (!r.ok) throw new Error('请求失败 ' + r.status);
+    // 结果通过 WebSocket 的 task_result 事件推送，由 handleWSMessage 统一处理
+  } catch (e) {
+    appendMessage('error', '发送失败: ' + e.message);
+    setRunning(false);
+  }
+}
+
 function setRunning(v) {
   isRunning = v;
   $('send-btn').disabled = v;
   const preBtn = $('pre-market-btn');
   if (preBtn) preBtn.disabled = v;
+  const hotBtn = $('zsxq-hot-btn');
+  if (hotBtn) hotBtn.disabled = v;
   // 超时保护：任务开始时启动计时器，5 分钟后自动解锁避免页面永久卡死
   if (runningTimeoutTimer) {
     clearTimeout(runningTimeoutTimer);
@@ -1177,9 +1255,6 @@ async function handleContextAction(action) {
       await copyText(content);
       showToast('已复制为文字');
       break;
-    case 'share-native':
-      await nativeShareText(content);
-      break;
   }
 }
 
@@ -1199,21 +1274,6 @@ async function copyText(text) {
   }
 }
 
-// ============ 系统分享（文字） ============
-async function nativeShareText(text) {
-  if (navigator.share) {
-    try {
-      await navigator.share({ title: '无极 Agent 对话', text });
-      showToast('已调用系统分享');
-    } catch (err) {
-      if (err.name !== 'AbortError') showToast('分享失败');
-    }
-  } else {
-    await copyText(text);
-    showToast('已复制（当前浏览器不支持系统分享）');
-  }
-}
-
 // ============ 分享为图片（单条消息快速版） ============
 async function shareAsImage(msgs) {
   showToast('正在生成分享图片...');
@@ -1226,21 +1286,15 @@ async function shareAsImage(msgs) {
     const ts = new Date();
     const fname = `无极Agent对话_${ts.getFullYear()}${String(ts.getMonth()+1).padStart(2,'0')}${String(ts.getDate()).padStart(2,'0')}_${String(ts.getHours()).padStart(2,'0')}${String(ts.getMinutes()).padStart(2,'0')}.png`;
     const blobUrl = URL.createObjectURL(blob);
-    const file = new File([blob], fname, { type: 'image/png' });
 
-    // 显示预览覆盖层：用户可长按保存、系统分享或下载
+    // 显示预览覆盖层：用户可长按保存或下载
     const overlay = $('image-preview-overlay');
     const img = $('image-preview-img');
     const saveBtn = $('image-preview-save');
-    const shareBtn = $('image-preview-share');
     const closeBtn = $('image-preview-close');
 
     img.src = blobUrl;
     overlay.style.display = 'flex';
-
-    // 系统分享按钮：仅在支持文件分享时显示
-    let canShareFile = !!(navigator.canShare && navigator.canShare({ files: [file] }));
-    shareBtn.style.display = canShareFile ? 'block' : 'none';
 
     // 保存图片（桌面端下载，移动端提示长按）
     const onSave = () => {
@@ -1252,27 +1306,15 @@ async function shareAsImage(msgs) {
       document.body.removeChild(a);
       showToast('图片已下载');
     };
-    // 系统分享
-    const onShare = async () => {
-      try {
-        await navigator.share({ title: '无极 Agent 对话', files: [file] });
-      } catch (err) {
-        if (err.name !== 'AbortError') {
-          showToast('分享失败，请长按图片保存后手动分享');
-        }
-      }
-    };
     const onClose = () => {
       overlay.style.display = 'none';
       img.src = '';
       URL.revokeObjectURL(blobUrl);
       saveBtn.removeEventListener('click', onSave);
-      shareBtn.removeEventListener('click', onShare);
       closeBtn.removeEventListener('click', onClose);
     };
 
     saveBtn.addEventListener('click', onSave);
-    shareBtn.addEventListener('click', onShare);
     closeBtn.addEventListener('click', onClose);
   } catch (err) {
     console.error('生成图片失败', err);

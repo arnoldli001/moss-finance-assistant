@@ -278,6 +278,136 @@ async def run_task(request: TaskRequest):
     return {"status": "started", "thread_id": thread_id, "user_id": request.user_id}
 
 
+# ======================== 盘前小作文热度分析接口 ========================
+
+class ZsxqAnalysisRequest(BaseModel):
+    thread_id: str
+    user_id: Optional[str] = None
+
+
+def _find_latest_today_txt(news_dir: Path, today_prefix: str):
+    """查找当天最新的 txt 总结文件（文件名以 YYYYMMDD 开头，精确到秒命名）"""
+    candidates = sorted(
+        [f for f in news_dir.glob(f"{today_prefix}*.txt") if f.is_file()],
+        key=lambda f: f.name,
+        reverse=True,
+    )
+    return candidates[0] if candidates else None
+
+
+async def _save_zsxq_to_history(thread_id: str, txt_content: str):
+    """把盘前小作文热度的用户消息和结果存入会话历史（checkpointer），刷新后可恢复。"""
+    try:
+        from langchain_core.messages import HumanMessage, AIMessage
+        from agent.main_agent import get_main_agent
+        agent = await get_main_agent()
+        config = {"configurable": {"thread_id": thread_id}}
+        await agent.aupdate_state(config, {"messages": [
+            HumanMessage(content="盘前小作文热度"),
+            AIMessage(content=txt_content),
+        ]})
+    except Exception as e:
+        print(f"[ZSXQ分析] 保存会话历史失败: {e}")
+
+
+async def _run_zsxq_analysis(thread_id: str):
+    """
+    执行盘前小作文热度分析：
+    - 若当天已有 txt 总结，直接复用，跳过抓取
+    - 否则运行 test_zsxq.py 完整流程（抓取 + LLM 分析）
+    完成后通过 WebSocket 将 txt 总结推送到前端对话区。
+    """
+    from api.context import set_thread_context, reset_session_context
+    from api.monitor import monitor
+
+    thread_token = set_thread_context(thread_id)
+    news_dir = project_root / "zsxq_news"
+    today_prefix = datetime.now().strftime("%Y%m%d")
+
+    try:
+        # 1. 优先复用当天已有总结，跳过抓取
+        latest_txt = _find_latest_today_txt(news_dir, today_prefix)
+        if latest_txt:
+            monitor._emit("tool_start", f"检测到当日已有总结：{latest_txt.name}，跳过抓取直接返回")
+            txt_content = latest_txt.read_text(encoding="utf-8")
+            if txt_content.strip():
+                monitor.report_task_result(txt_content)
+                await _save_zsxq_to_history(thread_id, txt_content)
+                return
+            # 内容为空则继续走抓取流程
+
+        # 2. 没有则运行 test_zsxq.py（Playwright sync API 不能在 async 上下文运行）
+        monitor.report_thinking("盘前小作文热度分析")
+        script_path = project_root / "test_zsxq.py"
+        monitor._emit("tool_start", "开始抓取知识星球并调用 Ollama 分析", {"script": str(script_path)})
+
+        process = await asyncio.create_subprocess_exec(
+            sys.executable, str(script_path),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            cwd=str(project_root),
+        )
+
+        # 3. 实时读取输出并推送进度（避免长时间无响应）
+        stdout_lines = []
+        try:
+            while True:
+                line = await process.stdout.readline()
+                if not line:
+                    break
+                text = line.decode("utf-8", errors="replace").rstrip()
+                stdout_lines.append(text)
+                # 关键进度行推送到前端
+                if any(kw in text for kw in ("[抓取]", "[分析]", "[ZSXQ]", "分析结果", "总结已保存")):
+                    monitor._emit("tool_start", text)
+        except Exception as e:
+            print(f"[ZSXQ分析] 读取脚本输出异常: {e}")
+
+        await process.wait()
+
+        if process.returncode != 0:
+            tail = "\n".join(stdout_lines[-20:])
+            print(f"[ZSXQ分析] test_zsxq.py 执行失败（退出码 {process.returncode}）\n{tail}")
+            monitor._emit("error", "分析失败，请稍后重试")
+            return
+
+        # 4. 读取刚生成的最新 txt 总结文件（精确到秒命名）
+        latest_txt = _find_latest_today_txt(news_dir, today_prefix)
+        if not latest_txt:
+            monitor._emit("error", "未找到总结文件")
+            return
+
+        txt_content = latest_txt.read_text(encoding="utf-8")
+        if not txt_content.strip():
+            monitor._emit("error", "总结文件内容为空")
+            return
+
+        # 5. 推送最终结果到前端对话区（作为 assistant 消息显示）
+        monitor.report_task_result(txt_content)
+        await _save_zsxq_to_history(thread_id, txt_content)
+    except FileNotFoundError as e:
+        print(f"[ZSXQ分析] 脚本或 Python 解释器不存在: {e}")
+        monitor._emit("error", "分析脚本未找到，请联系管理员")
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        monitor._emit("error", "分析过程出现异常，请稍后重试")
+    finally:
+        reset_session_context(None, thread_token)
+
+
+@app.post("/api/zsxq-analysis")
+async def run_zsxq_analysis(req: ZsxqAnalysisRequest):
+    """
+    触发 test_zsxq.py 完整流程（知识星球抓取 + Ollama LLM 分析），
+    将生成的 txt 总结内容通过 WebSocket 推送到前端对话区。
+    """
+    thread_id = req.thread_id
+    # 后台异步执行，不阻塞响应
+    asyncio.create_task(_run_zsxq_analysis(thread_id))
+    return {"status": "started", "thread_id": thread_id}
+
+
 # ======================== 用户与会话管理接口 ========================
 
 @app.post("/api/users")
