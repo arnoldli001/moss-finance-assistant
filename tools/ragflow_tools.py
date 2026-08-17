@@ -1,4 +1,7 @@
 #  search_knowledge_base 通过 IMA API 搜索个人知识库
+from __future__ import annotations
+
+from contextvars import ContextVar
 from langchain_core.tools import tool
 from tools.MyRAGFlow import MyRAGFlow
 from api.monitor import monitor
@@ -16,15 +19,34 @@ ragflow_client = MyRAGFlow(
 
 # 单次搜索返回结果上限，防止上下文爆炸
 MAX_RESULTS = 3
-# 全局调用计数器，防止 agent 循环调用
-_call_count = 0
+# 每个会话(per-request)的调用次数上限，防止 agent 循环调用
+#
+# 修复说明（并发隔离）：
+#   原实现使用模块级变量 `_call_count = 0`，当用户 A 与用户 B 并发请求时，
+#   全局计数器被共享：
+#       时序: A调用+1(1) → B调用+1(2) → A调用+1(3) → A被第4次调用时拒绝
+#       后果: A/B 互相冲减对方计数配额，可能导致某用户第1次调用就被限流
+#   改为使用 ContextVar（协程级局部变量），每个 asyncio Task（=会话）独立。
 MAX_CALLS = 3
 
+# Per-session 计数器：每个请求链路（asyncio Task）独立
+_rag_call_count_ctx: ContextVar[int] = ContextVar("ragflow_call_count", default=0)
 
-def reset_call_count():
-    """每次新请求开始时重置计数器"""
-    global _call_count
-    _call_count = 0
+
+def reset_call_count() -> None:
+    """每次新请求开始时重置计数器（当前会话独立）。"""
+    _rag_call_count_ctx.set(0)
+
+
+def _get_call_count() -> int:
+    return _rag_call_count_ctx.get()
+
+
+def _inc_call_count() -> int:
+    """自增当前会话的计数器并返回新值。"""
+    new_val = _rag_call_count_ctx.get() + 1
+    _rag_call_count_ctx.set(new_val)
+    return new_val
 
 
 @tool
@@ -38,10 +60,12 @@ def search_knowledge_base(query: str, knowledge_base_name: str = "") -> str:
     :param knowledge_base_name: 可选，指定知识库名称（如"国产替代"）。不传则搜索所有知识库。
     :return: 知识库检索到的原始信息
     """
-    global _call_count
-    _call_count += 1
-    if _call_count > MAX_CALLS:
-        return f"已达搜索次数上限（{MAX_CALLS}次），请基于已获取的搜索结果回答用户问题，不要再调用此工具。"
+    current_count = _inc_call_count()
+    if current_count > MAX_CALLS:
+        return (
+            f"已达搜索次数上限（{MAX_CALLS}次），"
+            f"请基于已获取的搜索结果回答用户问题，不要再调用此工具。"
+        )
 
     monitor.report_tool(tool_name="IMA知识库搜索工具：search_knowledge_base", args={"query": query, "knowledge_base_name": knowledge_base_name})
 

@@ -94,6 +94,9 @@
   /* 消息操作栏（hover显示复制） */
   .msg-actions { display: flex; flex-direction: column; gap: 4px; opacity: 0; transition: opacity 0.2s; padding-top: 6px; flex-shrink: 0; }
   .msg-wrap:hover .msg-actions { opacity: 1; }
+  /* 多选模式选中态 */
+  .msg-wrap.selected { background: #e3f2fd; border-radius: 12px; box-shadow: 0 0 0 2px #2196f3; }
+  .msg-checkbox { accent-color: #2196f3; }
   .msg-action-btn {
     width: 28px; height: 28px; border: none; background: #f5f5f7; border-radius: 6px;
     cursor: pointer; font-size: 14px; display: flex; align-items: center; justify-content: center;
@@ -155,15 +158,21 @@
   #send-btn { background: #0a84ff; color: #fff; border: none; padding: 0 24px; border-radius: 8px; cursor: pointer; font-size: 14px; }
   #send-btn:hover { background: #0071e3; }
   #send-btn:disabled { background: #b0b0b5; cursor: not-allowed; }
+  #stop-btn { background: #ff3b30; color: #fff; border: none; padding: 0 20px; border-radius: 8px; cursor: pointer; font-size: 14px; }
+  #stop-btn:hover { background: #d70015; }
+  #stop-btn:disabled { background: #b0b0b5; cursor: not-allowed; }
   /* 快捷操作栏（底部左侧） */
   #quick-actions { display: flex; gap: 8px; flex-wrap: wrap; }
-  #pre-market-btn, #zsxq-hot-btn {
+  #pre-market-btn, #zsxq-hot-btn, #review-prediction-btn {
     background: #f5f5f7; color: #1d1d1f; border: 1px solid #d2d2d7;
     padding: 6px 14px; border-radius: 16px; cursor: pointer; font-size: 13px;
     transition: all 0.15s;
   }
-  #pre-market-btn:hover, #zsxq-hot-btn:hover { background: #0a84ff; color: #fff; border-color: #0a84ff; }
-  #pre-market-btn:disabled, #zsxq-hot-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  #pre-market-btn:hover, #zsxq-hot-btn:hover, #review-prediction-btn:hover { background: #0a84ff; color: #fff; border-color: #0a84ff; }
+  #pre-market-btn:disabled, #zsxq-hot-btn:disabled, #review-prediction-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  /* 复盘预测按钮：用强调色与其他两个按钮区分 */
+  #review-prediction-btn { background: #fff5e6; border-color: #ff9500; color: #cc7700; }
+  #review-prediction-btn:hover { background: #ff9500; color: #fff; border-color: #ff9500; }
   /* ============ 弹窗 ============ */
   .modal-mask { position: fixed; inset: 0; background: rgba(0,0,0,0.4); display: none; align-items: center; justify-content: center; z-index: 100; }
   .modal-mask.show { display: flex; }
@@ -265,18 +274,27 @@
       <div class="brand">无极 Agent</div>
       <div class="title" id="session-title">未选择会话</div>
       <button id="upload-btn" onclick="openUploadModal()">📤 上传文件</button>
+      <button id="msg-multi-select-btn" onclick="toggleMsgMultiSelectMode()" style="margin-left:8px;display:none;">☑ 多选</button>
     </div>
     <div id="chat">
       <div class="msg system">欢迎使用无极 Agent，输入问题即可开始对话。</div>
+    </div>
+    <!-- 多选模式浮动操作栏 -->
+    <div id="msg-multi-action-bar" style="display:none;position:fixed;bottom:80px;left:50%;transform:translateX(-50%);z-index:1000;background:#fff;border:1px solid #ddd;border-radius:24px;box-shadow:0 4px 16px rgba(0,0,0,0.15);padding:8px 12px;display:flex;gap:12px;align-items:center;">
+      <span id="msg-multi-count" style="color:#666;font-size:13px;">已选 0 条</span>
+      <button id="msg-multi-delete-btn" onclick="batchDeleteSelectedMsgs()" style="background:#e53935;color:#fff;border:none;border-radius:16px;padding:6px 16px;cursor:pointer;font-size:13px;">🗑 删除选中</button>
+      <button id="msg-multi-cancel-btn" onclick="exitMsgMultiSelectMode()" style="background:#666;color:#fff;border:none;border-radius:16px;padding:6px 16px;cursor:pointer;font-size:13px;">取消</button>
     </div>
     <div id="input-bar">
       <div id="input-row">
         <textarea id="query-input" placeholder="输入问题，Enter 发送，Shift+Enter 换行" disabled></textarea>
         <button id="send-btn" disabled>发送</button>
+        <button id="stop-btn" disabled>停止</button>
       </div>
       <div id="quick-actions">
         <button id="pre-market-btn" onclick="sendPreMarketNews()">📰 盘前新闻</button>
         <button id="zsxq-hot-btn" onclick="sendZsxqHotNews()">🔥 盘前小作文热度</button>
+        <button id="review-prediction-btn" onclick="sendReviewPrediction()">🔮 复盘预测</button>
       </div>
     </div>
 
@@ -309,6 +327,15 @@
             <span class="ctx-label">复制为文字</span>
           </div>
         </div>
+      </div>
+      <div class="ctx-divider"></div>
+      <div class="ctx-item danger" data-action="delete" id="ctx-delete">
+        <span class="ctx-icon">🗑️</span>
+        <span class="ctx-label">删除该消息</span>
+      </div>
+      <div class="ctx-item danger" data-action="delete-turn" id="ctx-delete-turn">
+        <span class="ctx-icon">🗑️</span>
+        <span class="ctx-label">删除整轮问答</span>
       </div>
     </div>
   </div>
@@ -348,6 +375,8 @@
   <!-- ============ Toast 提示 ============ -->
   <div id="toast"></div>
 
+<!-- 前端集中常量：所有魔鬼数字统一在 static/js/constants.js 定义，这里先加载供下方使用 -->
+<script src="/static/js/constants.js"></script>
 <script>
 // ============ 全局状态 ============
 let currentUserId = localStorage.getItem('dsp_user_id') || '';
@@ -359,9 +388,10 @@ let wsReconnectCount = 0;
 let _wsReconnectMsg = null;  // 重连提示消息元素（复用，避免多条）
 let wsHeartbeatTimer = null;
 let runningTimeoutTimer = null;
-const WS_HEARTBEAT_INTERVAL = 30000;  // 30秒心跳
-const WS_MAX_RECONNECT = 3;            // 最大重连次数
-const RUNNING_TIMEOUT = 300000;        // 5分钟超时保护
+// 所有数字常量集中到 APP_CONSTANTS，修改见 static/js/constants.js
+const WS_HEARTBEAT_INTERVAL = APP_CONSTANTS.WS_HEARTBEAT_INTERVAL_MS;  // 心跳间隔（毫秒）
+const WS_MAX_RECONNECT      = APP_CONSTANTS.WS_MAX_RECONNECT;           // 最大重连次数
+const RUNNING_TIMEOUT       = APP_CONSTANTS.RUNNING_TIMEOUT_MS;         // 运行硬超时（毫秒）
 
 const $ = id => document.getElementById(id);
 
@@ -389,6 +419,7 @@ window.addEventListener('load', async () => {
   }
   $('login-btn').addEventListener('click', login);
   $('send-btn').addEventListener('click', sendMessage);
+  $('stop-btn').addEventListener('click', stopCurrentTask);
   $('query-input').addEventListener('keydown', e => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
   });
@@ -488,7 +519,7 @@ async function confirmDeleteSelectedSessions() {
       delBtn.style.border = '1px solid #ff9500';
       delBtn.style.color = '#fff';
     }
-    showToast(`再次点击确认删除 ${count} 个会话`, 3000);
+    showToast(`再次点击确认删除 ${count} 个会话`, APP_CONSTANTS.TOAST_DEFAULT_DURATION_MS);
     _deleteConfirmTimer = setTimeout(() => {
       _deleteConfirmTimer = null;
       if (delBtn) {
@@ -497,7 +528,7 @@ async function confirmDeleteSelectedSessions() {
         delBtn.style.border = '';
         delBtn.style.color = '';
       }
-    }, 3000);
+    }, APP_CONSTANTS.DELETE_CONFIRM_WINDOW_MS);
     return;
   }
   clearTimeout(_deleteConfirmTimer);
@@ -514,8 +545,10 @@ async function confirmDeleteSelectedSessions() {
   showToast('正在删除...');
   try {
     let okCount = 0, failCount = 0;
+    const uid = encodeURIComponent(currentUserId);
     for (const sid of ids) {
-      const resp = await fetch(`/api/sessions/${sid}`, { method: 'DELETE' });
+      // 用户隔离校验：带上 user_id 防止越权删除
+      const resp = await fetch(`/api/sessions/${sid}?user_id=${uid}`, { method: 'DELETE' });
       if (resp.ok) okCount++;
       else failCount++;
     }
@@ -530,7 +563,7 @@ async function confirmDeleteSelectedSessions() {
     sessionMultiMode = false;
     $('sidebar').classList.remove('multi-mode');
     await loadSessions();
-    if (failCount > 0) showToast(`已删除 ${okCount} 个，${failCount} 个失败`, 3000);
+    if (failCount > 0) showToast(`已删除 ${okCount} 个，${failCount} 个失败`, APP_CONSTANTS.TOAST_DEFAULT_DURATION_MS);
     else showToast(`已删除 ${okCount} 个会话`);
   } catch (err) {
     console.error('批量删除失败', err);
@@ -600,15 +633,21 @@ let _singleDeleteConfirm = {};
 async function deleteSession(sid) {
   // 二次确认（替代 confirm 弹窗）
   if (!_singleDeleteConfirm[sid]) {
-    showToast('再次点击确认删除', 3000);
+    showToast('再次点击确认删除', APP_CONSTANTS.TOAST_DEFAULT_DURATION_MS);
     _singleDeleteConfirm[sid] = true;
-    setTimeout(() => { delete _singleDeleteConfirm[sid]; }, 3000);
+    setTimeout(() => { delete _singleDeleteConfirm[sid]; }, APP_CONSTANTS.DELETE_CONFIRM_WINDOW_MS);
     return;
   }
   delete _singleDeleteConfirm[sid];
   try {
-    const resp = await fetch(`/api/sessions/${sid}`, {method:'DELETE'});
-    if (!resp.ok) { showToast('删除失败'); return; }
+    // 用户隔离校验：必须带上 user_id，防止越权删除他人会话
+    const uid = encodeURIComponent(currentUserId);
+    const resp = await fetch(`/api/sessions/${sid}?user_id=${uid}`, {method:'DELETE'});
+    if (!resp.ok) {
+      const data = await resp.json().catch(() => ({}));
+      showToast('删除失败: ' + (data.detail || resp.statusText));
+      return;
+    }
     if (sid === currentSessionId) {
       currentSessionId = null;
       $('session-title').textContent = '未选择会话';
@@ -650,9 +689,10 @@ function startRename(elem, sid, oldTitle) {
     const newTitle = input.value.trim();
     if (submit && newTitle && newTitle !== oldText) {
       try {
+        // 用户隔离校验：带上 user_id 防止越权修改他人会话标题
         await fetch(`/api/sessions/${sid}/title`, {
           method: 'PATCH', headers: {'Content-Type':'application/json'},
-          body: JSON.stringify({title: newTitle})
+          body: JSON.stringify({title: newTitle, user_id: currentUserId})
         });
         // 更新头部标题（如果是当前会话）
         if (sid === currentSessionId) $('session-title').textContent = newTitle;
@@ -669,6 +709,20 @@ function startRename(elem, sid, oldTitle) {
 
 // ============ 切换会话 ============
 async function switchSession(sid, title) {
+  // ===== 切换会话竞态修复：先立即摘除旧 WS 回调并关闭，再改 currentSessionId =====
+  // 修复前：currentSessionId 先被改成新会话 → await fetch 历史 → 期间旧会话 WS
+  //        仍存活，其 onmessage 把旧会话消息追加进新会话聊天区（消息混淆）。
+  // 修复后：摘掉 onmessage/onclose/onerror（旧 WS 残留消息不再投递到 handleWSMessage），
+  //        然后才切换 currentSessionId、拉历史、建新 WS。
+  if (ws) {
+    ws.onclose = null;
+    ws.onerror = null;
+    ws.onmessage = null;
+    ws.onopen = null;
+    try { ws.close(); } catch(e){}
+    ws = null;
+  }
+  clearHeartbeat();
   currentSessionId = sid;
   $('session-title').textContent = title || '未命名会话';
   $('query-input').disabled = false;
@@ -686,20 +740,44 @@ async function switchSession(sid, title) {
   $('chat').innerHTML = '<div class="msg system">正在加载历史记录...</div>';
   // 加载历史
   try {
-    const r = await fetch(`/api/sessions/${sid}/history`);
+    // 用户隔离校验：带上 user_id 防止越权读取他人对话
+    const uid = encodeURIComponent(currentUserId);
+    const r = await fetch(`/api/sessions/${sid}/history?user_id=${uid}`);
+    if (!r.ok) {
+      const data = await r.json().catch(() => ({}));
+      $('chat').innerHTML = `<div class="msg error">加载历史失败: ${data.detail || r.statusText}</div>`;
+      return;
+    }
     const data = await r.json();
     $('chat').innerHTML = '';
+    let currentTurn = 0;
     (data.messages || []).forEach(m => {
-      // 盘前小作文热度结果靠右显示（与实时展示一致）
+      // 轮次计数：遇到 user 开启新一轮；assistant 沿用同一 turn_index
       const role = m.type === 'zsxq' ? 'user' : m.role;
-      appendMessage(role, m.content);
+      if (m.role === 'user' || m.role === 'human') currentTurn += 1;
+      const turnIdx = currentTurn >= 1 ? currentTurn : null;
+      appendMessage(role, m.content, turnIdx != null ? { turnIndex: turnIdx } : {});
     });
+    // 实时 pending 轮次：基于当前 DOM 最大 turnIndex 初始化（保证刚发送的未刷新消息也能有连续 turn）
+    {
+      let maxT = 0;
+      document.querySelectorAll('.msg-wrap[data-turn-index]').forEach(w => {
+        const n = Number(w.dataset.turnIndex);
+        if (!isNaN(n) && n > maxT) maxT = n;
+      });
+      pendingTurnIndex = maxT;
+    }
     if ((data.messages || []).length === 0) {
       appendMessage('system', '会话已就绪，输入问题开始对话。');
     }
   } catch (e) {
     $('chat').innerHTML = `<div class="msg error">加载历史失败: ${e.message}</div>`;
   }
+  // 进入会话后才显示「消息多选」按钮
+  const msBtn = $('msg-multi-select-btn');
+  if (msBtn) msBtn.style.display = 'inline-block';
+  // 若处于多选模式，重新渲染复选框
+  if (msgMultiSelectMode) renderMsgCheckboxes();
   // 建立 WebSocket
   connectWS(sid);
   await loadSessions(); // 刷新高亮
@@ -741,7 +819,7 @@ function connectWS(sid) {
     // 自动重连（有当前会话且未超最大重试次数）
     if (wsReconnectCount < WS_MAX_RECONNECT && currentSessionId) {
       wsReconnectCount++;
-      const delay = 2000 * wsReconnectCount;
+      const delay = APP_CONSTANTS.WS_RECONNECT_BASE_DELAY_MS * wsReconnectCount;
       console.log(`WS ${wsReconnectCount}/${WS_MAX_RECONNECT} 重连中（${delay}ms 后）...`);
       // 任务运行中断连：只显示一条重连提示（复用已有消息元素）
       if (isRunning) {
@@ -753,13 +831,13 @@ function connectWS(sid) {
         setTimeout(() => {
           // 重连后若 WebSocket 恢复则清除提示；否则报错
           if (ws && ws.readyState === WebSocket.OPEN) {
-            if (_wsReconnectMsg) { _wsReconnectMsg.textContent = '连接已恢复'; setTimeout(() => { if (_wsReconnectMsg) { _wsReconnectMsg.remove(); _wsReconnectMsg = null; } }, 2000); }
+            if (_wsReconnectMsg) { _wsReconnectMsg.textContent = '连接已恢复'; setTimeout(() => { if (_wsReconnectMsg) { _wsReconnectMsg.remove(); _wsReconnectMsg = null; } }, APP_CONSTANTS.WS_RECONNECT_RECOVERY_HINT_MS); }
           } else if (isRunning) {
             appendMessage('error', '⚠️ WebSocket 重连失败，任务状态可能丢失。可尝试重新发送。');
             setRunning(false);
             _wsReconnectMsg = null;
           }
-        }, delay + 1000);
+        }, delay + APP_CONSTANTS.WS_RECONNECT_BASE_DELAY_MS);
       }
       setTimeout(() => { if (currentSessionId) connectWS(currentSessionId); }, delay);
     } else if (isRunning) {
@@ -810,15 +888,75 @@ function handleWSMessage(p) {
         updateThinkingTimer();
       }
     } else if (ev === 'tool_start') {
-      // 工具执行提示，前端静默忽略
+      // 工具开始执行：合并到顶部单条 thinking 提示中，永不追加新气泡
+      // 【修复大段空白】之前每条 tool_start 都可能 appendMessage 独立气泡，
+      // 几十条 + 每条的外边距 = 视觉上的大段空白。这里强制只改一条 thinkingEl 文本。
+      const toolName = (p.data && p.data.tool_name) ? p.data.tool_name : '';
+      const toolArgs = (p.data && p.data.args) ? p.data.args : {};
+      let toolDesc = msg;
+      if (toolName === 'search_zsxq_by_stock' && toolArgs.stock_name) {
+        toolDesc = `🔍 正在知识星球搜索「${toolArgs.stock_name}」的研报/小作文...`;
+      } else if (toolName === 'generate_markdown') {
+        toolDesc = '📝 正在生成文档...';
+      } else if (toolName === 'convert_md_to_pdf') {
+        toolDesc = '📄 正在转换PDF...';
+      } else if (toolName === 'read_file_content') {
+        toolDesc = `📎 正在读取文件「${toolArgs.filename || ''}」...`;
+      }
+      stopProgressTimer();
+      // 确保 thinkingEl 仍然挂载在 DOM（防止被 session 切换或异常清掉）
+      if (thinkingEl && !document.body.contains(thinkingEl)) {
+        thinkingEl = null;
+      }
+      if (!thinkingEl) {
+        thinkingEl = appendMessage('event', '💭 ' + toolDesc + '（已耗时 0 秒）');
+        thinkingEl.setAttribute('data-base', '💭 ' + toolDesc);
+        thinkingStartTime = Date.now();
+        updateThinkingTimer();
+      } else {
+        // 已有 thinking：只更新 data-base（updateThinkingTimer 定时读它），不新建
+        thinkingEl.setAttribute('data-base', '💭 ' + toolDesc);
+      }
+    } else if (ev === 'tool_end') {
+      // 工具执行完成：显示工具返回的结果（包含知识星球搜索结果+Qwen8B分析）
+      clearThinkingTimer();
+      const toolResult = (p.data && p.data.result) ? p.data.result : '';
+      const toolName = (p.data && p.data.tool_name) ? p.data.tool_name : '';
+      // 过滤"实质空"内容：LLM/tool 偶尔返回字面 "[]"/"null"/"{}" 等空响应
+      // 后端已做过滤，这里加一层前端兜底，避免任何路径漏网
+      const _isEmptyLike = (s) => {
+        if (!s) return true;
+        const t = String(s).trim();
+        if (!t) return true;
+        return ['[]', 'null', 'None', '{}', '""', "''", '()'].includes(t);
+      };
+      if (toolResult && !_isEmptyLike(toolResult)) {
+        // 工具结果作为助手消息显示（中间结果）——与 pending user 同属一轮
+        appendMessage('assistant', toolResult,
+          pendingTurnIndex >= 1 ? { turnIndex: pendingTurnIndex } : {});
+      }
     } else if (ev === 'task_result') {
       // 最终结果
       clearThinkingTimer();
       const result = (p.data && p.data.result) ? p.data.result : msg;
+      // 过滤"实质空"内容（与 tool_end 同样规则）
+      const _isEmptyLike = (s) => {
+        if (!s) return true;
+        const t = String(s).trim();
+        if (!t) return true;
+        return ['[]', 'null', 'None', '{}', '""', "''", '()'].includes(t);
+      };
+      if (_isEmptyLike(result)) {
+        // 净化后为空 → 不追加消息，保持运行状态（等真正的结果）
+        // 但若后续再也没有真实结果，用户会看到一直 loading —— 这里不主动 setRunning(false)，
+        // 因为后端最终一定会有完成事件（task_result 真值或 error）
+        return;
+      }
       // 盘前小作文热度结果靠右显示，普通任务结果靠左
       const resultRole = currentTaskType === 'zsxq' ? 'user' : 'assistant';
       currentTaskType = 'normal';
-      appendMessage(resultRole, result);
+      appendMessage(resultRole, result,
+        pendingTurnIndex >= 1 ? { turnIndex: pendingTurnIndex } : {});
       setRunning(false);
       // 刷新会话列表（标题可能已更新）
       loadSessions();
@@ -839,7 +977,8 @@ async function sendMessage() {
   if (!currentSessionId) { alert('请先选择或新建会话'); return; }
   if (isRunning) { alert('当前任务进行中，请等待完成'); return; }
   $('query-input').value = '';
-  appendMessage('user', q);
+  pendingTurnIndex += 1;
+  appendMessage('user', q, { turnIndex: pendingTurnIndex });
   setRunning(true);
   try {
     const r = await fetch('/api/task', {
@@ -863,9 +1002,9 @@ async function sendPreMarketNews() {
   if (!ws || ws.readyState !== WebSocket.OPEN) {
     appendMessage('system', '正在建立连接...');
     let waited = 0;
-    while ((!ws || ws.readyState !== WebSocket.OPEN) && waited < 3000) {
-      await new Promise(r => setTimeout(r, 200));
-      waited += 200;
+    while ((!ws || ws.readyState !== WebSocket.OPEN) && waited < APP_CONSTANTS.WS_WAIT_OPEN_TIMEOUT_MS) {
+      await new Promise(r => setTimeout(r, APP_CONSTANTS.WS_WAIT_OPEN_POLL_STEP_MS));
+      waited += APP_CONSTANTS.WS_WAIT_OPEN_POLL_STEP_MS;
     }
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       appendMessage('error', 'WebSocket 未连接，请检查服务是否正常后重试');
@@ -874,10 +1013,17 @@ async function sendPreMarketNews() {
   }
 
   // 前端仅展示简短名称，不暴露完整提示词
-  appendMessage('user', '盘前新闻策略');
+  pendingTurnIndex += 1;
+  appendMessage('user', '盘前新闻策略', { turnIndex: pendingTurnIndex });
   setRunning(true);
   try {
-    const fullQuery = `1）查询下今天是周几，如果今天是周一且在早上十点半前或周六、周日，则网络搜索时间范围为周五下午三点至当前北京时间；否则搜索时间范围为今日昨天下午三点至当前北京时间。2）根据搜索时间范围，搜韭研社区、炒股吧、雪球、同花顺股吧、东方财富股吧，讨论热度最高的新闻和个股前10，汇总简要输出利好还是利空的逻辑个股，字数控制在3000字以内，输出开头第一句总结分别给出利好和利空个股清单。`;
+    // 【关键】日期/星期/搜索时间范围不再由前端硬编码"查询今天是周几"的子任务，
+    // 统一由后端 server.py 的 _rewrite_premarket_query_if_shortcut() 注入：
+    //   - datetime(timezone+8) 直接计算精确的当前北京时间、星期、小时；
+    //   - 按规则（周一<10点/周末→周五15:00起；其他→昨天15:00起）算出搜索范围；
+    //   - 前缀加【系统已注入当前北京时间·严禁联网查日期】硬性约束；
+    // 避免 LLM 按字面执行"查询今天是周几"，浪费 2-3 轮联网查时间校准网。
+    const fullQuery = `请根据系统提供的搜索时间范围，搜韭研社区、炒股吧、雪球、同花顺股吧、东方财富股吧，讨论热度最高的新闻和个股前10，并且获取美股最新夜盘科技股（特别是美光、海力士、谷歌、meta、应用光电、康宁、英伟达的最新盘前或盘中股价涨跌情况、走势、相关最新当天的新闻），汇总简要输出利好还是利空的逻辑A股概念板块或个股，字数控制在3000字以内，输出开头第一句总结分别给出利好和利空个股清单。`;
     const r = await fetch('/api/task', {
       method: 'POST', headers: {'Content-Type':'application/json'},
       body: JSON.stringify({query: fullQuery, thread_id: currentSessionId, user_id: currentUserId})
@@ -898,9 +1044,9 @@ async function sendZsxqHotNews() {
   if (!ws || ws.readyState !== WebSocket.OPEN) {
     appendMessage('system', '正在建立连接...');
     let waited = 0;
-    while ((!ws || ws.readyState !== WebSocket.OPEN) && waited < 3000) {
-      await new Promise(r => setTimeout(r, 200));
-      waited += 200;
+    while ((!ws || ws.readyState !== WebSocket.OPEN) && waited < APP_CONSTANTS.WS_WAIT_OPEN_TIMEOUT_MS) {
+      await new Promise(r => setTimeout(r, APP_CONSTANTS.WS_WAIT_OPEN_POLL_STEP_MS));
+      waited += APP_CONSTANTS.WS_WAIT_OPEN_POLL_STEP_MS;
     }
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       appendMessage('error', 'WebSocket 未连接，请检查服务是否正常后重试');
@@ -908,7 +1054,8 @@ async function sendZsxqHotNews() {
     }
   }
 
-  appendMessage('user', '盘前小作文热度');
+  pendingTurnIndex += 1;
+  appendMessage('user', '盘前小作文热度', { turnIndex: pendingTurnIndex });
   currentTaskType = 'zsxq';
   setRunning(true);
   try {
@@ -924,13 +1071,61 @@ async function sendZsxqHotNews() {
   }
 }
 
+// ============ 复盘预测：串行执行小作文热度 + 盘前新闻 + DeepSeek 指数预测 ============
+async function sendReviewPrediction() {
+  if (!currentSessionId) { alert('请先选择或新建会话'); return; }
+  if (isRunning) { alert('当前任务进行中，请等待完成'); return; }
+
+  // 等待 WebSocket 连接就绪（最多等 3 秒）
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    appendMessage('system', '正在建立连接...');
+    let waited = 0;
+    while ((!ws || ws.readyState !== WebSocket.OPEN) && waited < APP_CONSTANTS.WS_WAIT_OPEN_TIMEOUT_MS) {
+      await new Promise(r => setTimeout(r, APP_CONSTANTS.WS_WAIT_OPEN_POLL_STEP_MS));
+      waited += APP_CONSTANTS.WS_WAIT_OPEN_POLL_STEP_MS;
+    }
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      appendMessage('error', 'WebSocket 未连接，请检查服务是否正常后重试');
+      return;
+    }
+  }
+
+  // 读取输入框内容：若用户填写了个股名/关注点，带入复盘预测
+  const userInput = $('query-input').value.trim();
+  const displayLabel = userInput
+    ? `复盘预测（关注：${userInput}）`
+    : '复盘预测';
+  pendingTurnIndex += 1;
+  appendMessage('user', displayLabel, { turnIndex: pendingTurnIndex });
+  $('query-input').value = '';
+  setRunning(true);
+  try {
+    const r = await fetch('/api/review-prediction', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        thread_id: currentSessionId,
+        user_id: currentUserId,
+        user_query: userInput
+      })
+    });
+    if (!r.ok) throw new Error('请求失败 ' + r.status);
+    // 结果通过 WebSocket 的 task_result 事件推送，由 handleWSMessage 统一处理
+  } catch (e) {
+    appendMessage('error', '发送失败: ' + e.message);
+    setRunning(false);
+  }
+}
+
 function setRunning(v) {
   isRunning = v;
   $('send-btn').disabled = v;
+  $('stop-btn').disabled = !v;
   const preBtn = $('pre-market-btn');
   if (preBtn) preBtn.disabled = v;
   const hotBtn = $('zsxq-hot-btn');
   if (hotBtn) hotBtn.disabled = v;
+  const reviewBtn = $('review-prediction-btn');
+  if (reviewBtn) reviewBtn.disabled = v;
   // 超时保护：任务开始时启动计时器，5 分钟后自动解锁避免页面永久卡死
   if (runningTimeoutTimer) {
     clearTimeout(runningTimeoutTimer);
@@ -951,8 +1146,36 @@ function setRunning(v) {
   }
 }
 
+// ============ 停止当前任务 ============
+async function stopCurrentTask() {
+  const tid = currentSessionId;
+  if (!tid) {
+    appendMessage('error', '无法停止：未找到当前会话');
+    setRunning(false);
+    return;
+  }
+  try {
+    const resp = await fetch('/api/task/stop', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ thread_id: tid })
+    });
+    const data = await resp.json();
+    if (data.status === 'stopped') {
+      appendMessage('system', '⏹ 已停止当前任务，您可以重新输入问题。');
+    } else if (data.status === 'not_found') {
+      appendMessage('system', '当前没有正在执行的任务。');
+    }
+  } catch (e) {
+    appendMessage('error', '停止任务失败: ' + e.message);
+  } finally {
+    // 无论后端是否成功，前端都解锁，允许用户再次输入
+    setRunning(false);
+  }
+}
+
 // ============ Toast 提示 ============
-function showToast(text, duration = 2000) {
+function showToast(text, duration = APP_CONSTANTS.TOAST_DEFAULT_DURATION_MS) {
   const t = $('toast');
   t.textContent = text;
   t.classList.add('show');
@@ -964,11 +1187,145 @@ let currentContextMsg = null;  // 当前操作的消息 DOM 元素
 let currentContentEl = null;  // 当前操作的 .msg 元素（用于文本选择）
 let currentContextContent = '';
 let currentContextRole = '';
+let currentTurnIndex = null;   // 当前操作消息所属轮次（1-based），null 表示尚未绑定历史
 let longPressTimer = null;
 let longPressStartX = 0, longPressStartY = 0;
-const LONG_PRESS_DURATION = 500;  // 长按判定时间(ms)
-const LONG_PRESS_MOVE_TOLERANCE = 10;  // 移动容忍像素
+const LONG_PRESS_DURATION = APP_CONSTANTS.LONG_PRESS_TRIGGER_MS;  // 长按判定时间(ms)
+const LONG_PRESS_MOVE_TOLERANCE = APP_CONSTANTS.LONG_PRESS_MOVE_TOLERANCE_PX;  // 移动容忍像素
 let msgIdCounter = 0;
+let pendingTurnIndex = 0;  // 未持久化的实时聊天轮次（刷新页面后重新从 DOM 最大 turnIndex 推导）
+let msgMultiSelectMode = false;  // 消息多选模式开关
+let selectedMsgSet = new Set();  // 多选模式下被选中的消息 key（格式：`${turnIndex}:${role}`）
+
+// ============ 消息多选模式 ============
+function toggleMsgMultiSelectMode() {
+  msgMultiSelectMode = !msgMultiSelectMode;
+  const btn = $('msg-multi-select-btn');
+  const bar = $('msg-multi-action-bar');
+  if (msgMultiSelectMode) {
+    btn.textContent = '✕ 退出多选';
+    btn.style.background = '#e53935';
+    btn.style.color = '#fff';
+    bar.style.display = 'flex';
+    selectedMsgSet.clear();
+    renderMsgCheckboxes();
+    updateMsgMultiCount();
+  } else {
+    exitMsgMultiSelectMode();
+  }
+}
+
+function exitMsgMultiSelectMode() {
+  msgMultiSelectMode = false;
+  const btn = $('msg-multi-select-btn');
+  const bar = $('msg-multi-action-bar');
+  if (btn) {
+    btn.textContent = '☑ 多选';
+    btn.style.background = '';
+    btn.style.color = '';
+  }
+  if (bar) bar.style.display = 'none';
+  selectedMsgSet.clear();
+  // 清除所有复选框
+  document.querySelectorAll('.msg-checkbox').forEach(cb => cb.remove());
+  document.querySelectorAll('.msg-wrap').forEach(w => w.classList.remove('selected'));
+  updateMsgMultiCount();
+}
+
+function renderMsgCheckboxes() {
+  // 给每条 user/assistant 消息加复选框
+  document.querySelectorAll('.msg-wrap').forEach(w => {
+    const existingCb = w.querySelector('.msg-checkbox');
+    if (existingCb) existingCb.remove();
+    if (!msgMultiSelectMode) return;
+    const role = w.dataset.role;
+    if (role !== 'user' && role !== 'assistant') return;
+    const turnIdx = w.dataset.turnIndex;
+    if (!turnIdx) return;
+    const key = `${turnIdx}:${role}`;
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.className = 'msg-checkbox';
+    cb.style.cssText = 'margin-right:8px;flex-shrink:0;width:18px;height:18px;cursor:pointer;';
+    cb.checked = selectedMsgSet.has(key);
+    cb.addEventListener('change', () => {
+      if (cb.checked) {
+        selectedMsgSet.add(key);
+        w.classList.add('selected');
+      } else {
+        selectedMsgSet.delete(key);
+        w.classList.remove('selected');
+      }
+      updateMsgMultiCount();
+    });
+    // 插入到 spacer 之后
+    const spacer = w.querySelector('div[style*="width: 18px"]');
+    if (spacer && spacer.nextSibling) {
+      w.insertBefore(cb, spacer.nextSibling);
+    } else {
+      w.insertBefore(cb, w.firstChild.nextSibling);
+    }
+  });
+}
+
+function updateMsgMultiCount() {
+  const el = $('msg-multi-count');
+  if (el) el.textContent = `已选 ${selectedMsgSet.size} 条`;
+  const delBtn = $('msg-multi-delete-btn');
+  if (delBtn) delBtn.disabled = selectedMsgSet.size === 0;
+}
+
+async function batchDeleteSelectedMsgs() {
+  if (selectedMsgSet.size === 0) {
+    showToast('未选择任何消息');
+    return;
+  }
+  if (!currentSessionId) {
+    showToast('未选择会话');
+    return;
+  }
+  // 解析 selectedMsgSet → items
+  const items = [];
+  selectedMsgSet.forEach(key => {
+    const [tiStr, role] = key.split(':');
+    const ti = Number(tiStr);
+    if (!isNaN(ti) && ti >= 1 && (role === 'user' || role === 'assistant')) {
+      items.push({ turn_index: ti, role: role });
+    }
+  });
+  if (items.length === 0) {
+    showToast('选择无效');
+    return;
+  }
+  if (!window.confirm(`确定批量删除 ${items.length} 条消息吗？\n（同一轮的问或答若都被删，整轮自动消失）`)) return;
+
+  const uid = encodeURIComponent(currentUserId || '');
+  try {
+    showToast(`正在批量删除 ${items.length} 条...`);
+    const r = await fetch(
+      `/api/sessions/${currentSessionId}/messages/batch-delete`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items: items, user_id: currentUserId || '' }),
+      },
+    );
+    if (!r.ok) {
+      const data = await r.json().catch(() => ({}));
+      throw new Error(data.detail || `批量删除失败（${r.status}）`);
+    }
+    const respData = await r.json().catch(() => ({}));
+    // 后端已按 turn_index 降序处理 + memory 内部前移；前端最简单的做法是刷新当前会话
+    showToast(`已删除 ${respData.ok || items.length} 条（${respData.row_removed || 0} 轮整行被删）`);
+    exitMsgMultiSelectMode();
+    // 重新加载该会话历史，确保 DOM turn_index 与后端 memory 一致
+    if (typeof loadSession === 'function') {
+      await loadSession(currentSessionId);
+    }
+  } catch (e) {
+    showToast('批量删除失败：' + e.message);
+  }
+}
 
 // ============ 消息渲染 ============
 // ============ 前端清理：移除不应展示给用户的规则/指令段落 ============
@@ -979,19 +1336,22 @@ function stripHiddenInstructions(text) {
   return text.replace(HIDE_PROMPT_RE, '').trimEnd();
 }
 
-function appendMessage(role, content) {
+function appendMessage(role, content, options) {
+  options = options || {};
   // 前端防御：剥掉不应显示给用户的规则段落
   if (role === 'user') content = stripHiddenInstructions(content);
   if (role === 'assistant') content = stripHiddenInstructions(content);
 
   const chat = $('chat');
   const msgId = 'msg_' + (++msgIdCounter) + '_' + Date.now().toString(36);
+  const turnIndex = options.turnIndex != null ? Number(options.turnIndex) : null;
 
   const wrap = document.createElement('div');
   wrap.className = 'msg-wrap ' + (role === 'user' ? 'user-msg' : role === 'assistant' ? 'ai-msg' : role + '-wrap');
   wrap.dataset.msgId = msgId;
   wrap.dataset.role = role;
   wrap.dataset.content = content;
+  if (turnIndex != null && !isNaN(turnIndex)) wrap.dataset.turnIndex = String(turnIndex);
 
   // 占位：保持对齐（替代原复选框位置）
   const spacer = document.createElement('div');
@@ -1003,10 +1363,11 @@ function appendMessage(role, content) {
   const div = document.createElement('div');
   div.className = 'msg ' + role;
   div.textContent = content;
+  if (turnIndex != null && !isNaN(turnIndex)) div.dataset.turnIndex = String(turnIndex);
 
   // 绑定长按 + 右键菜单事件（仅 user/assistant 消息）
   if (role === 'user' || role === 'assistant') {
-    bindContextMenu(div, content, role);
+    bindContextMenu(div, content, role, turnIndex);
   }
 
   wrap.appendChild(div);
@@ -1024,7 +1385,7 @@ function appendMessage(role, content) {
       await copyText(content);
       copyBtn.classList.add('copied');
       copyBtn.innerHTML = '✓';
-      setTimeout(() => { copyBtn.classList.remove('copied'); copyBtn.innerHTML = '📋'; }, 1500);
+      setTimeout(() => { copyBtn.classList.remove('copied'); copyBtn.innerHTML = '📋'; }, APP_CONSTANTS.COPY_BTN_HIGHLIGHT_MS);
     };
     actions.appendChild(copyBtn);
     wrap.appendChild(actions);
@@ -1032,16 +1393,20 @@ function appendMessage(role, content) {
 
   chat.appendChild(wrap);
   chat.scrollTop = chat.scrollHeight;
+  // 若处于多选模式，给新消息也加复选框
+  if (msgMultiSelectMode && (role === 'user' || role === 'assistant') && turnIndex != null) {
+    renderMsgCheckboxes();
+  }
   return div;
 }
 
 // ============ 绑定长按/右键上下文菜单 ============
-function bindContextMenu(msgEl, content, role) {
+function bindContextMenu(msgEl, content, role, turnIndex) {
   // 桌面端：右键
   msgEl.addEventListener('contextmenu', (e) => {
     e.preventDefault();
     e.stopPropagation();
-    showContextMenu(e.clientX, e.clientY, content, role, msgEl);
+    showContextMenu(e.clientX, e.clientY, content, role, msgEl, turnIndex);
   });
 
   // 移动端：长按
@@ -1052,8 +1417,8 @@ function bindContextMenu(msgEl, content, role) {
     longPressTimer = setTimeout(() => {
       // 长按触发
       msgEl.classList.add('pressing');
-      setTimeout(() => msgEl.classList.remove('pressing'), 200);
-      showContextMenu(longPressStartX, longPressStartY, content, role, msgEl);
+      setTimeout(() => msgEl.classList.remove('pressing'), APP_CONSTANTS.LONG_PRESS_PRESSING_RELEASE_MS);
+      showContextMenu(longPressStartX, longPressStartY, content, role, msgEl, turnIndex);
       if (navigator.vibrate) navigator.vibrate(15);  // 触觉反馈
     }, LONG_PRESS_DURATION);
   }, { passive: true });
@@ -1090,7 +1455,7 @@ function bindContextMenu(msgEl, content, role) {
     longPressStartX = e.clientX;
     longPressStartY = e.clientY;
     longPressTimer = setTimeout(() => {
-      showContextMenu(longPressStartX, longPressStartY, content, role, msgEl);
+      showContextMenu(longPressStartX, longPressStartY, content, role, msgEl, turnIndex);
     }, LONG_PRESS_DURATION);
   });
 
@@ -1114,10 +1479,11 @@ function bindContextMenu(msgEl, content, role) {
 }
 
 // ============ 显示/隐藏上下文菜单 ============
-function showContextMenu(x, y, content, role, msgEl) {
+function showContextMenu(x, y, content, role, msgEl, turnIndex) {
   currentContextContent = content;
   currentContextRole = role;
   currentContentEl = msgEl;
+  currentTurnIndex = turnIndex != null ? Number(turnIndex) : null;
   suppressNextClick = true;  // 抑制长按后的下一个 click 事件
   const menu = $('context-menu');
 
@@ -1131,6 +1497,28 @@ function showContextMenu(x, y, content, role, msgEl) {
   if (regenItem) {
     if (role === 'assistant') regenItem.classList.remove('disabled');
     else regenItem.classList.add('disabled');
+  }
+  // "删除该消息" 仅 user/assistant 且已绑定 turnIndex 的历史消息可用
+  const delItem = $('ctx-delete');
+  const delTurnItem = $('ctx-delete-turn');
+  const canDelete = (role === 'user' || role === 'assistant') && currentTurnIndex != null && !isNaN(currentTurnIndex) && currentTurnIndex >= 1;
+  if (delItem) {
+    if (canDelete) {
+      delItem.classList.remove('disabled');
+      delItem.title = `仅删除该${role === 'user' ? '提问' : '回答'}（保留另一条）`;
+    } else {
+      delItem.classList.add('disabled');
+      delItem.title = (currentTurnIndex == null) ? '仅历史消息可删除（请先刷新页面加载历史）' : '该消息不支持删除';
+    }
+  }
+  if (delTurnItem) {
+    if (canDelete) {
+      delTurnItem.classList.remove('disabled');
+      delTurnItem.title = '删除这一轮问答（该消息及其对应的用户/助手配对消息）';
+    } else {
+      delTurnItem.classList.add('disabled');
+      delTurnItem.title = '仅历史消息可删除';
+    }
   }
 
   menu.style.display = 'block';
@@ -1155,7 +1543,7 @@ function showContextMenu(x, y, content, role, msgEl) {
 
   // ---------- 子菜单弹出方向边界检测 ----------
   // 默认：子菜单向左弹出（right:100%）。若左侧空间不足 220px，则改为向右弹出
-  const subW = 220;  // 子菜单最小宽度
+  const subW = APP_CONSTANTS.CONTEXT_MENU_MIN_LEFT_SPACE_PX;  // 子菜单最小宽度
   const margin = 14;
   const spaceLeft = x - margin;
   const shareItem = $('ctx-share');
@@ -1180,6 +1568,7 @@ function hideContextMenu() {
   currentContextContent = '';
   currentContextRole = '';
   currentContentEl = null;
+  currentTurnIndex = null;
   // 清理子菜单展开状态
   menu.querySelectorAll('.has-submenu.open').forEach(it => it.classList.remove('open'));
 }
@@ -1225,6 +1614,7 @@ document.addEventListener('click', (e) => {
 async function handleContextAction(action) {
   const content = currentContextContent;
   const role = currentContextRole;
+  const turnIndex = currentTurnIndex;
 
   switch (action) {
     case 'copy':
@@ -1255,6 +1645,112 @@ async function handleContextAction(action) {
       await copyText(content);
       showToast('已复制为文字');
       break;
+    case 'delete': {
+      // 单条删除：只删当前右键的这条（user 或 assistant），保留另一条
+      if (turnIndex == null || isNaN(turnIndex) || turnIndex < 1) {
+        showToast('该消息不能删除（仅已保存的历史问答可删）');
+        return;
+      }
+      if (!currentSessionId) {
+        showToast('未选择会话，无法删除');
+        return;
+      }
+      const roleParam = role === 'user' ? 'user' : 'assistant';
+      const confirmText = `确定删除这${role === 'user' ? '条提问' : '条回答'}吗？（另一条保留，刷新后仍可见）`;
+      if (!window.confirm(confirmText)) return;
+
+      const uid = encodeURIComponent(currentUserId || '');
+      try {
+        showToast('正在删除...');
+        const r = await fetch(
+          `/api/sessions/${currentSessionId}/turns/${turnIndex}?user_id=${uid}&role=${roleParam}`,
+          { method: 'DELETE' },
+        );
+        if (!r.ok) {
+          const data = await r.json().catch(() => ({}));
+          throw new Error(data.detail || `删除失败（${r.status}）`);
+        }
+        const respData = await r.json().catch(() => ({}));
+        // 删除 DOM：只删当前 role 的 wrap
+        const wraps = document.querySelectorAll(`.msg-wrap[data-turn-index="${turnIndex}"][data-role="${roleParam}"]`);
+        wraps.forEach(w => {
+          if (thinkingEl === w || w.contains(thinkingEl)) {
+            stopProgressTimer();
+            thinkingEl = null;
+            thinkingStartTime = 0;
+          }
+          w.remove();
+        });
+        // 若后端返回 row_removed（说明另一条也空，整行已删），需要把后续 turn_index 前移 1
+        if (respData.result === 'row_removed') {
+          document.querySelectorAll('.msg-wrap[data-turn-index]').forEach(w => {
+            const idx = Number(w.dataset.turnIndex);
+            if (!isNaN(idx) && idx > turnIndex) {
+              const next = String(idx - 1);
+              w.dataset.turnIndex = next;
+              const msgInner = w.querySelector('.msg[data-turn-index]');
+              if (msgInner) msgInner.dataset.turnIndex = next;
+            }
+          });
+          showToast(`已删除该${role === 'user' ? '提问' : '回答'}（另一条也已空，整轮已删）`);
+        } else {
+          showToast(`已删除该${role === 'user' ? '提问' : '回答'}，另一条保留`);
+        }
+      } catch (e) {
+        showToast('删除失败：' + e.message);
+      }
+      break;
+    }
+    case 'delete-turn': {
+      // 整轮删除：user + assistant 一起删
+      if (turnIndex == null || isNaN(turnIndex) || turnIndex < 1) {
+        showToast('该消息不能删除（仅已保存的历史问答可删）');
+        return;
+      }
+      if (!currentSessionId) {
+        showToast('未选择会话，无法删除');
+        return;
+      }
+      const confirmText = `确定删除第 ${turnIndex} 轮问答吗？（这一轮的问 + 答都会同时删除）`;
+      if (!window.confirm(confirmText)) return;
+
+      const uid = encodeURIComponent(currentUserId || '');
+      try {
+        showToast('正在删除整轮...');
+        const r = await fetch(
+          `/api/sessions/${currentSessionId}/turns/${turnIndex}?user_id=${uid}&role=all`,
+          { method: 'DELETE' },
+        );
+        if (!r.ok) {
+          const data = await r.json().catch(() => ({}));
+          throw new Error(data.detail || `删除失败（${r.status}）`);
+        }
+        // 删除 DOM：同一 turnIndex 下的所有 msg-wrap（user+assistant 的一组）
+        const wraps = document.querySelectorAll(`.msg-wrap[data-turn-index="${turnIndex}"]`);
+        wraps.forEach(w => {
+          if (thinkingEl === w || w.contains(thinkingEl)) {
+            stopProgressTimer();
+            thinkingEl = null;
+            thinkingStartTime = 0;
+          }
+          w.remove();
+        });
+        // 后端删除后会把后续 turn_index 前移 1，前端 DOM 同步前移
+        document.querySelectorAll('.msg-wrap[data-turn-index]').forEach(w => {
+          const idx = Number(w.dataset.turnIndex);
+          if (!isNaN(idx) && idx > turnIndex) {
+            const next = String(idx - 1);
+            w.dataset.turnIndex = next;
+            const msgInner = w.querySelector('.msg[data-turn-index]');
+            if (msgInner) msgInner.dataset.turnIndex = next;
+          }
+        });
+        showToast(`已删除第 ${turnIndex} 轮问答`);
+      } catch (e) {
+        showToast('删除失败：' + e.message);
+      }
+      break;
+    }
   }
 }
 
@@ -1340,7 +1836,7 @@ function updateThinkingTimer() {
   // 保留原始消息前缀（如"💭 网络搜索助手正在思考中"），只更新耗时
   const baseText = thinkingEl.getAttribute('data-base') || '思考中';
   thinkingEl.textContent = baseText + '（已耗时 ' + seconds + ' 秒）';
-  thinkingTimer = setTimeout(updateThinkingTimer, 1000);  // 每 1 秒更新
+  thinkingTimer = setTimeout(updateThinkingTimer, APP_CONSTANTS.THINKING_TIMER_TICK_MS);  // 每 1 秒更新
 }
 
 function clearThinkingTimer() {
@@ -1369,7 +1865,7 @@ function updateProgress() {
   if (!isRunning || !progressEl) return;
   const seconds = Math.round((Date.now() - thinkingStartTime) / 1000);
   progressEl.textContent = '⏳ AI 正在思考中...（已思考 ' + seconds + ' 秒）';
-  progressTimer = setTimeout(updateProgress, 5000);  // 每 5 秒更新
+  progressTimer = setTimeout(updateProgress, APP_CONSTANTS.PROGRESS_UPDATE_INTERVAL_MS);  // 每 5 秒更新
 }
 
 function stopProgressTimer() {

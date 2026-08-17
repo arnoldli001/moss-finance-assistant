@@ -95,6 +95,7 @@ python-dateutil==2.9.0.post0
 python-docx==1.2.0
 python-dotenv==1.2.1
 pyngrok==8.1.2
+# ↑ ngrok 公网隧道【可选】：未安装时若配置了 NGROK_AUTHTOKEN 会打印安装提示，不影响局域网运行
 python-frontmatter==1.1.0
 python-multipart==0.0.22
 pywin32==311

@@ -31,7 +31,15 @@ _CONNECTION_ERRORS = (
     rex.ConnectionError, rex.ConnectTimeout, rex.ReadTimeout, rex.ChunkedEncodingError,
     ConnectionResetError, ConnectionAbortedError, BrokenPipeError,
 )
-_TAVILY_MAX_RETRIES = 3
+
+# ===== 全局常量集中引用（替代魔鬼数字，统一修改一处即全局生效）=====
+from config.constants import (
+    TAVILY_DEFAULT_MAX_RESULTS,
+    TAVILY_MAX_RETRIES,
+    TAVILY_BACKOFF_BASE,
+)
+
+_TAVILY_MAX_RETRIES = TAVILY_MAX_RETRIES
 
 
 # 步骤2： 定义一个网络搜索工具
@@ -39,7 +47,7 @@ _TAVILY_MAX_RETRIES = 3
 def internet_search(
         query: str,
         topic: Literal[ "news",  "finance",  "general"] = "general",
-        max_results: int = 5,
+        max_results: int = TAVILY_DEFAULT_MAX_RESULTS,
         include_raw_content: bool = False
 ):
     """
@@ -71,7 +79,7 @@ def internet_search(
             return result
         except _CONNECTION_ERRORS as e:
             last_err = e
-            backoff = 2 ** attempt  # 2s / 4s / 8s
+            backoff = TAVILY_BACKOFF_BASE ** attempt  # 指数退避 2s / 4s / 8s
             print(f"[Tavily] 连接异常，第{attempt}次重试 (等待{backoff}s): {type(e).__name__}: {e} (query={query})")
             time.sleep(backoff)
         except Exception as e:
