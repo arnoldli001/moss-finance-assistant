@@ -71,15 +71,11 @@
   }
   .smb-btn.smb-delete:hover { background: #d70015; }
   .smb-btn.smb-delete:disabled { opacity: 0.5; cursor: not-allowed; background: #7a3030; }
-  #sidebar-files-btn { padding: 10px; border-top: 1px solid #333; cursor: pointer; font-size: 13px; text-align: center; }
-  #sidebar-files-btn:hover { background: #2c2c2e; }
   /* ============ 主区域 ============ */
   #main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
   #header { background: #fff; padding: 12px 20px; border-bottom: 1px solid #d2d2d7; display: flex; justify-content: space-between; align-items: center; gap: 16px; }
   #header .brand { font-size: 18px; font-weight: 700; color: #0071e3; white-space: nowrap; }
   #header .title { font-size: 15px; font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #upload-btn { background: #f5f5f7; border: 1px solid #d2d2d7; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 13px; }
-  #upload-btn:hover { background: #e8e8ed; }
   #chat { flex: 1; overflow-y: auto; padding: 20px; }
   .msg-wrap { display: flex; align-items: flex-start; gap: 6px; margin-bottom: 16px; }
   .msg-wrap.user-msg { justify-content: flex-end; }
@@ -179,13 +175,6 @@
   .modal { background: #fff; border-radius: 12px; padding: 20px; width: 560px; max-height: 80vh; overflow-y: auto; }
   .modal h3 { margin-bottom: 14px; }
   .modal .close { float: right; cursor: pointer; color: #8e8e93; font-size: 20px; }
-  .file-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid #f2f2f7; font-size: 13px; }
-  .file-row a { color: #0a84ff; text-decoration: none; }
-  .file-row .size { color: #8e8e93; font-size: 12px; }
-  #drop-zone { border: 2px dashed #d2d2d7; border-radius: 8px; padding: 24px; text-align: center; color: #8e8e93; margin-bottom: 12px; cursor: pointer; }
-  #drop-zone.dragover { border-color: #0a84ff; background: #f0f7ff; }
-  #file-input { display: none; }
-  .badge { display: inline-block; background: #34c759; color: #fff; border-radius: 10px; padding: 1px 8px; font-size: 11px; margin-left: 6px; }
 
   /* ============ 移动端响应式（手机/平板）============ */
   /* 侧边栏缩至 10%，主区域占 90%；侧边栏改为图标式垂直布局 */
@@ -209,14 +198,11 @@
     }
     .session-item .del, .session-item .rename { display: none; }
     .session-item input.rename-input { font-size: 10px; padding: 2px; }
-    /* 文件管理按钮 */
-    #sidebar-files-btn { padding: 8px 2px; font-size: 16px; }
     /* 主区域占 90% */
     #main { flex: 1; }
     #header { padding: 8px 10px; gap: 8px; }
     #header .brand { font-size: 14px; }
     #header .title { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    #upload-btn { padding: 4px 8px; font-size: 11px; }
     #chat { padding: 10px; }
     .msg { max-width: 95%; font-size: 13px; padding: 8px 12px; }
     #input-bar { padding: 8px 10px; gap: 6px; }
@@ -224,7 +210,6 @@
     #send-btn { padding: 0 14px; font-size: 12px; }
     /* 弹窗适配 */
     .modal { width: 92vw; padding: 14px; }
-    #drop-zone { padding: 16px; font-size: 13px; }
     /* 多选模式下：侧边栏展开为 85% 宽，覆盖主区域，确保按钮可正常点击 */
     #sidebar.multi-mode {
       width: 85%;
@@ -241,9 +226,149 @@
     }
     #sidebar.multi-mode #toggle-multi-btn { font-size: 13px; padding: 10px; }
   }
+
+  /* ============ 消息多选浮动操作栏 ============*/
+  #msg-multi-action-bar {
+    position: fixed;
+    bottom: 80px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 1000;
+    background: #fff;
+    border: 1px solid #ddd;
+    border-radius: 24px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+    padding: 8px 12px;
+    gap: 12px;
+    align-items: center;
+    /* 显式写两遍默认值，防止内联 style 覆盖（防御式） */
+    display: none !important;
+  }
+  #msg-multi-action-bar.msg-multi-active {
+    display: flex !important;
+  }
+  #msg-multi-count {
+    color: #666;
+    font-size: 13px;
+  }
+  #msg-multi-delete-btn {
+    background: #e53935;
+    color: #fff;
+    border: none;
+    border-radius: 16px;
+    padding: 6px 16px;
+    cursor: pointer;
+    font-size: 13px;
+  }
+  #msg-multi-cancel-btn {
+    background: #666;
+    color: #fff;
+    border: none;
+    border-radius: 16px;
+    padding: 6px 16px;
+    cursor: pointer;
+    font-size: 13px;
+  }
+  /* ============ A5 登录遮罩：盖在所有 UI 之上，默认 block/flex 显示 ============ */
+  #login-screen {
+    position: fixed; inset: 0;
+    background: linear-gradient(135deg, rgba(10,132,255,0.92) 0%, rgba(175,82,222,0.88) 100%);
+    display: none; /* auth_bootstrap.js DOMContentLoaded 时会根据 token 决定是否 show */
+    align-items: center; justify-content: center;
+    z-index: 99999;
+    backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+    font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  }
+  #login-card {
+    background: #fff;
+    width: 420px; max-width: 92vw;
+    border-radius: 18px;
+    box-shadow: 0 16px 48px rgba(0,0,0,0.28);
+    padding: 28px 28px 22px;
+  }
+  #login-card h1 {
+    font-size: 20px; color: #1d1d1f; font-weight: 700; margin-bottom: 4px; letter-spacing: -0.2px;
+  }
+  #login-card .sub {
+    font-size: 12px; color: #8e8e93; margin-bottom: 20px;
+  }
+  .login-row { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+  .login-row label { font-size: 12px; color: #6b6b6b; font-weight: 500; }
+  .login-row input {
+    border: 1px solid #d2d2d7; border-radius: 10px; padding: 10px 12px; font-size: 14px;
+    background: #fafafa; color: #1d1d1f; outline: none; transition: border-color .15s, background .15s;
+  }
+  .login-row input:focus { border-color: #0a84ff; background: #fff; }
+  #login-error {
+    display: none;
+    font-size: 12px; color: #d70015; margin: 4px 0 10px;
+    padding: 8px 10px; background: #fff0f0; border-left: 3px solid #ff3b30; border-radius: 6px;
+    white-space: pre-wrap; word-break: break-all;
+  }
+  .login-buttons {
+    display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px;
+  }
+  .login-buttons button {
+    flex: 1; min-width: 100px; padding: 10px 14px; border: none; border-radius: 10px;
+    font-size: 14px; font-weight: 500; cursor: pointer; transition: all .15s;
+  }
+  #login-submit    { background: #0a84ff; color: #fff; }
+  #login-submit:hover { background: #0071e3; }
+  #register-submit { background: #fff; color: #0a84ff; border: 1px solid #0a84ff !important; }
+  #register-submit:hover { background: #e8f3ff; }
+  #guest-submit    { background: #f5f5f7; color: #6b6b6b; }
+  #guest-submit:hover { background: #e5e5e7; color: #1d1d1f; }
+  .login-tips {
+    margin-top: 14px; padding-top: 12px; border-top: 1px solid #f2f2f7;
+    font-size: 11px; color: #8e8e93; line-height: 1.5;
+  }
+  .login-tips b { color: #0a84ff; font-weight: 600; }
+  .login-tips code {
+    background: #f5f5f7; padding: 1px 5px; border-radius: 4px;
+    color: #1d1d1f; font-size: 10.5px; font-family: ui-monospace, Menlo, Consolas, monospace;
+  }
+
 </style>
 </head>
 <body>
+  <!-- ============ A5 登录遮罩（auth_bootstrap.js 控制显示/隐藏，z-index:99999 盖一切）============ -->
+  <div id="login-screen" role="dialog" aria-modal="true" aria-labelledby="login-card-title">
+    <div id="login-card">
+      <h1 id="login-card-title">MOSS · 无极金融助手</h1>
+      <div class="sub">散户投研 Agent 系统 · 请登录后使用（注册数据本地加密存储，零第三方泄露）</div>
+
+      <div class="login-row">
+        <label for="login-user">用户名 / User ID</label>
+        <input id="login-user" type="text" autocomplete="username"
+               placeholder="3~64 字符，不可 guest_ 开头（例如：moss_user_001）"
+               maxlength="64" spellcheck="false" />
+      </div>
+      <div class="login-row">
+        <label for="login-password">密码</label>
+        <input id="login-password" type="password" autocomplete="current-password"
+               placeholder="6~128 位（游客模式可留空直接点下方按钮）"
+               maxlength="128" />
+      </div>
+      <div class="login-row">
+        <label for="login-display">显示昵称 <span style="color:#c7c7cc;">（注册时可选，留空=用户名）</span></label>
+        <input id="login-display" type="text" placeholder="例如：小王的观察仓（可选）" maxlength="64" />
+      </div>
+
+      <div id="login-error" role="alert"></div>
+
+      <div class="login-buttons">
+        <button id="login-submit"    type="button">🔑 登录</button>
+        <button id="register-submit" type="button">📝 注册</button>
+        <button id="guest-submit"    type="button">👤 游客试用</button>
+      </div>
+
+      <div class="login-tips">
+        🔐 <b>安全说明</b>：密码采用 PBKDF2-HMAC-SHA256（200k 轮次）在服务端散列，数据库不保存明文；
+        所有会话与操作均绑定 JWT Token，禁止明文 user_id 水平越权访问。<br/>
+        🧪 <b>演示模式</b>：<code>POST /health</code> 公开可测；游客 10 QPM、普通用户 60 QPM、管理员 120 QPM。
+      </div>
+    </div>
+  </div>
   <!-- ============ 侧边栏 ============ -->
   <div id="sidebar">
     <div id="user-bar">
@@ -265,25 +390,42 @@
         <button class="smb-btn smb-cancel" onclick="toggleSessionMultiMode(false)">取消</button>
       </div>
     </div>
-    <div id="sidebar-files-btn" onclick="openFilesModal()">📁 文件管理</div>
+
+    <!-- ============ 实时检索来源面板 ============ -->
+    <div id="retrieval-panel" style="margin-top:14px;border:1px solid #e6e6e6;border-radius:10px;background:#fff;overflow:hidden;">
+      <div style="padding:8px 12px;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);color:#fff;font-weight:600;font-size:13px;">
+        🔎 实时检索来源
+      </div>
+      <div id="retrieval-tabs" style="display:flex;border-bottom:1px solid #eee;">
+        <div class="rtab active" data-ch="tavily" style="flex:1;padding:6px 4px;text-align:center;font-size:12px;cursor:pointer;background:#f3f4ff;color:#4950cc;border-bottom:2px solid #4950cc;">🌐 Tavily <span class="rtab-cnt">0</span></div>
+        <div class="rtab" data-ch="ima" style="flex:1;padding:6px 4px;text-align:center;font-size:12px;cursor:pointer;color:#888;">📚 IMA <span class="rtab-cnt">0</span></div>
+        <div class="rtab" data-ch="zsxq" style="flex:1;padding:6px 4px;text-align:center;font-size:12px;cursor:pointer;color:#888;">🪐 ZSXQ <span class="rtab-cnt">0</span></div>
+      </div>
+      <div id="retrieval-list" style="max-height:260px;overflow-y:auto;padding:6px;font-size:11.5px;color:#555;">
+        <div style="padding:18px 4px;text-align:center;color:#aaa;">检索结果将实时显示在这里</div>
+      </div>
+    </div>
   </div>
+
+  <!-- 引用角标悬停卡片（全局单例，懒创建） -->
+  <div id="citation-hover-card" style="display:none;position:fixed;z-index:99999;max-width:360px;min-width:260px;padding:10px 12px;background:#fff;border:1px solid #d5d7dc;border-radius:10px;box-shadow:0 8px 28px rgba(40,48,80,0.18);font-size:12px;color:#333;line-height:1.5;word-break:break-word;"></div>
 
   <!-- ============ 主区域 ============ -->
   <div id="main">
     <div id="header">
       <div class="brand">无极 Agent</div>
       <div class="title" id="session-title">未选择会话</div>
-      <button id="upload-btn" onclick="openUploadModal()">📤 上传文件</button>
       <button id="msg-multi-select-btn" onclick="toggleMsgMultiSelectMode()" style="margin-left:8px;display:none;">☑ 多选</button>
+      <div id="auth-info-bar" style="margin-left:8px;min-width:180px;text-align:right;flex-shrink:0;"></div>
     </div>
     <div id="chat">
       <div class="msg system">欢迎使用无极 Agent，输入问题即可开始对话。</div>
     </div>
-    <!-- 多选模式浮动操作栏 -->
-    <div id="msg-multi-action-bar" style="display:none;position:fixed;bottom:80px;left:50%;transform:translateX(-50%);z-index:1000;background:#fff;border:1px solid #ddd;border-radius:24px;box-shadow:0 4px 16px rgba(0,0,0,0.15);padding:8px 12px;display:flex;gap:12px;align-items:center;">
-      <span id="msg-multi-count" style="color:#666;font-size:13px;">已选 0 条</span>
-      <button id="msg-multi-delete-btn" onclick="batchDeleteSelectedMsgs()" style="background:#e53935;color:#fff;border:none;border-radius:16px;padding:6px 16px;cursor:pointer;font-size:13px;">🗑 删除选中</button>
-      <button id="msg-multi-cancel-btn" onclick="exitMsgMultiSelectMode()" style="background:#666;color:#fff;border:none;border-radius:16px;padding:6px 16px;cursor:pointer;font-size:13px;">取消</button>
+    <!-- 多选模式浮动操作栏（默认不显示，CSS display:none !important 兜底；进入多选模式时加 class=msg-multi-active 才显示）-->
+    <div id="msg-multi-action-bar">
+      <span id="msg-multi-count">已选 0 条</span>
+      <button id="msg-multi-delete-btn" onclick="batchDeleteSelectedMsgs()">🗑 删除选中</button>
+      <button id="msg-multi-cancel-btn" onclick="exitMsgMultiSelectMode()">取消</button>
     </div>
     <div id="input-bar">
       <div id="input-row">
@@ -304,14 +446,6 @@
         <span class="ctx-icon">📋</span>
         <span class="ctx-label">复制</span>
       </div>
-      <div class="ctx-item" data-action="select-text">
-        <span class="ctx-icon">☐</span>
-        <span class="ctx-label">选择文本</span>
-      </div>
-      <div class="ctx-item" data-action="regenerate" id="ctx-regenerate">
-        <span class="ctx-icon">🔄</span>
-        <span class="ctx-label">重新生成</span>
-      </div>
       <div class="ctx-divider"></div>
       <div class="ctx-item has-submenu" data-action="share" id="ctx-share">
         <span class="ctx-icon">📤</span>
@@ -321,10 +455,6 @@
           <div class="ctx-item" data-action="share-image">
             <span class="ctx-icon">🖼️</span>
             <span class="ctx-label">生成分享图片</span>
-          </div>
-          <div class="ctx-item" data-action="share-text">
-            <span class="ctx-icon">📄</span>
-            <span class="ctx-label">复制为文字</span>
           </div>
         </div>
       </div>
@@ -350,39 +480,258 @@
     </div>
   </div>
 
-  <!-- ============ 上传弹窗 ============ -->
-  <div class="modal-mask" id="upload-modal">
-    <div class="modal">
-      <span class="close" onclick="closeModal('upload-modal')">×</span>
-      <h3>上传文件到当前会话</h3>
-      <div id="drop-zone" onclick="document.getElementById('file-input').click()">
-        点击或拖拽文件到此处上传
-      </div>
-      <input type="file" id="file-input" multiple />
-      <div id="upload-result"></div>
-    </div>
-  </div>
-
-  <!-- ============ 文件列表弹窗 ============ -->
-  <div class="modal-mask" id="files-modal">
-    <div class="modal">
-      <span class="close" onclick="closeModal('files-modal')">×</span>
-      <h3>当前会话文件列表</h3>
-      <div id="files-list"></div>
-    </div>
-  </div>
-
   <!-- ============ Toast 提示 ============ -->
   <div id="toast"></div>
 
 <!-- 前端集中常量：所有魔鬼数字统一在 static/js/constants.js 定义，这里先加载供下方使用 -->
 <script src="/static/js/constants.js"></script>
+<!-- A5 登录鉴权入口：必须先于 stream_client.js 与主代码加载（monkey patch fetch+WebSocket） -->
+<script src="/static/js/auth_bootstrap.js"></script>
+<!-- SSE 流式消费引擎（EventSourceBuffer）—— 新增 /api/task/stream 专用 -->
+<script src="/static/js/stream_client.js"></script>
 <script>
 // ============ 全局状态 ============
-let currentUserId = localStorage.getItem('dsp_user_id') || '';
+// ============ 全局状态（A5：AUTH_MODE 时 currentUserId 来自 JWT，不信任 localStorage 明文 user_id）============
+let _Auth = (typeof window !== 'undefined' && window.MossAuth) ? window.MossAuth : null;
+let currentUserId = (_Auth && _Auth.enabled && _Auth.currentUser())
+  ? _Auth.currentUser().user_id
+  : (localStorage.getItem('dsp_user_id') || '');
 let currentSessionId = null;
 let ws = null;
+// 是否启用 SSE 流式输出（开=POST /api/task/stream，关=退回 POST /api/task + WS 一次性）
+// ⚠️ 前端 feature flag：SSE_STREAM_ENABLED = false 时，所有按钮行为与原代码完全一致
+const SSE_STREAM_ENABLED = true;
+// 当前正在活跃的 EventSourceBuffer 实例（null=无；stop/切换会话/关闭页面 必须释放）
+let currentStreamBuf = null;
+// 当前正在"流式打字机渲染"的 assistant 消息 DOM（一条）
+let currentAssistantMsgEl = null;
+// 当前 assistant 消息的完整纯文本累积（done 事件里用来校验）
+let currentAssistantText = '';
+// 当前轮收集到的"来源索引条目池"：按 index 升序，和后端 ThreadStreamState._source_pool 镜像
+let currentSourceRefs = [];
+// 来源引用渲染：正则 [N]（不匹配 Markdown 链接里的 [text](url) 中的 text）
+const SRC_REF_RE = /\[(\d{1,3})\](?![\(\uFF08])/g;
+// 首包到达时间（open 事件），用于打印"首 token 时延"调试日志
+let _streamOpenAt = 0;
+let _streamFirstDeltaAt = 0;
 let isRunning = false;
+
+// ================================================================
+//  §6 新增：检索来源面板 + 引用角标悬停卡片 + 推理 stage 映射
+// ================================================================
+// 6.1 实时检索池：按 channel 聚合（每次发起新请求重置）
+let _currentRetrievalByChannel = { tavily: [], ima: [], zsxq: [] };
+let _currentRetrievalActiveTab = 'tavily';
+// 6.2 引用角标 -> metadata 1:1 映射（索引 1..N），增量合并 citation_meta 事件
+let _citationsMeta = Object.create(null);
+// 6.3 悬停卡片计时器：mouseenter 延时 150ms 显示，避免抖动
+let _citationHoverTimer = null;
+
+// stage -> 中文标题映射（如果后端 ReasoningPayload.title 为空则兜底）
+const _REASONING_STAGE_TITLE = {
+  intent_classify: '① 意图识别',
+  retrieval_plan:  '② 检索计划',
+  synthesis_plan:  '③ 综合推理',
+  risk_check:      '④ 风险核查',
+  model_coT:       '⑤ 模型 Chain-of-Thought',
+};
+const _REASONING_STAGE_COLOR = {
+  intent_classify: '#6c5ce7',
+  retrieval_plan:  '#00b894',
+  synthesis_plan:  '#e17055',
+  risk_check:      '#d63031',
+  model_coT:       '#0984e3',
+};
+
+// 6.4 检索面板 Tab 切换绑定（页面加载后一次性）
+document.addEventListener('DOMContentLoaded', () => {
+  const tabs = document.querySelectorAll('#retrieval-tabs .rtab');
+  tabs.forEach(t => {
+    t.addEventListener('click', () => {
+      const ch = t.dataset.ch;
+      _currentRetrievalActiveTab = ch;
+      tabs.forEach(x => {
+        const active = x === t;
+        x.classList.toggle('active', active);
+        if (active) {
+          x.style.background = '#f3f4ff';
+          x.style.color = '#4950cc';
+          x.style.borderBottom = '2px solid #4950cc';
+        } else {
+          x.style.background = 'transparent';
+          x.style.color = '#888';
+          x.style.borderBottom = '2px solid transparent';
+        }
+      });
+      _retrievalRender();
+    });
+  });
+});
+
+// 6.5 重置检索 & 引用状态（每次 newSession / _streamClearState 时调用）
+function _retrievalResetAll() {
+  _currentRetrievalByChannel = { tavily: [], ima: [], zsxq: [] };
+  _citationsMeta = Object.create(null);
+  document.querySelectorAll('#retrieval-tabs .rtab-cnt').forEach(s => s.textContent = '0');
+  const list = document.getElementById('retrieval-list');
+  if (list) list.innerHTML = '<div style="padding:18px 4px;text-align:center;color:#aaa;">检索结果将实时显示在这里</div>';
+  _citationHideCard();
+}
+
+// 6.6 追加一路 retrieve_result 并刷新 UI
+function _retrievalAppend(channel, items, query, duration_ms) {
+  if (!_currentRetrievalByChannel[channel]) _currentRetrievalByChannel[channel] = [];
+  const arr = _currentRetrievalByChannel[channel];
+  const seenIds = new Set(arr.map(x => x.doc_id));
+  for (const it of items || []) {
+    if (!it || !it.doc_id) continue;
+    if (seenIds.has(it.doc_id)) continue;
+    seenIds.add(it.doc_id);
+    arr.push(it);
+  }
+  const cnt = document.querySelector(`#retrieval-tabs .rtab[data-ch="${channel}"] .rtab-cnt`);
+  if (cnt) cnt.textContent = String(arr.length);
+  if (_currentRetrievalActiveTab === channel) _retrievalRender();
+}
+
+// 6.7 渲染当前激活 tab 的检索条目列表
+//  需求：标题 + 外链（最少 token）；snippet 默认收起，点行展开；最多 100 字双保险（JS slice + CSS clamp）
+function _retrievalRender() {
+  const list = document.getElementById('retrieval-list');
+  if (!list) return;
+  const ch = _currentRetrievalActiveTab;
+  const arr = _currentRetrievalByChannel[ch] || [];
+  if (!arr.length) {
+    list.innerHTML = '<div style="padding:18px 4px;text-align:center;color:#aaa;">该通道暂无检索结果</div>';
+    return;
+  }
+  // SNIPPET_MAX 与后端 CITATION_SNIPPET_MAX_CHARS=100 对齐（再做一次 JS 端硬截兜底）
+  const SNIPPET_MAX = 100;
+  const TITLE_MAX = 80;
+  list.innerHTML = arr.map((it, i) => {
+    const id = 'ret-item-' + ch + '-' + i;
+    const title = _escapeHtml((it.title || '无标题').slice(0, TITLE_MAX));
+    const rawContent = String(it.content || it.snippet || '');
+    // 展示层"最相关片段"：如果 content 本身就是长文，优先截取开头~SNIPPET_MAX 字（避免 2000 字灌到 DOM）
+    // 后端 retrieve_result 事件里 content 是原文（给 overlap fallback 用），前端显示需要自己缩
+    let snippet = rawContent.length > SNIPPET_MAX
+      ? (rawContent.slice(0, SNIPPET_MAX - 1) + '…')
+      : rawContent;
+    snippet = _escapeHtml(snippet);
+    const linkHtml = it.url
+      ? `<a href="${_escapeAttr(it.url)}" target="_blank" rel="noopener noreferrer"
+             style="color:#1976d2;text-decoration:none;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block;max-width:100%;">🔗 ${_escapeHtml(String(it.url))}</a>`
+      : '<div style="color:#bbb;font-size:10.5px;">（无外链）</div>';
+    // 点行 → 展开/折叠 snippet；snippet 默认折叠（省 token + 视觉清爽）
+    return `<div id="${id}" style="padding:6px 6px;border-bottom:1px dashed #eee;cursor:pointer;"
+              onclick="var b=document.getElementById('${id}-body');if(b){b.style.display=(b.style.display==='none'||!b.style.display)?'block':'none';}">
+      <div style="font-weight:600;color:#222;font-size:11.5px;line-height:1.35;">
+        ${i + 1}. ${title}
+      </div>
+      <div style="margin-top:3px;">${linkHtml}</div>
+      <div id="${id}-body" style="display:none;margin-top:6px;padding:4px 6px;background:#f6f8fb;border-left:3px solid #74a9f7;color:#555;font-size:11px;line-height:1.45;word-break:break-word;
+                display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:4;overflow:hidden;">${snippet}</div>
+    </div>`;
+  }).join('');
+}
+
+// 6.8 合并 citation_meta 增量：每个 index 写入 _citationsMeta，并同步 currentSourceRefs（为了文末"来源面板"）
+function _citationMetaMerge(items) {
+  if (!Array.isArray(items) || !items.length) return;
+  let changed = false;
+  for (const it of items) {
+    const idx = Number(it.index);
+    if (!idx || idx < 1) continue;
+    const prev = _citationsMeta[idx];
+    // 只写更完整的版本（title 更长或 url 从无到有）
+    if (!prev || (it.title && !prev.title) || (it.url && !prev.url) || (it.snippet && !prev.snippet)) {
+      _citationsMeta[idx] = Object.assign({}, prev || {}, it);
+      changed = true;
+    } else if (Object.keys(it).length > Object.keys(prev).length) {
+      _citationsMeta[idx] = Object.assign({}, prev, it);
+      changed = true;
+    }
+    // 同步 currentSourceRefs：文末来源列表（兼容旧逻辑 _streamShowSourceBox）
+    const entry = _citationsMeta[idx];
+    const existIdx = currentSourceRefs.findIndex(s => s.index === idx);
+    const srcRef = {
+      index: idx,
+      title: entry.title || ('来源 ' + idx),
+      url: entry.url || '',
+      source_type: entry.source_type || 'web',
+      reliability: entry.reliability || '待验证',
+      channel: entry.channel || '',
+      published_at: entry.published_at || '',
+      snippet: entry.snippet || '',  // 文末来源盒 snip 字段兜底，防止后端 citation_meta 漏下发时 snip 为空
+    };
+    if (existIdx >= 0) currentSourceRefs[existIdx] = Object.assign({}, currentSourceRefs[existIdx], srcRef);
+    else currentSourceRefs.push(srcRef);
+  }
+  currentSourceRefs.sort((a, b) => (a.index || 0) - (b.index || 0));
+  return changed;
+}
+
+// 6.9 引用角标悬停卡片：显示 / 隐藏 / 定位
+//  用户要求：只显示"标题 + 打开来源链接 + 最相关片段（最多100字）"，减少信息噪音和 token
+function _citationShowCard(idx, anchorEl) {
+  const card = document.getElementById('citation-hover-card');
+  if (!card) return;
+  const meta = _citationsMeta[idx];
+  const TITLE_MAX = 80;
+  const SNIPPET_MAX = 100;
+  if (!meta) {
+    card.innerHTML = `<div style="font-weight:600;color:#888;">[${idx}] 来源信息加载中…</div><div style="color:#aaa;font-size:11px;margin-top:2px;">等待后端 citation_meta 事件下发</div>`;
+  } else {
+    const title = _escapeHtml(String(meta.title || '无标题').slice(0, TITLE_MAX));
+    const rawSnip = String(meta.snippet || '');
+    const snippet = rawSnip
+      ? _escapeHtml(rawSnip.length > SNIPPET_MAX ? (rawSnip.slice(0, SNIPPET_MAX - 1) + '…') : rawSnip)
+      : '';
+    const snippetHtml = snippet
+      ? `<div style="margin-top:8px;padding:6px 8px;background:#f6f8fb;border-left:3px solid #74a9f7;color:#444;font-size:11.5px;line-height:1.5;word-break:break-word;
+                 display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:4;overflow:hidden;">“${snippet}”</div>`
+      : '';
+    const urlHtml = meta.url
+      ? `<a href="${_escapeAttr(meta.url)}" target="_blank" rel="noopener noreferrer"
+             style="display:inline-block;margin-top:6px;color:#1976d2;text-decoration:none;font-size:11.5px;
+                    overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%;vertical-align:middle;">🔗 打开来源</a>`
+      : '<div style="margin-top:6px;color:#aaa;font-size:10.5px;">（无外链）</div>';
+    card.innerHTML =
+      `<div style="display:flex;align-items:center;gap:6px;">
+         <span style="display:inline-flex;align-items:center;justify-content:center;min-width:22px;height:22px;padding:0 6px;border-radius:11px;background:#3498db;color:#fff;font-weight:700;font-size:11.5px;flex-shrink:0;">[${idx}]</span>
+         <div style="font-weight:600;color:#2c3e50;font-size:12.5px;line-height:1.35;flex:1;word-break:break-word;">${title}</div>
+       </div>
+       ${snippetHtml}
+       ${urlHtml}`;
+  }
+  // 定位：anchorEl 右下方，超右边界则贴右对齐
+  const r = anchorEl.getBoundingClientRect();
+  card.style.display = 'block';
+  const cw = card.offsetWidth;
+  const ch2 = card.offsetHeight;
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  let left = r.right + 8;
+  let top = r.bottom + 6;
+  if (left + cw > vw - 8) left = Math.max(8, r.left - cw - 8);
+  if (top + ch2 > vh - 8) top = Math.max(8, r.top - ch2 - 6);
+  card.style.left = left + 'px';
+  card.style.top = top + 'px';
+}
+function _citationHideCard() {
+  if (_citationHoverTimer) { clearTimeout(_citationHoverTimer); _citationHoverTimer = null; }
+  const card = document.getElementById('citation-hover-card');
+  if (card) card.style.display = 'none';
+}
+// 卡片自 hover 时不隐藏（便于用户从角标移动鼠标到卡片看内容、点链接）
+document.addEventListener('DOMContentLoaded', () => {
+  const card = document.getElementById('citation-hover-card');
+  if (!card) return;
+  card.addEventListener('mouseenter', () => {
+    if (_citationHoverTimer) { clearTimeout(_citationHoverTimer); _citationHoverTimer = null; }
+  });
+  card.addEventListener('mouseleave', () => { _citationHideCard(); });
+});
 let currentTaskType = 'normal'; // 'normal' | 'zsxq'，控制 task_result 靠左/靠右显示
 let wsReconnectCount = 0;
 let _wsReconnectMsg = null;  // 重连提示消息元素（复用，避免多条）
@@ -397,42 +746,134 @@ const $ = id => document.getElementById(id);
 
 // ============ 初始化 ============
 window.addEventListener('load', async () => {
-  // 首次打开自动生成随机用户 ID，用户无需手动输入
-  if (!currentUserId) {
-    const ts = Date.now().toString(36);
-    const rand = Math.random().toString(36).slice(2, 6);
-    currentUserId = 'guest_' + ts + rand;
-    localStorage.setItem('dsp_user_id', currentUserId);
-  }
-  $('user-id-input').value = currentUserId;
-  // 自动登录
-  await login();
-  // 登录后若无会话选中：优先选最后一个已有会话，无会话才新建
-  if (!currentSessionId) {
-    const sessions = await loadSessions();
-    if (sessions.length > 0) {
-      const last = sessions[sessions.length - 1];
-      switchSession(last.session_id, last.title);
+  // —— 多选浮动操作栏：页面加载时强制隐藏，防止浏览器缓存/恢复 DOM 状态导致
+  //    class=msg-multi-active 残留（刷新后仍看到"已选0条 删除选中 取消"浮窗）。
+  (function _ensureMultiActionBarHiddenOnStartup() {
+    const bar = document.getElementById('msg-multi-action-bar');
+    if (bar) {
+      bar.classList.remove('msg-multi-active');
+      bar.style.display = '';  // 清掉任何遗留的 inline style.display
+      const comp = window.getComputedStyle(bar);
+      // 最终保险：如果 getComputedStyle 仍然显示可见（极端情况），
+      // 就直接把 visibility 设成 hidden + height:0，不占空间不显示。
+      if (comp && comp.display !== 'none') {
+        bar.setAttribute('style', 'display:none !important; visibility:hidden; height:0; padding:0; border:none; overflow:hidden;');
+        // 下一轮事件循环再清掉，让用户点击"多选"时 class 能重新正常生效
+        setTimeout(() => { bar.setAttribute('style', ''); }, 0);
+      }
+    }
+  })();
+
+  // =====================================================================
+  // A5 鉴权模式启动分支（单入口，避免"登录入口缺失/登录态判断矛盾"）
+  //  - AUTH_MODE=false → 保留老逻辑：明文 user_id + /api/users create_or_login_user
+  //  - AUTH_MODE=true  → JWT 登录态：MossAuth DOMContentLoaded 已决定是否展示登录遮罩；
+  //                       currentUserId 必须来自 JWT.sub，不允许本地自助拼 guest_
+  // =====================================================================
+  const _C = window.APP_CONSTANTS || {};
+  const _AUTH_ENABLED = !!_C.AUTH_MODE_ENABLED && _Auth && _Auth.enabled;
+
+  async function _ensureSessionAndListAfterLogin() {
+    // 登录成功后：渲染 user-id-input（readonly）+ 选会话
+    if (_AUTH_ENABLED) {
+      const input = $('user-id-input');
+      if (input) {
+        input.value = currentUserId;
+        input.setAttribute('readonly', 'readonly');
+        input.title = 'JWT 登录态已绑定，不可手动更改；请点右上角"退出"切换账号';
+      }
     } else {
-      await newSession();
+      const input = $('user-id-input'); if (input) input.value = currentUserId;
+    }
+    if (!currentSessionId) {
+      const sessions = await loadSessions();
+      if (sessions.length > 0) {
+        const last = sessions[sessions.length - 1];
+        switchSession(last.session_id, last.title);
+      } else {
+        try { await newSession(); } catch (_) {}
+      }
     }
   }
-  $('login-btn').addEventListener('click', login);
+
+  if (_AUTH_ENABLED) {
+    // —— 登录态变更事件：用户完成登录/注册/游客/退出 → 同步 currentUserId + 初始化会话
+    window.addEventListener('moss:user-changed', (ev) => {
+      const u = ev && ev.detail ? ev.detail : null;
+      if (u && u.user_id) {
+        currentUserId = u.user_id;
+        localStorage.setItem('dsp_user_id', currentUserId);   // 保持老代码读取兼容（只读）
+        currentSessionId = null;   // 切换账号必须清空会话选择
+        _ensureSessionAndListAfterLogin();
+      } else {
+        currentUserId = '';
+        currentSessionId = null;
+        const input = $('user-id-input');
+        if (input) { input.value = ''; input.removeAttribute('readonly'); input.title = ''; }
+        // 退出：清空聊天 + 列表
+        const list = $('session-list'); if (list) list.innerHTML = '';
+        const titleEl = $('session-title'); if (titleEl) titleEl.textContent = '未选择会话';
+        const chat = $('chat'); if (chat) {
+          chat.innerHTML = '<div class="msg system">欢迎使用无极 Agent，输入问题即可开始对话。</div>';
+        }
+      }
+    });
+
+    // AUTH 模式：不再自动生成 guest_xxx；未登录用户 login-screen 遮罩盖
+    // 已登录：立刻启动会话加载流程
+    if (currentUserId) {
+      await _ensureSessionAndListAfterLogin();
+    } else {
+      // 没 token：让遮罩显示，啥也不做（等用户点 登录/注册/游客 后触发 moss:user-changed）
+      const input = $('user-id-input');
+      if (input) { input.value = ''; input.setAttribute('readonly', 'readonly'); input.title = '请先完成登录'; }
+    }
+  } else {
+    // 兼容老逻辑：自动生成随机 guest_xxx user_id
+    if (!currentUserId) {
+      const ts = Date.now().toString(36);
+      const rand = Math.random().toString(36).slice(2, 6);
+      currentUserId = 'guest_' + ts + rand;
+      localStorage.setItem('dsp_user_id', currentUserId);
+    }
+    $('user-id-input').value = currentUserId;
+    await login();
+    if (!currentSessionId) {
+      const sessions = await loadSessions();
+      if (sessions.length > 0) {
+        const last = sessions[sessions.length - 1];
+        switchSession(last.session_id, last.title);
+      } else {
+        try { await newSession(); } catch (_) {}
+      }
+    }
+  }
+
+  // 侧边栏"登录"按钮：AUTH_MODE 时展示登录遮罩；老模式调原 login()
+  $('login-btn').addEventListener('click', () => {
+    if (_AUTH_ENABLED) {
+      if (_Auth) _Auth.showLoginScreen('');
+    } else {
+      login();
+    }
+  });
   $('send-btn').addEventListener('click', sendMessage);
   $('stop-btn').addEventListener('click', stopCurrentTask);
   $('query-input').addEventListener('keydown', e => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
   });
-  // 文件上传拖拽
-  const dz = $('drop-zone');
-  dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('dragover'); });
-  dz.addEventListener('dragleave', () => dz.classList.remove('dragover'));
-  dz.addEventListener('drop', e => { e.preventDefault(); dz.classList.remove('dragover'); uploadFiles(e.dataTransfer.files); });
-  $('file-input').addEventListener('change', e => uploadFiles(e.target.files));
 });
 
-// ============ 用户登录 ============
+// ============ 用户登录（A5 双模式：AUTH_MODE 调 JWT 登录遮罩，关闭模式走老 /api/users create_or_login_user）============
 async function login() {
+  const _local = (window.APP_CONSTANTS || {}).AUTH_MODE_ENABLED !== true
+              || !window.MossAuth || !window.MossAuth.enabled;
+  if (!_local) {
+    // JWT 模式：显示登录遮罩（register/login/guest 3 按钮由 auth_bootstrap.js 绑定）
+    if (window.MossAuth) window.MossAuth.showLoginScreen('');
+    return;
+  }
+  // —— 兼容老逻辑（AUTH_MODE=false）：明文 user_id + /api/users（白名单兼容）
   const uid = $('user-id-input').value.trim();
   if (!uid) { alert('请输入用户 ID'); return; }
   currentUserId = uid;
@@ -613,6 +1054,7 @@ async function loadSessions() {
 
 async function newSession() {
   if (!currentUserId) { alert('请先登录'); return; }
+  _retrievalResetAll();
   // 生成随机会话标题：session_时间_uuid片段，确保唯一不重复
   const now = new Date();
   const ts = `${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}-${String(now.getHours()).padStart(2,'0')}${String(now.getMinutes()).padStart(2,'0')}`;
@@ -873,7 +1315,8 @@ function handleWSMessage(p) {
   // monitor 事件
   if (p.type === 'monitor_event') {
     const ev = p.event;
-    const msg = p.message;
+    // ===== 前端兜底：所有 WS monitor 可见文本都走一次绝对路径脱敏 =====
+    const msg = maskAbsPaths(p.message || '');
     if (ev === 'session_created') {
       // 工作目录创建提示，前端静默忽略
     } else if (ev === 'assistant_call') {
@@ -903,6 +1346,7 @@ function handleWSMessage(p) {
       } else if (toolName === 'read_file_content') {
         toolDesc = `📎 正在读取文件「${toolArgs.filename || ''}」...`;
       }
+      toolDesc = maskAbsPaths(toolDesc);
       stopProgressTimer();
       // 确保 thinkingEl 仍然挂载在 DOM（防止被 session 切换或异常清掉）
       if (thinkingEl && !document.body.contains(thinkingEl)) {
@@ -920,7 +1364,7 @@ function handleWSMessage(p) {
     } else if (ev === 'tool_end') {
       // 工具执行完成：显示工具返回的结果（包含知识星球搜索结果+Qwen8B分析）
       clearThinkingTimer();
-      const toolResult = (p.data && p.data.result) ? p.data.result : '';
+      const toolResult = maskAbsPaths((p.data && p.data.result) ? p.data.result : '');
       const toolName = (p.data && p.data.tool_name) ? p.data.tool_name : '';
       // 过滤"实质空"内容：LLM/tool 偶尔返回字面 "[]"/"null"/"{}" 等空响应
       // 后端已做过滤，这里加一层前端兜底，避免任何路径漏网
@@ -931,14 +1375,13 @@ function handleWSMessage(p) {
         return ['[]', 'null', 'None', '{}', '""', "''", '()'].includes(t);
       };
       if (toolResult && !_isEmptyLike(toolResult)) {
-        // 工具结果作为助手消息显示（中间结果）——与 pending user 同属一轮
         appendMessage('assistant', toolResult,
           pendingTurnIndex >= 1 ? { turnIndex: pendingTurnIndex } : {});
       }
     } else if (ev === 'task_result') {
       // 最终结果
       clearThinkingTimer();
-      const result = (p.data && p.data.result) ? p.data.result : msg;
+      const result = maskAbsPaths((p.data && p.data.result) ? p.data.result : msg);
       // 过滤"实质空"内容（与 tool_end 同样规则）
       const _isEmptyLike = (s) => {
         if (!s) return true;
@@ -970,26 +1413,575 @@ function handleWSMessage(p) {
   }
 }
 
-// ============ 发送消息 ============
+// ============ 发送消息（流式 SSE 版本·优先） ============
+// _streamEnsureAssistantMsg：确保当前有且仅有一条"流式打字机占位"的 assistant 消息。
+function _streamEnsureAssistantMsg(turnIndex) {
+  if (currentAssistantMsgEl && document.body.contains(currentAssistantMsgEl)) {
+    return currentAssistantMsgEl;
+  }
+  // 新建：初始内容为空字符串
+  currentAssistantText = '';
+  const el = appendMessage('assistant', '',
+    (turnIndex != null ? { turnIndex: turnIndex } : {}));
+  // 标记 stream-msg：后续增量 + 推理折叠 + 来源面板都挂在这条消息上
+  const wrap = el.parentNode;  // .msg-wrap
+  if (wrap) wrap.classList.add('stream-msg-wrap');
+
+  // —— 推理过程折叠容器（默认折叠，位于正文下方）——
+  const reasoningBox = document.createElement('details');
+  reasoningBox.className = 'stream-reasoning-box';
+  reasoningBox.style.cssText = 'margin-top:8px;padding:6px 10px;background:#f8f9fa;border:1px solid #e6e6e6;border-radius:8px;';
+  const sum = document.createElement('summary');
+  sum.style.cssText = 'cursor:pointer;color:#555;font-size:12px;user-select:none;';
+  sum.textContent = '🧠 推理过程（0 步）';
+  reasoningBox.appendChild(sum);
+  const reasoningOl = document.createElement('ol');
+  reasoningOl.style.cssText = 'margin:6px 0 0 18px;padding:0;color:#444;font-size:12.5px;line-height:1.6;';
+  reasoningBox.appendChild(reasoningOl);
+  wrap.appendChild(reasoningBox);
+  reasoningBox.dataset.reasoningCount = '0';
+
+  // —— 来源索引面板（done 后或 source_ref 事件后出现；初始隐藏）——
+  const srcBox = document.createElement('div');
+  srcBox.className = 'stream-sources-box';
+  srcBox.style.cssText = 'display:none;margin-top:8px;padding:6px 10px;background:#f0f7ff;border:1px solid #cce1ff;border-radius:8px;font-size:12px;color:#2c3e50;';
+  wrap.appendChild(srcBox);
+
+  // 正文：contentEditable 禁用选择复制；用 span.text 承载
+  el.innerHTML = '';
+  const span = document.createElement('span');
+  span.className = 'stream-text';
+  el.appendChild(span);
+
+  currentAssistantMsgEl = el;
+  return el;
+}
+
+// _streamAppendText：往打字机 span 里追加纯文本（不重写旧内容避免光标闪烁）
+function _streamAppendText(el, chunk) {
+  if (!el) return;
+  const span = el.querySelector('span.stream-text');
+  if (!span) return;
+  span.appendChild(document.createTextNode(chunk));
+  // 自动滚到底
+  const chat = $('chat');
+  if (chat) chat.scrollTop = chat.scrollHeight;
+}
+
+// _streamRenderText：用 HTML（含引用角标）替换当前正文（仅在 [N] 出现的 done/source 刷新时调用）
+function _streamRenderText(el, text) {
+  if (!el) return;
+  const span = el.querySelector('span.stream-text');
+  if (!span) return;
+  const escaped = _escapeHtml(text).replace(/\n/g, '<br>');
+  span.innerHTML = escaped;
+  _streamAttachCitationLinks(el);
+  const chat = $('chat');
+  if (chat) chat.scrollTop = chat.scrollHeight;
+}
+
+// _escapeHtml：最小 XSS 防护（正文先 escape 再把 [N] 替换成 sup 标签）
+function _escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+// ===== 前端最后一道"展示脱敏"：绝对路径（盘符 C:\ D:\…、Unix /usr…）统一
+//       替换成「工作目录(…/末级名)」，避免后端服务器目录结构被浏览器端用户看到。
+//       后端 monitor._emit / stream_bus 已经过了两道，这里是兜底。
+var _ABS_PATH_RE = /(?:[A-Za-z]:[\\\/][^\s"'`,\)\]]+|(?:^|(?<![A-Za-z0-9_]))\/[A-Za-z0-9_.\-@][^\s"'`,\)\]]*)/g;
+function maskAbsPaths(text) {
+  if (text === undefined || text === null) return '';
+  var s = String(text);
+  if (!s) return s;
+  return s.replace(_ABS_PATH_RE, function (raw) {
+    var norm = raw.replace(/\\/g, '/').replace(/[\.,;:，。；：]+$/, '');
+    if (!norm) return raw;
+    var lastIdx = norm.lastIndexOf('/');
+    var last = (lastIdx >= 0 ? norm.slice(lastIdx + 1) : norm);
+    if (!last) return '工作目录';
+    // 对 DIR\末级：最多保留末 2 段（sub/name）
+    var secIdx = norm.lastIndexOf('/', lastIdx - 1);
+    var short = last;
+    if (secIdx >= 0) short = norm.slice(secIdx + 1);
+    if (short.length > 64) short = last.slice(-48);
+    return '工作目录(./…/' + short + ')';
+  });
+}
+
+// _streamAttachCitationLinks：把 span 里的 "[N]" 文本节点替换成 <sup class=src-ref>
+//   —— 注意：必须以"已经 escape 过 [ ⇒ &#91;"为前提，这里直接处理字符串形式
+function _streamAttachCitationLinks(el) {
+  if (!el) return;
+  const span = el.querySelector('span.stream-text');
+  if (!span) return;
+  // 直接对 innerHTML 再次替换：匹配"实体 [N]"的两种可能形式（按浏览器写文本的方式）
+  let html = span.innerHTML;
+  html = html.replace(/\[(\d{1,3})\](?![\(\uff08])/g, (m, n) => {
+    const idx = Number(n);
+    // 只有 index 在 currentSourceRefs 里存在的，才变可点击角标
+    const found = currentSourceRefs.find(s => s.index === idx);
+    if (found) {
+      return `<sup class="src-ref" data-idx="${idx}" title="${_escapeAttr(found.title || found.url || '来源' + idx)}">[${idx}]</sup>`;
+    }
+    return `<sup class="src-ref src-ref-missing" data-idx="${idx}">[${idx}]</sup>`;
+  });
+  span.innerHTML = html;
+  // 绑定点击：显示 / 切换来源 popover + 悬停显示卡片
+  span.querySelectorAll('sup.src-ref').forEach(sup => {
+    sup.style.cssText = 'display:inline-block;margin:0 2px;padding:0 4px;border-radius:10px;background:#e0ecff;color:#1976d2;cursor:pointer;font-size:11px;line-height:1.4;transition:background .15s;';
+    sup.addEventListener('mouseenter', (e) => {
+      e.stopPropagation();
+      sup.style.background = '#c4dafe';
+      const idx = Number(sup.dataset.idx);
+      if (_citationHoverTimer) { clearTimeout(_citationHoverTimer); _citationHoverTimer = null; }
+      _citationHoverTimer = setTimeout(() => _citationShowCard(idx, sup), 150);
+    });
+    sup.addEventListener('mouseleave', () => {
+      sup.style.background = '#e0ecff';
+      // 延迟隐藏：给用户时间把鼠标移到卡片上（卡片自身 hover 再续）
+      if (_citationHoverTimer) { clearTimeout(_citationHoverTimer); _citationHoverTimer = null; }
+      _citationHoverTimer = setTimeout(() => _citationHideCard(), 250);
+    });
+    sup.addEventListener('click', (e) => {
+      e.stopPropagation();
+      _citationHideCard();
+      const idx = Number(sup.dataset.idx);
+      _streamShowSourceBox(el, idx);
+    });
+  });
+}
+
+function _escapeAttr(s) {
+  return String(s || '').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+// _streamShowSourceBox：在来源面板里高亮某条 + 展开
+function _streamShowSourceBox(el, highlightIdx) {
+  if (!el) return;
+  const wrap = el.parentNode;
+  const srcBox = wrap ? wrap.querySelector('.stream-sources-box') : null;
+  if (!srcBox) return;
+  if (!currentSourceRefs.length) {
+    srcBox.style.display = 'block';
+    srcBox.innerHTML = '<div>暂无来源信息</div>';
+    return;
+  }
+  srcBox.style.display = 'block';
+  srcBox.innerHTML = `<div style="font-weight:600;margin-bottom:6px;color:#1565c0;">📚 信息来源（${currentSourceRefs.length} 条 · 精简模式）</div>` +
+    currentSourceRefs.map(s => {
+      const hi = highlightIdx === s.index ? 'background:#fff8d6;border-color:#f0d86a;' : '';
+      const urlA = s.url
+        ? `<a href="${_escapeAttr(s.url)}" target="_blank" rel="noopener noreferrer" style="color:#1565c0;word-break:break-all;text-decoration:none;">🔗 打开来源</a>`
+        : '<span style="color:#aaa;font-size:10.5px;">（无外链）</span>';
+      // 用户要求：最少 token。snippet ≤100 字；去掉 reliability/type/发布时间三行冗余元信息
+      const SNIPPET_MAX = 100;
+      const rawSnip = String(s.snippet || (s._snip ? s._snip : ''));
+      const snipRaw = (function (idx) {
+        const meta = _citationsMeta[idx];
+        if (meta && meta.snippet) return meta.snippet;
+        return rawSnip;
+      })(s.index);
+      const snipText = snipTextHelper(snipRaw, SNIPPET_MAX);
+      const snip = snipText
+        ? `<div style="margin-top:5px;color:#555;font-size:11.5px;word-break:break-word;line-height:1.5;padding:4px 6px;background:#f6f8fb;border-left:3px solid #74a9f7;">${snipText}</div>`
+        : '';
+      const TITLE_MAX = 80;
+      return `<div style="padding:6px 8px;margin-bottom:4px;border:1px solid #cce1ff;border-radius:6px;${hi}">
+        <div style="display:flex;align-items:baseline;gap:6px;">
+          <b style="color:#1a56a3;">[${s.index}]</b>
+          <span style="font-weight:600;word-break:break-word;line-height:1.35;">${_escapeHtml(String(s.title || '未命名来源').slice(0, TITLE_MAX))}</span>
+          <span style="margin-left:auto;">${urlA}</span>
+        </div>
+        ${snip}
+      </div>`;
+    }).join('');
+}
+
+// 辅助：snippet 硬截 ≤ max 字（末尾补省略号），HTML escape + 换行转 <br>
+function snipTextHelper(raw, max) {
+  if (!raw) return '';
+  const s = String(raw);
+  const cut = s.length > max ? (s.slice(0, max - 1) + '…') : s;
+  return _escapeHtml(cut).replace(/\n/g, '<br>');
+}
+
+// _streamAppendReasoning：往 <details> 的 <ol> 里加一条
+function _streamAppendReasoning(el, title, content, elapsedMs) {
+  if (!el) return;
+  const box = el.parentNode ? el.parentNode.querySelector('details.stream-reasoning-box') : null;
+  if (!box) return;
+  const sum = box.querySelector('summary');
+  const ol = box.querySelector('ol');
+  if (!sum || !ol) return;
+  const li = document.createElement('li');
+  li.style.cssText = 'margin-bottom:4px;list-style:decimal;';
+  const head = document.createElement('div');
+  head.style.cssText = 'font-weight:600;color:#333;';
+  const elapsedTxt = elapsedMs ? ` <span style="color:#888;font-weight:400;">(${elapsedMs}ms)</span>` : '';
+  head.innerHTML = _escapeHtml(title || '') + elapsedTxt;
+  const body = document.createElement('div');
+  body.innerHTML = _escapeHtml(content || '').replace(/\n/g, '<br>');
+  body.style.cssText = 'color:#555;';
+  li.appendChild(head);
+  li.appendChild(body);
+  ol.appendChild(li);
+  const n = (Number(box.dataset.reasoningCount) || 0) + 1;
+  box.dataset.reasoningCount = String(n);
+  sum.textContent = `🧠 推理过程（${n} 步）`;
+}
+
+// _streamAppendToolCall：把 tool_call/tool_result 也作为推理步追加（折叠面板复用）
+function _streamAppendToolCall(el, which, info) {
+  let title = '', content = '';
+  if (which === 'call') {
+    title = `🛠 调用工具：${info.tool_name || ''}`;
+    try { content = JSON.stringify(info.args_snippet || {}, null, 2); } catch (e) { content = String(info.args_snippet || ''); }
+  } else if (which === 'result') {
+    title = `✅ ${info.success ? '完成' : '失败'}：${info.tool_name || ''}（${info.duration_ms || 0}ms）`;
+    content = (info.result_snippet || '') + (info.error_msg ? '\n❌ ' + info.error_msg : '');
+    if (info.source_refs && info.source_refs.length) {
+      content += '\n📎 引用条目：' + info.source_refs.map(s => '[' + s.index + '] ' + s.title).join('；');
+    }
+  }
+  _streamAppendReasoning(el, title, content, info.duration_ms || 0);
+}
+
+// _streamFinalizeMsg：把 currentAssistantText 重写成带 [N] 角标的 HTML + 显示来源面板
+function _streamFinalizeMsg(el, finalTextOverride) {
+  if (!el) return;
+  const finalText = typeof finalTextOverride === 'string' ? finalTextOverride : currentAssistantText;
+  currentAssistantText = finalText;
+  _streamRenderText(el, finalText);
+  _streamShowSourceBox(el, -1);
+  // 同步写回 dataset.content：复制/多选/编辑 用
+  const wrap = el.parentNode;
+  if (wrap) wrap.dataset.content = finalText;
+  el.dataset.content = finalText;
+}
+
+// _streamClearState：结束/取消后重置所有流式状态（不操作 DOM 以免打断）
+function _streamClearState(disposeBuf) {
+  if (disposeBuf && currentStreamBuf) {
+    try { currentStreamBuf.dispose(); } catch (e) { /* noop */ }
+  }
+  currentStreamBuf = null;
+  currentAssistantMsgEl = null;
+  currentAssistantText = '';
+  currentSourceRefs = [];
+  _streamOpenAt = 0;
+  _streamFirstDeltaAt = 0;
+  _retrievalResetAll();
+}
+
+
+// _streamRun：通用 SSE 启动 + 事件注册（sendMessage / sendPreMarketNews 共用）
+//   query：真实发送给后端盘前新闻的 fullQuery 
+//   userDisplayText：用户气泡里显示的文本（为了盘前新闻显示简化名）
+//   opts.taskType：'normal' | 'zsxq'（zsxq 结果靠右显示，旧行为保留；但 SSE 下默认走 normal 也 OK）
+async function _streamRun(query, userDisplayText, opts) {
+  opts = opts || {};
+  const buf = new EventSourceBuffer({
+    url: '/api/task/stream',
+    body: {
+      query: query,
+      thread_id: currentSessionId,
+      user_id: currentUserId,
+      incremental: true,
+    },
+    connectTimeoutMs: 5000,
+    idleTimeoutMs: 180_000,  // 3 分钟：超过则触发空闲超时（比 Agent 主超时 180s 略宽）
+    // 默认打开自动重连 + Last-Event-ID 断点续传（3 次指数退避，约 800ms→1.6s→3.2s）
+    retry: true,
+    maxRetries: 3,
+    baseDelayMs: 800,
+    idempotentByEventId: true,
+  });
+  currentStreamBuf = buf;
+
+  // 用户气泡
+  pendingTurnIndex += 1;
+  if (userDisplayText) appendMessage('user', userDisplayText, { turnIndex: pendingTurnIndex });
+  setRunning(true);
+
+  // ---------- 断点续传：toast / 重连 UI 反馈 ----------
+  let _retryTimerShown = null;
+  const _fmtDelay = (ms) => ms >= 1000 ? `${(ms/1000).toFixed(1)} 秒` : `${ms} ms`;
+
+  buf.on('__retry', (info) => {
+    // 每次重连安排：底部 toast「已断线 N/3，正在重连（第 N 次）… X 秒后」
+    const msg = `🔁 已断线（${info.code || '网络错误'}）— 正在重连（第 ${info.attempt}/${buf.opts.maxRetries} 次），` +
+                `预计 ${_fmtDelay(info.delay || 0)} 后恢复…`;
+    showToast(msg, Math.max(1800, (info.delay || 0) + 800));
+    console.debug('[SSE] __retry', info);
+  });
+
+  buf.on('__replay_start', (info) => {
+    console.debug('[SSE] 续传开始（continue / 无缺口）：', info);
+  });
+
+  buf.on('__replay_end', (info) => {
+    if (!info) return;
+    if (info.gap_count > 0) {
+      showToast(`⚠️ 已恢复连接，但回放期间有 ${info.gap_count} 条事件缺失（已用最终文本自动补全），` +
+                `共回放 ${info.replay_count || 0} 条。`);
+    } else if (info.replay_count > 0) {
+      showToast(`✅ 连接已恢复（断点续传 OK），共回填 ${info.replay_count} 条。`);
+    } else {
+      showToast('✅ 连接已恢复。');
+    }
+    console.debug('[SSE] __replay_end', info);
+  });
+
+  buf.on('__gap', (info) => {
+    // 缺口：提示用户
+    const reasonMap = {
+      buffer_overflow: '事件缓存已溢出（断线时间过长）',
+      server_restart: '服务端已重启（缓存丢失）',
+      not_found: '未找到对应缓存会话',
+      session_done: '会话已结束且过期',
+    };
+    const reasonTxt = reasonMap[(info && info.reason) || ''] || '未知原因';
+    const needRestart = (info && info.suggestion) === 'restart';
+    if (needRestart) {
+      showToast(`🛑 断点不可续（${reasonTxt}），请重新提问。`);
+    } else {
+      showToast(`⚠️ 断点存在缺口（${reasonTxt}），已自动用最新结果重同步。`);
+    }
+    console.debug('[SSE] __gap', info);
+  });
+
+  buf.on('__resync_required', (info) => {
+    // 服务端要求"全量重同步"：清掉当前正在打出来的文本 + 来源索引池，
+    //   随后 resync 模式下的 delta(index=-1 整段)/source_ref 会完整重新渲染
+    console.debug('[SSE] __resync_required → 清态重置当前消息与引用：', info);
+    currentAssistantText = '';
+    currentSourceRefs = [];
+    _retrievalResetAll();
+    if (currentAssistantMsgEl) {
+      const textBox = currentAssistantMsgEl.querySelector('.stream-text');
+      if (textBox) textBox.textContent = '';
+      const srcBox = currentAssistantMsgEl.querySelector('.stream-sources-box');
+      if (srcBox) srcBox.innerHTML = '';
+      // 推理面板保留（已展示的 CoT 通常不需重打；若用户感觉不对可关页面重新提问）
+    }
+  });
+
+  buf.on('__duplicate', (d) => {
+    // 幂等跳过：debug 日志即可，不给用户展示
+    if (d) console.debug('[SSE] 跳过重复 event_id=', d.id, 'event=', d.event);
+  });
+
+  buf.on('__warn', (w) => { console.warn('[SSE] WARN', w); });
+
+  // 用户发送新提问时：主动"重置 buf 的 last_event_id & seenIds"，避免误走 RESUME 分支
+  //   （发送新 query 意味着"新一轮"，不应该接续上一轮同 thread_id 的事件）
+  try {
+    if (typeof buf._resetSeenIds === 'function') buf._resetSeenIds();
+    buf._lastEventId = '';
+  } catch (_) { /* noop */ }
+
+  // 注册事件（open/delta/progress/tool_call/tool_result/reasoning/source_ref/done/error）
+  buf.on('__streaming', (info) => {
+    console.debug('[SSE] __streaming', info);
+  });
+
+  buf.on('open', (p) => {
+    _streamOpenAt = performance.now();
+    console.debug('[SSE] OPEN request_id=', p && p.request_id, 'thread_id=', p && p.thread_id,
+      'OPEN时延=', (_streamOpenAt - performance.timeOrigin).toFixed(0), 'ms from navigation start');
+    // 占位 assistant 消息：立即创建（即使还没 delta，用户也能看到"AI 冒头"）
+    _streamEnsureAssistantMsg(pendingTurnIndex);
+  });
+
+  buf.on('progress', (p) => {
+    // 进度：更新顶部通用 thinking 提示（与 WS thinking/tool_start 旧 UI 同一条，不额外新增气泡）
+    const detail = maskAbsPaths(p.detail || p.stage || '');
+    const percentTxt = p.percent ? ` ${p.percent}%` : '';
+    const stageTxt = maskAbsPaths(p.stage || 'AI 处理中');
+    const base = `⏳ ${stageTxt}${percentTxt}${detail ? ' — ' + detail : ''}`;
+    stopProgressTimer();
+    if (!thinkingEl) {
+      thinkingEl = appendMessage('event', base + '（已耗时 0 秒）');
+      thinkingEl.setAttribute('data-base', base);
+      thinkingStartTime = Date.now();
+      updateThinkingTimer();
+    } else {
+      thinkingEl.setAttribute('data-base', base);
+    }
+  });
+
+  buf.on('delta', (p) => {
+    if (!p) return;
+    if (!currentAssistantMsgEl) _streamEnsureAssistantMsg(pendingTurnIndex);
+    if (_streamFirstDeltaAt === 0) {
+      _streamFirstDeltaAt = performance.now();
+      console.debug('[SSE] 首 token 时延 (OPEN→DELTA) =',
+        (_streamFirstDeltaAt - _streamOpenAt).toFixed(1), 'ms');
+    }
+    if (p.is_reasoning) {
+      // CoT token：暂直接拼到 reasoning 专用缓存（太频繁先忽略， reasoning 事件会一次性推送整段）
+      return;
+    }
+    const txt = typeof p.text === 'string' ? p.text : '';
+    // 累积
+    currentAssistantText += txt;
+    _streamAppendText(currentAssistantMsgEl, txt);
+    // 每 ~30 个增量 token，把 currentAssistantText 中的 [N] 渲染一次（避免打字机期间一直无角标）
+    if ((p.index || 0) % 30 === 0) {
+      _streamRenderText(currentAssistantMsgEl, currentAssistantText);
+    }
+  });
+
+  buf.on('reasoning', (p) => {
+    if (!p) return;
+    if (!currentAssistantMsgEl) _streamEnsureAssistantMsg(pendingTurnIndex);
+    const stage = p.stage || 'model_coT';
+    const stageTitle = _REASONING_STAGE_TITLE[stage] || '推理步骤';
+    const stageColor = _REASONING_STAGE_COLOR[stage] || '#6c5ce7';
+    // 标题优先用后端给的 title；如果 title 为空或与默认值雷同，则加 stage 彩色标签前缀
+    let title = (typeof p.title === 'string' && p.title.trim()) ? p.title : stageTitle;
+    const tag = `<span style="display:inline-block;padding:1px 7px;border-radius:10px;color:#fff;background:${stageColor};font-size:11px;font-weight:500;margin-right:6px;vertical-align:1px;">${stageTitle}</span>`;
+    title = tag + title;
+    _streamAppendReasoning(currentAssistantMsgEl, title, p.content, p.elapsed_ms || 0);
+  });
+
+  // -------- §6 新增：实时检索来源（Tavily / IMA / ZSXQ 独立事件） --------
+  buf.on('retrieve_result', (p) => {
+    if (!p) return;
+    const channel = p.channel || 'unknown';
+    const chName = { tavily: 'Tavily', ima: 'IMA 知识库', zsxq: '知识星球' }[channel] || channel;
+    const total = Array.isArray(p.items) ? p.items.length : 0;
+    if (Array.isArray(p.items) && p.items.length) {
+      _retrievalAppend(channel, p.items, p.query || '', p.duration_ms || 0);
+    }
+    // 进度条里显示"检索命中"（复用顶部 thinking）
+    const dur = p.duration_ms ? `（${p.duration_ms}ms）` : '';
+    const succ = p.success ? `✅ 命中 ${total} 条${dur}` : `❌ 失败 ${p.error_msg || ''}${dur}`;
+    const query = p.query ? `「${String(p.query).slice(0, 24)}」` : '';
+    const info = `检索 ${chName} ${query} ${succ}`;
+    if (!currentAssistantMsgEl) _streamEnsureAssistantMsg(pendingTurnIndex);
+    _streamAppendReasoning(currentAssistantMsgEl,
+      `<span style="display:inline-block;padding:1px 7px;border-radius:10px;background:#f0f7ff;color:#1976d2;font-size:11px;margin-right:6px;">🔎 检索结果</span>${chName}`,
+      info, p.duration_ms || 0);
+  });
+
+  // -------- §6 新增：引用角标 [N] → 来源卡片元数据（增量合并） --------
+  buf.on('citation_meta', (p) => {
+    if (!p || !Array.isArray(p.items)) return;
+    const changed = _citationMetaMerge(p.items);
+    if (changed && currentAssistantMsgEl) {
+      // 重新渲染 [N] 角标：src-ref-missing → src-ref 可点击 + 悬停卡片生效
+      _streamRenderText(currentAssistantMsgEl, currentAssistantText);
+      // 同步刷新文末来源面板（若已打开则立刻显示新条目）
+      _streamShowSourceBox(currentAssistantMsgEl, -1);
+    }
+  });
+
+  buf.on('tool_call', (p) => {
+    if (!p) return;
+    if (!currentAssistantMsgEl) _streamEnsureAssistantMsg(pendingTurnIndex);
+    _streamAppendToolCall(currentAssistantMsgEl, 'call', p);
+  });
+
+  buf.on('tool_result', (p) => {
+    if (!p) return;
+    if (!currentAssistantMsgEl) _streamEnsureAssistantMsg(pendingTurnIndex);
+    _streamAppendToolCall(currentAssistantMsgEl, 'result', p);
+    // 把来源引用合并进全局池（tool_result.source_refs 带 index）
+    if (Array.isArray(p.source_refs) && p.source_refs.length) {
+      p.source_refs.forEach(sr => {
+        const existing = currentSourceRefs.find(x => x.index === sr.index);
+        if (!existing) currentSourceRefs.push(Object.assign({}, sr));
+      });
+      currentSourceRefs.sort((a, b) => (a.index || 0) - (b.index || 0));
+      // 增量刷新角标渲染
+      if (currentAssistantMsgEl) {
+        _streamRenderText(currentAssistantMsgEl, currentAssistantText);
+      }
+    }
+  });
+
+  buf.on('source_ref', (p) => {
+    if (!p || !Array.isArray(p.items)) return;
+    // 全量替换
+    currentSourceRefs = p.items.slice().sort((a, b) => (a.index || 0) - (b.index || 0));
+    if (currentAssistantMsgEl) {
+      _streamRenderText(currentAssistantMsgEl, currentAssistantText);
+      _streamShowSourceBox(currentAssistantMsgEl, -1);
+    }
+  });
+
+  buf.on('done', (p) => {
+    clearThinkingTimer();
+    _streamFinalizeMsg(currentAssistantMsgEl, (p && p.final_text) ? p.final_text : undefined);
+    // 日志
+    if (p) {
+      const usage = p.usage || {};
+      console.debug(`[SSE] DONE duration=${p.total_duration_ms || 0}ms ` +
+        `sources=${p.source_ref_count || 0} tools=${p.tool_call_count || 0} ` +
+        `usage=${JSON.stringify(usage)}`);
+    }
+    // 旧链路兼容：清空 task_type（如果有）
+    currentTaskType = 'normal';
+    setRunning(false);
+    _streamClearState(false);
+    loadSessions();
+  });
+
+  buf.on('error', (p) => {
+    clearThinkingTimer();
+    const msg = maskAbsPaths(p && p.message ? p.message : '未知错误');
+    const cancelled = !!(p && p.cancelled);
+    appendMessage(cancelled ? 'system' : 'error',
+      (cancelled ? '⏹ ' : '❌ ') + msg);
+    // 如果流式消息创建了但没写完，也 finalize（显示已生成的部分 + 来源面板）
+    if (currentAssistantMsgEl && currentAssistantText.length > 0 && !cancelled) {
+      _streamFinalizeMsg(currentAssistantMsgEl);
+    }
+    setRunning(false);
+    _streamClearState(false);
+  });
+
+  buf.on('heartbeat', () => { /* NOP：心跳只做保活，不渲染 */ });
+
+  buf.start();
+}
+
 async function sendMessage() {
   const q = $('query-input').value.trim();
   if (!q) return;
   if (!currentSessionId) { alert('请先选择或新建会话'); return; }
   if (isRunning) { alert('当前任务进行中，请等待完成'); return; }
   $('query-input').value = '';
-  pendingTurnIndex += 1;
-  appendMessage('user', q, { turnIndex: pendingTurnIndex });
-  setRunning(true);
+  if (!SSE_STREAM_ENABLED) {
+    // ===== 旧分支（SSE_STREAM_ENABLED=false 或未来想一次性切回） =====
+    pendingTurnIndex += 1;
+    appendMessage('user', q, { turnIndex: pendingTurnIndex });
+    setRunning(true);
+    try {
+      const r = await fetch('/api/task', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({query: q, thread_id: currentSessionId, user_id: currentUserId})
+      });
+      if (!r.ok) throw new Error('请求失败 ' + r.status);
+    } catch (e) {
+      appendMessage('error', '发送失败: ' + e.message);
+      setRunning(false);
+    }
+    return;
+  }
+  // ===== 新分支：SSE 流式 =====
   try {
-    const r = await fetch('/api/task', {
-      method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({query: q, thread_id: currentSessionId, user_id: currentUserId})
-    });
-    if (!r.ok) throw new Error('请求失败 ' + r.status);
-    // 任务在后台执行，结果通过 WS 推送
+    await _streamRun(q, q, { taskType: 'normal' });
   } catch (e) {
     appendMessage('error', '发送失败: ' + e.message);
     setRunning(false);
+    _streamClearState(true);
   }
 }
 
@@ -998,6 +1990,21 @@ async function sendPreMarketNews() {
   if (!currentSessionId) { alert('请先选择或新建会话'); return; }
   if (isRunning) { alert('当前任务进行中，请等待完成'); return; }
 
+  const fullQuery = `请根据系统提供的搜索时间范围，执行网络搜索，涉及到多个股票或多个平台的搜索任务，拆分任务，调用网络搜索助手并发搜索以提高效率，并汇总获取的结果，输入给本地模型deepseek-r1:7b进行汇总分类、分析之后再输出，最好是表格输出或其他直观输出。1）韭研社区、炒股吧、雪球、同花顺股吧、东方财富股吧、微信公众号讨论热度最高的新闻和个股前10；2）美股最新夜盘科技股（特别是美光、海力士、谷歌、meta、应用光电、康宁、英伟达的最新盘前或盘中股价涨跌情况、走势、相关最新当天的新闻）；最后汇总简要输出：1、热门个股按出现在各平台上数量，从高到低排序的股票清单；2）利好还是利空的逻辑A股概念板块或个股，给出1、利好和利空个股清单。字数控制在1000字以内，精简输出；`;
+
+  if (SSE_STREAM_ENABLED) {
+    // SSE 分支：走 /api/task/stream，打字机 + 来源引用 + 推理面板
+    try {
+      await _streamRun(fullQuery, '盘前新闻', { taskType: 'normal' });
+    } catch (e) {
+      appendMessage('error', '发送失败: ' + e.message);
+      setRunning(false);
+      _streamClearState(true);
+    }
+    return;
+  }
+
+  // ===== 旧分支（SSE_STREAM_ENABLED=false）=====
   // 等待 WebSocket 连接就绪（最多等 3 秒）
   if (!ws || ws.readyState !== WebSocket.OPEN) {
     appendMessage('system', '正在建立连接...');
@@ -1011,19 +2018,10 @@ async function sendPreMarketNews() {
       return;
     }
   }
-
-  // 前端仅展示简短名称，不暴露完整提示词
   pendingTurnIndex += 1;
-  appendMessage('user', '盘前新闻策略', { turnIndex: pendingTurnIndex });
+  appendMessage('user', '盘前新闻', { turnIndex: pendingTurnIndex });
   setRunning(true);
   try {
-    // 【关键】日期/星期/搜索时间范围不再由前端硬编码"查询今天是周几"的子任务，
-    // 统一由后端 server.py 的 _rewrite_premarket_query_if_shortcut() 注入：
-    //   - datetime(timezone+8) 直接计算精确的当前北京时间、星期、小时；
-    //   - 按规则（周一<10点/周末→周五15:00起；其他→昨天15:00起）算出搜索范围；
-    //   - 前缀加【系统已注入当前北京时间·严禁联网查日期】硬性约束；
-    // 避免 LLM 按字面执行"查询今天是周几"，浪费 2-3 轮联网查时间校准网。
-    const fullQuery = `请根据系统提供的搜索时间范围，搜韭研社区、炒股吧、雪球、同花顺股吧、东方财富股吧，讨论热度最高的新闻和个股前10，并且获取美股最新夜盘科技股（特别是美光、海力士、谷歌、meta、应用光电、康宁、英伟达的最新盘前或盘中股价涨跌情况、走势、相关最新当天的新闻），汇总简要输出利好还是利空的逻辑A股概念板块或个股，字数控制在3000字以内，输出开头第一句总结分别给出利好和利空个股清单。`;
     const r = await fetch('/api/task', {
       method: 'POST', headers: {'Content-Type':'application/json'},
       body: JSON.stringify({query: fullQuery, thread_id: currentSessionId, user_id: currentUserId})
@@ -1035,7 +2033,7 @@ async function sendPreMarketNews() {
   }
 }
 
-// ============ 盘前小作文热度：调用 test_zsxq.py 抓取知识星球 + LLM 分析 ============
+// ============ 盘前小作文热度：调用后端 zsxq_analysis_runner（知识星球抓取 + LLM 分析）============
 async function sendZsxqHotNews() {
   if (!currentSessionId) { alert('请先选择或新建会话'); return; }
   if (isRunning) { alert('当前任务进行中，请等待完成'); return; }
@@ -1154,6 +2152,14 @@ async function stopCurrentTask() {
     setRunning(false);
     return;
   }
+
+  // ---- (1) 优先：关闭 SSE 连接 + 同步 POST /api/task/stop（EventSourceBuffer.abort 双保险）----
+  if (currentStreamBuf) {
+    try { currentStreamBuf.abort('user_stop_clicked', true); }
+    catch (e) { console.warn('[stop] ESB abort 失败:', e); }
+    _streamClearState(true);
+  }
+
   try {
     const resp = await fetch('/api/task/stop', {
       method: 'POST',
@@ -1206,7 +2212,9 @@ function toggleMsgMultiSelectMode() {
     btn.textContent = '✕ 退出多选';
     btn.style.background = '#e53935';
     btn.style.color = '#fff';
-    bar.style.display = 'flex';
+    // 加 class 显示（CSS 里写 display:flex !important），不直接改 inline style，
+    // 避免与"默认 display:none !important"冲突。
+    if (bar) bar.classList.add('msg-multi-active');
     selectedMsgSet.clear();
     renderMsgCheckboxes();
     updateMsgMultiCount();
@@ -1224,7 +2232,13 @@ function exitMsgMultiSelectMode() {
     btn.style.background = '';
     btn.style.color = '';
   }
-  if (bar) bar.style.display = 'none';
+  // 移除 msg-multi-active class，恢复 CSS 默认 display:none !important
+  if (bar) {
+    bar.classList.remove('msg-multi-active');
+    // 保险：如果之前有代码把 inline style.display 改成了 flex，这里也清掉
+    // （但主要以 class 为主，因为 CSS 里有 !important）
+    bar.style.display = '';
+  }
   selectedMsgSet.clear();
   // 清除所有复选框
   document.querySelectorAll('.msg-checkbox').forEach(cb => cb.remove());
@@ -1329,7 +2343,7 @@ async function batchDeleteSelectedMsgs() {
 
 // ============ 消息渲染 ============
 // ============ 前端清理：移除不应展示给用户的规则/指令段落 ============
-// 正则：匹配换行+【工作环境指令】开始到文本结尾的全部内容（含上传文件、规则1-4等）
+// 正则：匹配换行+【工作环境指令】开始到文本结尾的全部内容（含规则1-4等）
 const HIDE_PROMPT_RE = /(?:\r?\n)\s*【工作环境指令】[\s\S]*$/;
 function stripHiddenInstructions(text) {
   if (typeof text !== 'string') return text;
@@ -1492,12 +2506,6 @@ function showContextMenu(x, y, content, role, msgEl, turnIndex) {
     it.classList.remove('open', 'open-right');
   });
 
-  // "重新生成" 仅 AI 消息可用
-  const regenItem = $('ctx-regenerate');
-  if (regenItem) {
-    if (role === 'assistant') regenItem.classList.remove('disabled');
-    else regenItem.classList.add('disabled');
-  }
   // "删除该消息" 仅 user/assistant 且已绑定 turnIndex 的历史消息可用
   const delItem = $('ctx-delete');
   const delTurnItem = $('ctx-delete-turn');
@@ -1620,30 +2628,8 @@ async function handleContextAction(action) {
     case 'copy':
       await copyText(content);
       break;
-    case 'select-text':
-      // 自动选中该消息文字，方便用户复制
-      {
-        const target = currentContentEl || document.body;
-        const range = document.createRange();
-        range.selectNodeContents(target);
-        const sel = window.getSelection();
-        sel.removeAllRanges();
-        sel.addRange(range);
-        showToast('已选中文本，Ctrl+C 复制');
-      }
-      break;
-    case 'regenerate':
-      if (role === 'assistant') {
-        showToast('正在重新生成回答...');
-        // 在实际项目中这里应该触发重新生成，目前仅做提示
-      }
-      break;
     case 'share-image':
       await shareAsImage([{ role, content }]);
-      break;
-    case 'share-text':
-      await copyText(content);
-      showToast('已复制为文字');
       break;
     case 'delete': {
       // 单条删除：只删当前右键的这条（user 或 assistant），保留另一条
@@ -2091,60 +3077,6 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
-// ============ 文件上传 ============
-function openUploadModal() {
-  if (!currentSessionId) { alert('请先选择或新建会话'); return; }
-  $('upload-modal').classList.add('show');
-  $('upload-result').innerHTML = '';
-}
-function closeModal(id) { $(id).classList.remove('show'); }
-
-async function uploadFiles(fileList) {
-  if (!currentSessionId) { alert('请先选择会话'); return; }
-  const files = Array.from(fileList);
-  if (files.length === 0) return;
-  const fd = new FormData();
-  files.forEach(f => fd.append('files', f));
-  fd.append('thread_id', currentSessionId);
-  $('upload-result').innerHTML = '<div>上传中...</div>';
-  try {
-    const r = await fetch('/api/upload', {method:'POST', body: fd});
-    const data = await r.json();
-    $('upload-result').innerHTML = `<div class="msg system">✅ 已上传 ${data.files.length} 个文件：${data.files.join(', ')}</div>`;
-  } catch (e) {
-    $('upload-result').innerHTML = `<div class="msg error">上传失败: ${e.message}</div>`;
-  }
-}
-
-// ============ 文件列表 ============
-async function openFilesModal() {
-  if (!currentSessionId) { alert('请先选择或新建会话'); return; }
-  $('files-modal').classList.add('show');
-  $('files-list').innerHTML = '<div>加载中...</div>';
-  // 拼接 output/session_xxx 目录路径
-  const path = `/output/session_${currentSessionId}`;
-  try {
-    const r = await fetch(`/api/files?path=${encodeURIComponent(path)}`);
-    const data = await r.json();
-    if (data.error) { $('files-list').innerHTML = `<div class="msg error">${data.error}</div>`; return; }
-    const files = data.files || [];
-    if (files.length === 0) { $('files-list').innerHTML = '<div>暂无文件</div>'; return; }
-    $('files-list').innerHTML = files.map(f => `
-      <div class="file-row">
-        <span>${escapeHtml(f.name)} <span class="badge">${formatSize(f.size)}</span></span>
-        <a href="/api/download?path=${encodeURIComponent(f.path)}" target="_blank">下载</a>
-      </div>
-    `).join('');
-  } catch (e) {
-    $('files-list').innerHTML = `<div class="msg error">加载失败: ${e.message}</div>`;
-  }
-}
-
-function formatSize(b) {
-  if (b < 1024) return b + ' B';
-  if (b < 1024*1024) return (b/1024).toFixed(1) + ' KB';
-  return (b/1024/1024).toFixed(1) + ' MB';
-}
 </script>
 </body>
 </html>

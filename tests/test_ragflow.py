@@ -6,7 +6,12 @@
 import os
 import sys
 import requests
+import pytest
 from pathlib import Path
+
+# 真实网络连通性测试：pytest 下默认跳过（依赖外部 IMA 服务与 DNS，易拖慢/挂起 CI）。
+# 手动验证：python tests/test_ragflow.py 或 RUN_NET_TESTS=1 pytest tests/test_ragflow.py
+_RUN_NET_TESTS = os.environ.get("RUN_NET_TESTS", "0") == "1"
 
 # 测试文件位于 tests/ 子目录，需要向上一级找到项目根目录
 project_root = Path(__file__).resolve().parent.parent
@@ -17,6 +22,7 @@ from dotenv import load_dotenv, find_dotenv
 load_dotenv(find_dotenv())
 
 
+@pytest.mark.skipif(not _RUN_NET_TESTS, reason="真实网络连通性测试：设置 RUN_NET_TESTS=1 启用（默认跳过）")
 def test_ima_knowledge_base_search():
     """验证 IMA 知识库 OpenAPI /search_knowledge_base 接口连通性"""
     print("\n" + "=" * 60)

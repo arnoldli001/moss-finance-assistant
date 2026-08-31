@@ -98,7 +98,7 @@ pyngrok==8.1.2
 # ↑ ngrok 公网隧道【可选】：未安装时若配置了 NGROK_AUTHTOKEN 会打印安装提示，不影响局域网运行
 python-frontmatter==1.1.0
 python-multipart==0.0.22
-pywin32==311
+pywin32==311; sys_platform == "win32"  # Windows 专属（win32 API），Linux/macOS/CI/Docker 跳过
 PyYAML==6.0.3
 ragflow-sdk==0.24.0
 regex==2026.2.19
@@ -138,3 +138,6 @@ xxhash==3.6.0
 yarl==1.22.0
 zopfli==0.4.1
 zstandard==0.25.0
+# ---------- P0 鉴权可选增强依赖（缺省时自动走 PBKDF2+手写 JWT 纯标准库回退）----------
+PyJWT>=2.8.0  # 可选：带 exp/sub/role/iat claims 全选项校验；缺省走内建 HS256
+bcrypt>=4.1.0   # 可选：bcrypt 密码哈希(rounds=12)；缺省走 PBKDF2-HMAC-SHA256(200,000 iters)

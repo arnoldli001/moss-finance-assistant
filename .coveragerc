@@ -1,0 +1,26 @@
+# pytest-cov 覆盖率配置：统计真实实现层，排除测试/基准/运行产物
+[run]
+source =
+    shared
+    api
+    agent
+    governance
+    orchestration
+    interfaces
+    tools
+    config
+omit =
+    tests/*
+    benchmarks/*
+    */__pycache__/*
+    output/*
+    data/*
+
+[report]
+precision = 1
+show_missing = True
+exclude_lines =
+    pragma: no cover
+    if __name__ == .__main__.:
+    if TYPE_CHECKING:
+    raise NotImplementedError

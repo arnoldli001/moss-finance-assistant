@@ -1,0 +1,43 @@
+{
+  "_description": "RBAC 角色 → 权限映射。修改后无需重启即可被 RBACMiddleware 热加载（每 60s 重新读取）。",
+  "roles": {
+    "admin": {
+      "description": "管理员：全权限",
+      "permissions": ["*"],
+      "max_rows_per_query": 10000,
+      "rate_limit_per_min": 600,
+      "allowed_endpoints": ["*"]
+    },
+    "analyst": {
+      "description": "分析师：可查所有公开数据 + 用户自己的数据",
+      "permissions": [
+        "news:read", "valuation:read", "moat:read",
+        "retail_data:read:self", "session:write:self"
+      ],
+      "max_rows_per_query": 1000,
+      "rate_limit_per_min": 120,
+      "allowed_endpoints": ["/chat", "/api/news/*", "/api/valuation/*", "/api/retail/*"]
+    },
+    "user": {
+      "description": "普通散户：可查公开数据 + 自己的数据，行级隔离",
+      "permissions": [
+        "news:read", "valuation:read", "moat:read",
+        "retail_data:read:self", "session:write:self"
+      ],
+      "max_rows_per_query": 100,
+      "rate_limit_per_min": 60,
+      "allowed_endpoints": ["/chat", "/api/news/*", "/api/valuation/*"]
+    },
+    "guest": {
+      "description": "游客：只读公开新闻",
+      "permissions": ["news:read"],
+      "max_rows_per_query": 10,
+      "rate_limit_per_min": 10,
+      "allowed_endpoints": ["/api/news/*"]
+    }
+  },
+  "user_role_map": {
+    "u_admin_001": "admin",
+    "u_analyst_001": "analyst"
+  }
+}

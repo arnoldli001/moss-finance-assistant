@@ -9,12 +9,39 @@ from tavily import TavilyClient
 
 # 系统/第三方依赖
 import os  # 系统路径/环境变量处理
+import sys
 import time
 import requests.exceptions as rex
 from dotenv import load_dotenv, find_dotenv  # 加载 .env 文件中的环境变量
+from pathlib import Path
 
 # 自定义模块：工具调用埋点监控（需确保 api 模块可导入）
+_PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+
 from api.monitor import monitor
+
+# bus 桥接：把检索结果作为 retrieve_result 发布，供 SSE 显示和引用元数据使用
+def _try_publish_retrieve_result(channel: str, query: str, items_list):
+    """尽力发布，跨线程/无事件循环时不阻塞（run_coroutine_threadsafe 安全兜底）。"""
+    try:
+        import asyncio as _aio
+        from api.stream_bus import get_stream_bus_sync
+        from api.context import get_thread_context
+        tid = get_thread_context()
+        if not tid:
+            return
+        bus = get_stream_bus_sync()
+        if bus._loop is None or not bus._loop.is_running():
+            return
+        def _sync_pub():
+            # ev_retrieve_result 虽然没有 async，但它内部 publish 通过 create_task
+            #   所以直接在主线程里 call_soon_threadsafe 即可；这里不 await 结果。
+            bus.ev_retrieve_result(tid, channel=channel, query=query, items=items_list)
+        bus._loop.call_soon_threadsafe(_sync_pub)
+    except Exception:
+        pass
 
 # ======================== 初始化配置 ========================
 # 使用 find_dotenv() 递归查找 .env 文件，确保从项目根目录加载
@@ -42,6 +69,62 @@ from config.constants import (
 _TAVILY_MAX_RETRIES = TAVILY_MAX_RETRIES
 
 
+# ===== 并发拆分搜索（shared/search_split_aggregator）的懒加载 =====
+# 注意：不能在模块加载时 import（否则会引入循环 import 或 加载顺序不确定），
+# 统一用 _get_split_support() 首次调用时装入。
+def _get_split_support():
+    try:
+        from shared.search_split_aggregator import (
+            run_sync_parallel, run_async_parallel, extract_sub_queries,
+        )
+        return run_sync_parallel, run_async_parallel, extract_sub_queries
+    except Exception:
+        return None, None, None
+
+
+def _raw_tavily_search_once(
+    query: str,
+    topic: Literal["news", "finance", "general"],
+    max_results: int,
+    include_raw_content: bool,
+):
+    """不做 retry/结构化的一次 Tavily 调用（用于并发分支中的子查询）。
+
+    父级 internet_search 已经为"不拆分场景"做了 retry+结构化，所以这里只在
+    拆分后的每个子查询里使用：由 run_sync_parallel / run_async_parallel 并发驱动。
+    返回：Tavily 原始返回 dict（已注入 _structured_items & publish SSE）。
+    """
+    result = tavily_client.search(query=query, topic=topic,
+                                  max_results=max_results, include_raw_content=include_raw_content)
+    if isinstance(result, dict):
+        raw_results = result.get("results") or []
+        items_list = []
+        for r in raw_results:
+            url = str(r.get("url") or "")
+            title = str(r.get("title") or url or "无标题")
+            content = str(
+                r.get("content") or r.get("raw_content") or r.get("snippet") or ""
+            )
+            score = float(r.get("score") or 0.0)
+            pub = str(r.get("published_date") or "")
+            items_list.append({
+                "doc_id": f"tavily-{abs(hash((url, title, query))) & 0xffffffff:x}",
+                "title": title, "url": url, "content": content,
+                "source_type": "web", "channel": "tavily",
+                "score": score, "published_at": pub,
+            })
+        try:
+            from adapter.stream_adapters import filter_items_by_recency
+            items_list, _a, _b = filter_items_by_recency(
+                items_list, channel="tavily", auto_fallback=False
+            )
+        except Exception:
+            pass
+        _try_publish_retrieve_result("tavily", query, items_list)
+        result["_structured_items"] = items_list
+    return result
+
+
 # 步骤2： 定义一个网络搜索工具
 @tool
 def internet_search(
@@ -65,13 +148,32 @@ def internet_search(
                         args={"query": query, "topic": topic, "max_results": max_results,
                               "include_raw_content": include_raw_content})
 
+    # —— [NEW] 多股票 / 多平台：拆分 + 线程池并发搜索 + 汇总 ——
+    run_sync_p, _run_async_p, _extract_sq = _get_split_support()
+    if run_sync_p is not None:
+        parallel = run_sync_p(
+            query, topic, max_results, include_raw_content,
+            sync_search_fn=_raw_tavily_search_once,
+        )
+        if parallel is not None:
+            # parallel 已做 _structured_items + 聚合 markdown；这里只需要再次触发
+            # SSE 发布（publish 是多安全：同一批 items 幂等）和向前端返回。
+            total_items = parallel.get("_structured_items") or []
+            if total_items:
+                _try_publish_retrieve_result("tavily", query, total_items)
+            monitor.report_tool(
+                tool_name="网络搜索工具-多查询并发汇总",
+                args={"sub_queries": len(parallel.get("results") or []),
+                      "total_items": len(total_items)},
+            )
+            return parallel
+
     # 对连接重置/超时类错误做指数退避重试，避免瞬时并发或 keep-alive 过期导致的 10054 错误
     last_err = None
     for attempt in range(1, _TAVILY_MAX_RETRIES + 1):
         try:
             t0 = time.time()
-            result = tavily_client.search(query=query, topic=topic,
-                                           max_results=max_results, include_raw_content=include_raw_content)
+            result = _raw_tavily_search_once(query, topic, max_results, include_raw_content)
             elapsed = time.time() - t0
             hits = len(result.get("results", [])) if isinstance(result, dict) else 0
             if attempt > 1:
@@ -87,6 +189,80 @@ def internet_search(
             return f"网络搜索失败: {type(e).__name__}: {str(e)}"
     # 所有重试用尽
     print(f"[Tavily] 重试{_TAVILY_MAX_RETRIES}次全部失败: {type(last_err).__name__}: {last_err} (query={query})")
+    return f"网络搜索失败（网络连接异常，已重试{_TAVILY_MAX_RETRIES}次）: {type(last_err).__name__}: {str(last_err)}"
+
+
+async def internet_search_async(
+        query: str,
+        topic: Literal["news", "finance", "general"] = "general",
+        max_results: int = TAVILY_DEFAULT_MAX_RESULTS,
+        include_raw_content: bool = False,
+):
+    """异步版本的网络搜索（直接给 analysis_workflow / SSE 主链路 await 用）。
+
+    - 单查询：asyncio.to_thread(...) 包装同步的 `_raw_tavily_search_once`（保留
+      与 internet_search @tool 相同的 retry + 结构化后处理）。
+    - 多股票/多平台：先走 extract_sub_queries 拆，再 asyncio.gather 并发执行，
+      最终 aggregate_results 合并（同上述同步并发返回结构）。
+    输出字段与 internet_search 100% 一致：dict{query, answer, results, _structured_items}。
+    """
+    monitor.report_tool(
+        tool_name="网络搜索工具(异步)",
+        args={"query": query, "topic": topic, "max_results": max_results,
+              "include_raw_content": include_raw_content},
+    )
+    import asyncio as _aio
+
+    # —— 多股票 / 多平台：拆分 + gather 并发 ——
+    _run_sync_p, run_async_p, _extract_sq = _get_split_support()
+    if run_async_p is not None:
+        async def _worker(sq: str, tp: str, mr: int, irc: bool):
+            last_err = None
+            for attempt in range(1, _TAVILY_MAX_RETRIES + 1):
+                try:
+                    return await _aio.to_thread(
+                        _raw_tavily_search_once, sq, tp, mr, irc
+                    )
+                except _CONNECTION_ERRORS as _e:
+                    last_err = _e
+                    backoff = TAVILY_BACKOFF_BASE ** attempt
+                    print(f"[Tavily][async] 连接异常，子查询第{attempt}次重试 (等待{backoff}s): {type(_e).__name__}: {_e} (query={sq[:80]})")
+                    await _aio.sleep(backoff)
+                except Exception as _e:
+                    return f"子查询失败: {type(_e).__name__}: {_e}"
+            return f"子查询失败（已重试{_TAVILY_MAX_RETRIES}次）: {type(last_err).__name__}: {str(last_err)}"
+
+        parallel = await run_async_p(
+            query, topic, max_results, include_raw_content, async_search_fn=_worker,
+        )
+        if parallel is not None:
+            items = parallel.get("_structured_items") or []
+            if items:
+                _try_publish_retrieve_result("tavily", query, items)
+            return parallel
+
+    # —— 单查询：to_thread + retry（与同步版本对齐）——
+    last_err = None
+    for attempt in range(1, _TAVILY_MAX_RETRIES + 1):
+        try:
+            t0 = time.time()
+            result = await _aio.to_thread(
+                _raw_tavily_search_once, query, topic, max_results, include_raw_content
+            )
+            elapsed = time.time() - t0
+            hits = len(result.get("results", [])) if isinstance(result, dict) else 0
+            if attempt > 1:
+                print(f"[Tavily][async] 第{attempt}次重试成功 ({elapsed:.1f}s, {hits}条, query={query})")
+            return result
+        except _CONNECTION_ERRORS as e:
+            last_err = e
+            backoff = TAVILY_BACKOFF_BASE ** attempt
+            print(f"[Tavily][async] 连接异常，第{attempt}次重试 (等待{backoff}s): {type(e).__name__}: {e} (query={query})")
+            await _aio.sleep(backoff)
+        except Exception as e:
+            print(f"[Tavily][async] 搜索失败: {type(e).__name__}: {e} (query={query})")
+            return f"网络搜索失败: {type(e).__name__}: {str(e)}"
+    print(f"[Tavily][async] 重试{_TAVILY_MAX_RETRIES}次全部失败: {type(last_err).__name__}: {last_err} (query={query})")
     return f"网络搜索失败（网络连接异常，已重试{_TAVILY_MAX_RETRIES}次）: {type(last_err).__name__}: {str(last_err)}"
 
 

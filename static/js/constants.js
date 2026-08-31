@@ -107,7 +107,33 @@
     const CONTEXT_MENU_MIN_LEFT_SPACE_PX = 220;
 
     // ======================================================================
-    // 8. 调试辅助（开发时使用）
+    // 9. 鉴权 Auth（A5 前端登录屏）
+    // ======================================================================
+
+    // 是否启用 JWT 登录态模式：true = 启用 auth_bootstrap 登录遮罩 / token 注入 / 401 拦截
+    //                          false = 关闭，走老逻辑（明文 user_id 自助 create_or_login_user）
+    const AUTH_MODE_ENABLED = true;
+
+    // localStorage 存储 access_token / refresh_token 的 key 名（与后端 JWT iss 一致）
+    const AUTH_LS_ACCESS_TOKEN_KEY = 'moss_auth_access_token';
+    const AUTH_LS_REFRESH_TOKEN_KEY = 'moss_auth_refresh_token';
+    const AUTH_LS_USER_INFO_KEY = 'moss_auth_user_info';   // {user_id, role, display_name, is_guest}
+
+    // 后端 5 个 auth 端点（与 interfaces/api/server.py 路由契约严格一致）
+    const AUTH_API_REGISTER = '/api/auth/register';
+    const AUTH_API_LOGIN = '/api/auth/login';
+    const AUTH_API_REFRESH = '/api/auth/refresh';
+    const AUTH_API_GUEST = '/api/auth/guest';
+    const AUTH_API_CHANGE_PASSWORD = '/api/auth/change-password';
+
+    // 401 拦截时识别的 detail.code 集合（与后端 shared/utils/auth.py 细分错误码严格一致）
+    const AUTH_UNAUTH_CODES = Object.freeze([
+        'TOKEN_MISSING', 'TOKEN_EXPIRED', 'TOKEN_INVALID', 'UNAUTHENTICATED',
+        'USER_NOT_FOUND', 'PASSWORD_MISMATCH', 'NO_PASSWORD_SET'
+    ]);
+
+    // ======================================================================
+    // 10. 调试辅助（开发时使用）
     // ======================================================================
 
     // 是否启用常量注入检查（页面加载后在控制台打印 "CONSTANTS.js LOADED"）
@@ -139,6 +165,16 @@
         CHAT_AVATAR_ROW_EXTRA_H_PX,
         CONTEXT_MENU_MIN_LEFT_SPACE_PX,
         CONSTANTS_DEBUG_BOOT_LOG,
+        AUTH_MODE_ENABLED,
+        AUTH_LS_ACCESS_TOKEN_KEY,
+        AUTH_LS_REFRESH_TOKEN_KEY,
+        AUTH_LS_USER_INFO_KEY,
+        AUTH_API_REGISTER,
+        AUTH_API_LOGIN,
+        AUTH_API_REFRESH,
+        AUTH_API_GUEST,
+        AUTH_API_CHANGE_PASSWORD,
+        AUTH_UNAUTH_CODES,
     });
 
     if (APP_CONSTANTS.CONSTANTS_DEBUG_BOOT_LOG) {

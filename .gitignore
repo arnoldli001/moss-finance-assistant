@@ -25,6 +25,7 @@ __pycache__/
 output/
 updated/
 data/
+cache/
 logs/
 *.log
 ngrok*.log
@@ -59,12 +60,20 @@ tools/test_session_*/
 Thumbs.db
 
 # ========================
-# 文档（本地维护，不入库）
+# 文档（本地维护，不入库；仅 ADR 架构决策记录白名单入库）
 # ========================
-docs/
+docs/*
+!docs/adr/
+!docs/adr/**
+
+# ========================
+# benchmarks 运行产物（脚本入库，结果不追）
+# ========================
+benchmarks/results/
 
 # ========================
 # zsxq 运行时数据与临时文件
 # ========================
-zsxq_news/
+# （B2 迁移完成：zsxq 抓取产物现统一在 output/zsxq_news/，由 .gitignore L25 的 "output/" 规则覆盖。
+#   因此根目录级 zsxq_news/ 不再需要单独 ignore；如果老目录残留则可手动清理。）
 *.zip

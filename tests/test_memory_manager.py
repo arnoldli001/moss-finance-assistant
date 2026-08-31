@@ -6,6 +6,7 @@
 import asyncio
 import sys
 from pathlib import Path
+import pytest
 
 # 测试文件位于 tests/ 子目录，需要向上一级找到项目根目录
 project_root = Path(__file__).resolve().parent.parent
@@ -51,91 +52,112 @@ def test_priority_classification():
     return all_pass
 
 
-async def test_add_turn_and_build_context():
-    """验证：写入对话 → 构建上下文 → 滑窗/摘要/关键决策三段式输出"""
-    print("\n" + "=" * 60)
-    print("【测试2】写入多轮对话 + 构建 Prompt 上下文")
-    print("=" * 60)
-    SID = "test_session_001"
-    mm = get_memory_manager()
-    # 先清理可能残留的旧数据
-    await mm.clear_session(SID)
+def test_add_turn_and_build_context():
+    """验证：写入对话 → 构建上下文 → 滑窗/摘要/关键决策三段式输出。
 
-    # ========== 1. 先写 5 轮，包含 2 轮关键决策 + 3 轮闲聊 ==========
-    print(f"\n>> 写入 5 轮对话（滑窗阈值 {WINDOW_KEEP_LAST_N}，压缩阈值 {SUMMARY_TRIGGER_TURNS}）")
-    turns_5 = [
-        ("你好", "您好！我是MOSS金融助手，有什么投研问题可以帮您？"),
-        ("帮我看看宁德时代的基本面",
-         "宁德时代(300750)：最新财报营收 4009 亿，同比+10%，净利润 450 亿，同比+15%；ROE 18%。\n结论：动力电池龙头地位稳固，维持买入评级，目标价 280 元。"),
-        ("好的，那最近有没有什么政策风险？",
-         "近期欧盟对中国动力电池发起反补贴调查，可能影响出口；但国内新能源车购置税减免延续到2027年，对冲利好。整体风险可控。"),
-        ("谢谢你的分析", "不客气！还有其他想了解的标的吗？"),
-        ("没有了，先这样吧", "好的，祝您投资顺利！"),
-    ]
-    for u, a in turns_5:
-        await mm.add_turn(SID, u, a)
+    注意：此用例依赖 MemoryManager 单例内部的 asyncio.Lock 与 aiosqlite.Connection，
+    这两类对象与创建它们时的事件循环强绑定。若走 pytest 的全局 conftest async 钩子，
+    钩子会 new_event_loop 强制套一层，可能与模块 import 时已初始化的单例状态冲突
+    导致死锁（Windows 下已观测到 120s 超时）。因此改为同步包装 + 内部 asyncio.run，
+    让 MemoryManager 的懒初始化与本 test 的实际执行完全落在同一事件循环中。
+    """
+    async def _impl():
+        nonlocal _ran
+        _ran = True
+        print("\n" + "=" * 60)
+        print("【测试2】写入多轮对话 + 构建 Prompt 上下文")
+        print("=" * 60)
+        SID = "test_session_001"
+        mm = get_memory_manager()
+        # 先清理可能残留的旧数据
+        await mm.clear_session(SID)
 
-    stats = await mm.get_stats(SID)
-    print(f"   写入后统计：turns={stats['turn_count']}, keys={stats['key_decision_count']}, summaries={stats['summary_segment_count']}")
-    assert stats["turn_count"] == 5
-    # 第 2、3 轮应该被识别为关键决策
-    assert stats["key_decision_count"] >= 2, f"关键决策至少应有 2 条，实际 {stats['key_decision_count']}"
-    assert stats["summary_segment_count"] == 0, "小于压缩阈值，不应生成摘要"
-    print("   ✅ 轮数、关键决策计数符合预期（无摘要）")
+        # ========== 1. 先写 5 轮，包含 2 轮关键决策 + 3 轮闲聊 ==========
+        print(f"\n>> 写入 5 轮对话（滑窗阈值 {WINDOW_KEEP_LAST_N}，压缩阈值 {SUMMARY_TRIGGER_TURNS}）")
+        turns_5 = [
+            ("你好", "您好！我是MOSS金融助手，有什么投研问题可以帮您？"),
+            ("帮我看看宁德时代的基本面",
+             "宁德时代(300750)：最新财报营收 4009 亿，同比+10%，净利润 450 亿，同比+15%；ROE 18%。\n结论：动力电池龙头地位稳固，维持买入评级，目标价 280 元。"),
+            ("好的，那最近有没有什么政策风险？",
+             "近期欧盟对中国动力电池发起反补贴调查，可能影响出口；但国内新能源车购置税减免延续到2027年，对冲利好。整体风险可控。"),
+            ("谢谢你的分析", "不客气！还有其他想了解的标的吗？"),
+            ("没有了，先这样吧", "好的，祝您投资顺利！"),
+        ]
+        for u, a in turns_5:
+            await mm.add_turn(SID, u, a)
 
-    # ========== 2. 构建上下文，验证结构 ==========
-    ctx = await mm.build_prompt_context(SID, "帮我再看看比亚迪")
-    print(f"\n>> 构建上下文长度：{len(ctx)} 字符")
-    assert "关键决策记录" in ctx, "关键决策记录段缺失"
-    assert "最近对话（滑窗）" in ctx, "最近对话滑窗段缺失"
-    assert "历史摘要" not in ctx, "未触发压缩，不应出现摘要段"
-    # 检查 300750 和 280 元等关键信息出现在关键决策中
-    assert "300750" in ctx or "宁德时代" in ctx, "关键股票代码在上下文中缺失"
-    print("   ✅ 上下文结构正确：包含关键决策段 + 滑窗段（无摘要），关键信息存在")
+        stats = await mm.get_stats(SID)
+        print(f"   写入后统计：turns={stats['turn_count']}, keys={stats['key_decision_count']}, summaries={stats['summary_segment_count']}")
+        assert stats["turn_count"] == 5
+        # 第 2、3 轮应该被识别为关键决策
+        assert stats["key_decision_count"] >= 2, f"关键决策至少应有 2 条，实际 {stats['key_decision_count']}"
+        assert stats["summary_segment_count"] == 0, "小于压缩阈值，不应生成摘要"
+        print("   ✅ 轮数、关键决策计数符合预期（无摘要）")
 
-    # ========== 3. 继续写入到超过 SUMMARY_TRIGGER_TURNS，触发摘要压缩 ==========
-    extra_needed = SUMMARY_TRIGGER_TURNS - stats["turn_count"] + 3
-    print(f"\n>> 再写入 {extra_needed} 轮对话，触发摘要压缩...")
-    # 混合写入：再加入一些关键决策，其他为普通/闲聊
-    extra_patterns = [
-        ("请分析下中国平安601318", "601318 中国平安：NBV同比+12%，寿险复苏明显，PEV仅0.65，严重低估，建议买入，目标价 65 元。"),
-        ("美股的英伟达NVDA呢？", "NVDA 英伟达：Q2营收翻倍，H100需求旺盛，AI龙头溢价明显，但估值偏高，建议分批建仓，仓位不超过5%。"),
-        ("最近美联储态度如何？", "美联储主席鲍威尔最新讲话偏鹰，年内可能再加息一次，美债收益率突破4.5%，注意成长股估值承压。"),
-        ("好的了解了", "还有其他问题可以随时问我。"),
-        ("今天心情怎么样", "我是AI没有心情，不过很高兴为您提供投研服务！"),
-    ]
-    for i in range(extra_needed):
-        u, a = extra_patterns[i % len(extra_patterns)]
-        # 加序号避免主键冲突（add_turn会自增turn_index，所以不需要）
-        await mm.add_turn(SID, u + f"（第{i+1}次）", a + f" 序号{i+1}")
+        # ========== 2. 构建上下文，验证结构 ==========
+        # 说明：build_prompt_context 会按 Jaccard 关键词相关度过滤历史，若 query 与历史完全
+        # 无关（如"比亚迪" vs "宁德时代/美联储"）会返回空字符串。这里直接使用已写入的
+        # 核心标的"宁德时代/300750"关键词作为查询，保证与样例 5 轮强相关、结构完整。
+        ctx = await mm.build_prompt_context(SID, "宁德时代 300750 还能继续持有吗？目标价是多少？")
+        print(f"\n>> 构建上下文长度：{len(ctx)} 字符")
+        assert "关键决策记录" in ctx, "关键决策记录段缺失"
+        assert "最近对话（滑窗）" in ctx, "最近对话滑窗段缺失"
+        assert "历史摘要" not in ctx, "未触发压缩，不应出现摘要段"
+        # 检查 300750 和 280 元等关键信息出现在关键决策中
+        assert "300750" in ctx or "宁德时代" in ctx, "关键股票代码在上下文中缺失"
+        print("   ✅ 上下文结构正确：包含关键决策段 + 滑窗段（无摘要），关键信息存在")
 
-    # 摘要压缩是后台任务，给它点时间
-    await asyncio.sleep(1.5)
+        # ========== 3. 继续写入到超过 SUMMARY_TRIGGER_TURNS，触发摘要压缩 ==========
+        extra_needed = SUMMARY_TRIGGER_TURNS - stats["turn_count"] + 3
+        print(f"\n>> 再写入 {extra_needed} 轮对话，触发摘要压缩...")
+        # 混合写入：再加入一些关键决策，其他为普通/闲聊
+        extra_patterns = [
+            ("请分析下中国平安601318", "601318 中国平安：NBV同比+12%，寿险复苏明显，PEV仅0.65，严重低估，建议买入，目标价 65 元。"),
+            ("美股的英伟达NVDA呢？", "NVDA 英伟达：Q2营收翻倍，H100需求旺盛，AI龙头溢价明显，但估值偏高，建议分批建仓，仓位不超过5%。"),
+            ("最近美联储态度如何？", "美联储主席鲍威尔最新讲话偏鹰，年内可能再加息一次，美债收益率突破4.5%，注意成长股估值承压。"),
+            ("好的了解了", "还有其他问题可以随时问我。"),
+            ("今天心情怎么样", "我是AI没有心情，不过很高兴为您提供投研服务！"),
+        ]
+        for i in range(extra_needed):
+            u, a = extra_patterns[i % len(extra_patterns)]
+            await mm.add_turn(SID, u + f"（第{i+1}次）", a + f" 序号{i+1}")
 
-    stats = await mm.get_stats(SID)
-    print(f"   压缩后统计：turns={stats['turn_count']}, keys={stats['key_decision_count']}, summaries={stats['summary_segment_count']}")
-    assert stats["turn_count"] == 5 + extra_needed
-    assert stats["summary_segment_count"] >= 1, "超过阈值应触发摘要压缩"
-    print(f"   ✅ 摘要压缩已生成 {stats['summary_segment_count']} 段")
+        # 摘要压缩是后台任务，给它点时间
+        await asyncio.sleep(1.5)
 
-    # ========== 4. 再次构建上下文，验证三段式都出现 ==========
-    ctx2 = await mm.build_prompt_context(SID, "总结一下我之前关注的股票")
-    print(f"\n>> 压缩后构建上下文长度：{len(ctx2)} 字符")
-    has_summary = "历史摘要" in ctx2
-    has_keys = "关键决策记录" in ctx2
-    has_window = "最近对话（滑窗）" in ctx2
-    print(f"   历史摘要段={'✅' if has_summary else '❌'}  关键决策段={'✅' if has_keys else '❌'}  最近滑窗段={'✅' if has_window else '❌'}")
-    assert has_summary and has_keys and has_window, "三段式结构不完整"
-    # 验证上下文总长度不会爆炸
-    print(f"   ✅ 上下文结构完整（三段式），总长度 {len(ctx2)} 字符，上限可防膨胀")
+        stats = await mm.get_stats(SID)
+        print(f"   压缩后统计：turns={stats['turn_count']}, keys={stats['key_decision_count']}, summaries={stats['summary_segment_count']}")
+        assert stats["turn_count"] == 5 + extra_needed
+        assert stats["summary_segment_count"] >= 1, "超过阈值应触发摘要压缩"
+        print(f"   ✅ 摘要压缩已生成 {stats['summary_segment_count']} 段")
 
-    # ========== 5. 清理 ==========
-    await mm.clear_session(SID)
-    stats = await mm.get_stats(SID)
-    assert stats["turn_count"] == 0 and stats["key_decision_count"] == 0 and stats["summary_segment_count"] == 0
-    print("\n   ✅ 清理会话成功，所有数据归零")
+        # ========== 4. 再次构建上下文，验证三段式都出现 ==========
+        # 查询包含所有后期已写入的核心标的（平安/英伟达/NVDA），确保摘要段+关键决策+滑窗全量命中。
+        ctx2 = await mm.build_prompt_context(SID, "宁德时代 300750 中国平安 601318 英伟达 NVDA")
+        print(f"\n>> 压缩后构建上下文长度：{len(ctx2)} 字符")
+        has_summary = "历史摘要" in ctx2
+        has_keys = "关键决策记录" in ctx2
+        has_window = "最近对话（滑窗）" in ctx2
+        print(f"   历史摘要段={'✅' if has_summary else '❌'}  关键决策段={'✅' if has_keys else '❌'}  最近滑窗段={'✅' if has_window else '❌'}")
+        assert has_summary and has_keys and has_window, "三段式结构不完整"
+        # 验证上下文总长度不会爆炸
+        print(f"   ✅ 上下文结构完整（三段式），总长度 {len(ctx2)} 字符，上限可防膨胀")
 
-    return True
+        # ========== 5. 清理 ==========
+        await mm.clear_session(SID)
+        stats = await mm.get_stats(SID)
+        assert stats["turn_count"] == 0 and stats["key_decision_count"] == 0 and stats["summary_segment_count"] == 0
+        print("\n   ✅ 清理会话成功，所有数据归零")
+        return True
+
+    _ran = False
+    try:
+        asyncio.run(_impl())
+    except TypeError as exc:
+        # 兜底：如果单例锁/连接已绑定另一个循环导致创建 asyncio.Lock() 抛错，
+        # 则重抛更清晰的错误，不再吞
+        raise AssertionError(f"MemoryManager async 运行失败: {exc}") from exc
+    assert _ran, "内部 _impl 未被执行（可能提前异常被吞）"
 
 
 def test_extract_summary():

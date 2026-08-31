@@ -6,11 +6,13 @@ import asyncio
 import os
 import sys
 import time
+import pytest
 
 # 让脚本可独立运行
 sys.path.insert(0, os.path.abspath("."))
 
 
+@pytest.mark.asyncio
 async def test_prompt_sanitizer():
     """测试 prompt 注入防护。"""
     from api.middleware.prompt_sanitizer import sanitize_user_input, safe_input_for_llm
@@ -31,6 +33,7 @@ async def test_prompt_sanitizer():
     print("✅ 测试1 prompt 注入防护 通过")
 
 
+@pytest.mark.asyncio
 async def test_rbac():
     """测试 RBAC 权限。"""
     from api.middleware.rbac import RBACPolicy, RBAC_DEFAULT_ROLE
@@ -50,6 +53,7 @@ async def test_rbac():
     print("✅ 测试2 RBAC 权限 通过")
 
 
+@pytest.mark.asyncio
 async def test_semantic_cache():
     """测试语义缓存。"""
     from agent.semantic_cache import get_semantic_cache, should_cache_query
@@ -76,6 +80,7 @@ async def test_semantic_cache():
     print(f"✅ 测试3 语义缓存 通过 stats={stats}")
 
 
+@pytest.mark.asyncio
 async def test_model_router():
     """测试多模型路由。"""
     from agent.model_router import get_model_router, ComplexityClassifier
@@ -99,6 +104,7 @@ async def test_model_router():
     print(f"✅ 测试4 多模型路由 通过 strategy={router.strategy}")
 
 
+@pytest.mark.asyncio
 async def test_output_validator():
     """测试输出校验。"""
     from agent.output_validator import get_output_validator, ValidationContext
@@ -138,6 +144,7 @@ async def test_output_validator():
     print(f"✅ 测试5 输出校验 通过 rules={len(validator.rules)}")
 
 
+@pytest.mark.asyncio
 async def test_actor_persistence():
     """测试 Actor 状态持久化。"""
     from agent.actor_persistence import (
@@ -166,6 +173,7 @@ async def test_actor_persistence():
     print(f"✅ 测试6 Actor 持久化 通过 restored={restored}")
 
 
+@pytest.mark.asyncio
 async def test_stream_resume():
     """测试流式续传。"""
     from agent.stream_resume import get_stream_resume_store
@@ -194,6 +202,7 @@ async def test_stream_resume():
     print(f"✅ 测试7 流式续传 通过 partial='{session.partial_text}'")
 
 
+@pytest.mark.asyncio
 async def test_observability():
     """测试 OTel 追踪（no-op 模式）。"""
     from agent.observability import init_tracing, agent_span, llm_span, tool_span
@@ -210,6 +219,7 @@ async def test_observability():
     print("✅ 测试8 OTel 追踪 通过（no-op 模式）")
 
 
+@pytest.mark.asyncio
 async def test_eval_framework():
     """测试评估框架（仅加载 golden_set，不实际调 judge）。"""
     import json
@@ -228,6 +238,7 @@ async def test_eval_framework():
     print(f"✅ 测试9 评估框架 通过 samples={len(golden_set)}")
 
 
+@pytest.mark.asyncio
 async def test_enterprise_pipeline():
     """测试企业级流水线集成。"""
     from agent.enterprise_hooks import (

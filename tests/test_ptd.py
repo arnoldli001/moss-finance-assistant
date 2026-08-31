@@ -180,7 +180,7 @@ def test_tool_filter_and_schema_estimate():
     subset_2 = filter_tools_by_selected(all_tools, {"read_file_content"})
     sub_chars_2 = estimator(subset_2)
     saving_2 = (1 - sub_chars_2 / total_chars) * 100 if total_chars else 0
-    print(f"\n   场景2: 只选 read_file_content（用户只要求读取上传文件）")
+    print(f"\n   场景2: 只选 read_file_content（只要求读取文件）")
     print(f"     子集工具: {[_tool_name(t) for t in subset_2]}")
     print(f"     子集 Schema 字符数: {sub_chars_2} ≈ {max(1, sub_chars_2 // 4)} tokens  "
           f"(节省 {saving_2:.0f}%)")

@@ -478,6 +478,19 @@ def check_cancelled(where: Optional[str] = None) -> None:
     ctx.token.check(where=where)
 
 
+def cancel_current_token_with_reason(reason: str) -> bool:
+    """在当前请求链路内主动触发取消（例如：搜索调用次数超限）。返回是否首次触发。
+
+    - 无当前上下文 → 返回 False（不抛异常，降级为仅记录错误提示）
+    - 有上下文 → 调用 token.cancel(reason)，下一处 check_cancelled() / CancelledError
+      会立即感知并退出循环，避免继续等待工具执行
+    """
+    tok = current_token()
+    if tok is None:
+        return False
+    return tok.cancel(reason)
+
+
 async def cancel_by_thread_id(thread_id: str, reason: str = "cancelled") -> Dict[str, Any]:
     """根据 thread_id 找令牌并触发取消（供 WebSocket DISCONNECT、STOP 接口使用）。
 
@@ -519,5 +532,6 @@ __all__ = [
     "current_context",
     "current_token",
     "check_cancelled",
+    "cancel_current_token_with_reason",
     "cancel_by_thread_id",
 ]

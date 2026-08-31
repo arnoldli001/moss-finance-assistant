@@ -1,11 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-企业级增强模块接入示例。
-
-本文件不修改现有 server.py / main_agent.py，
-而是给出"最小侵入"的接入示例，便于开发者参考。
-
-实际接入时把以下代码片段复制到对应位置即可：
+企业级增强模块接入示例，本文件给出"最小侵入"的接入示例。
+实际接入时把以下代码片段复制到对应位置：
   1) app startup / shutdown 钩子
   2) WebSocket handler 或 FastAPI route 入口
   3) main_agent.run_agent 内部调用 LLM 处

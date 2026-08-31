@@ -44,10 +44,10 @@ DEFAULT_BACKGROUND_TIMEOUT_SEC: float = 300.0
 SHORT_HTTP_TIMEOUT_SEC: float = 2.0
 
 # 中等长度 HTTP 请求超时（Ollama 模型列表探测等）
-MEDIUM_HTTP_TIMEOUT_SEC: float = 5.0
+MEDIUM_HTTP_TIMEOUT_SEC: float = 180.0
 
 # 子进程/外部命令等待超时（taskkill、ngrok 关闭等）
-SUBPROCESS_WAIT_TIMEOUT_SEC: float = 5.0
+SUBPROCESS_WAIT_TIMEOUT_SEC: float = 180.0
 
 # 调度器关闭阶段等待 scheduler 后台协程结束的超时
 SCHEDULER_CANCEL_WAIT_SEC: float = 1.5
@@ -386,7 +386,7 @@ ZSXQ_DOM_MERGE_TAIL_CHECK_LEN: int = 100
 # —— 按股票名搜索（search_zsxq_by_stock / _fetch_topics_by_search）专用常量 ——
 
 # 按股票名搜索默认最多取多少条主题结果
-ZSXQ_SEARCH_DEFAULT_MAX_TOPICS: int = 5
+ZSXQ_SEARCH_DEFAULT_MAX_TOPICS: int = 2
 
 # 搜索框定位：每个候选选择器的元素可见等待超时（毫秒）
 ZSXQ_SEARCH_BOX_VISIBLE_TIMEOUT_MS: float = 2000
@@ -774,19 +774,19 @@ SCHEDULER_AFTER_MARKET_DEFAULT_MINUTE: int = 15
 
 
 # ======================================================================
-# 18. TEST_ZSXQ — 知识星球测试脚本专用常量（test_zsxq.py 调用）
+# 18. TEST_ZSXQ — 知识星球分析 Runner 专用常量（tools/zsxq_analysis_runner.py 调用）
 # ======================================================================
 
-# test_zsxq.py 调用 Ollama 分析：单条内容截断字符（防 prompt 过长）
+# zsxq_analysis_runner.py 调用 Ollama 分析：单条内容截断字符（防 prompt 过长）
 TEST_ZXSQ_OLLAMA_ENTRY_TRUNCATE_CHARS: int = 300
 
-# test_zsxq.py 调用 Ollama 分析：请求超时（秒）
+# zsxq_analysis_runner.py 调用 Ollama 分析：请求超时（秒）
 TEST_ZXSQ_OLLAMA_TIMEOUT_SEC: int = 300
 
-# test_zsxq.py 调用 Ollama 分析：temperature
+# zsxq_analysis_runner.py 调用 Ollama 分析：temperature
 TEST_ZXSQ_OLLAMA_TEMPERATURE: float = 0.2
 
-# test_zsxq.py 调用 zsxq-cli 子进程：超时（秒）
+# zsxq_analysis_runner.py 调用 zsxq-cli 子进程：超时（秒）
 TEST_ZXSQ_CLI_TIMEOUT_SEC: int = 600
 
 # 控制台预览：单条 value 预览截断字符（避免刷终端）
@@ -909,6 +909,16 @@ PROMPT_INJECTION_DANGEROUS_KEYWORDS: tuple = (
 PROMPT_INJECTION_MAX_LEN: int = 8000
 # prompt 注入防护：是否拒绝（True）还是仅告警（False）
 PROMPT_INJECTION_REJECT: bool = False
+# prompt 注入防护：LLM 分类器慢路开关（双层防护第二层；0=仅正则快路）
+PROMPT_INJECTION_LLM_ENABLED: bool = os.getenv("PROMPT_INJECTION_LLM_ENABLED", "1").strip() not in ("0", "false")
+# prompt 注入防护：LLM 分类器使用的本地模型（走 Ollama）
+PROMPT_INJECTION_LLM_MODEL: str = os.getenv("PROMPT_INJECTION_LLM_MODEL", "qwen3:8b")
+# prompt 注入防护：LLM 分类器单次判定超时秒数
+PROMPT_INJECTION_LLM_TIMEOUT_SEC: float = float(os.getenv("PROMPT_INJECTION_LLM_TIMEOUT_SEC", "8"))
+# prompt 注入防护：LLM 判定为注入的最低置信度（>= 该值视为确认注入并拒绝）
+PROMPT_INJECTION_LLM_CONFIDENCE_THRESHOLD: float = float(os.getenv("PROMPT_INJECTION_LLM_CONFIDENCE_THRESHOLD", "0.7"))
+# prompt 注入防护：LLM 分类器调用失败时是否拒绝（False=放行并告警，可用性优先）
+PROMPT_INJECTION_LLM_FAIL_CLOSED: bool = os.getenv("PROMPT_INJECTION_LLM_FAIL_CLOSED", "0").strip() in ("1", "true")
 # 审计日志路径
 SECURITY_AUDIT_LOG_PATH: str = "logs/security_audit.jsonl"
 
@@ -1020,3 +1030,120 @@ OUTPUT_VALIDATOR_RISK_DISCLAIMER: str = (
 OUTPUT_VALIDATOR_VIOLATION_SEVERITY: str = "block"
 # 校验日志路径
 OUTPUT_VALIDATOR_LOG_PATH: str = "logs/output_violations.jsonl"
+
+
+# ======================================================================
+# 27. STREAM_BUS — 流式事件总线（SSE 多播）
+# ======================================================================
+
+# 订阅者队列上限：超过后丢弃最旧帧，防止消费端太慢撑爆内存（经验 4096 ≈ 4MB）
+STREAM_BUS_QUEUE_MAXSIZE: int = 4096
+# 最大订阅数（= 最多同时活跃的 SSE 连接数）：单进程默认 256，够 MVP
+STREAM_BUS_MAX_SUBS: int = 256
+# 心跳间隔（秒）：防止 Nginx / Cloudflare / 浏览器 60s 空闲断连（RFC 默认 60s）
+STREAM_BUS_HEARTBEAT_INTERVAL_SEC: int = 15
+# SSE 端点首包（OPEN 帧）超时：超过 500ms 视为网关/应用异常
+STREAM_SSE_OPEN_FRAME_TIMEOUT_MS: int = 500
+# SSE 客户端轮询 request.is_disconnected() 的间隔（秒）
+STREAM_DISCONNECT_POLL_INTERVAL_SEC: float = 0.5
+
+
+# ======================================================================
+# 28. STREAM_RESUME 事件级断点续传（SSE Last-Event-ID）
+# ======================================================================
+# 每个 thread_id 保留的事件环形缓冲大小（单位：SSE 帧条数）
+#   经验：一条事件平均 ~400 字节，2000 ≈ 0.8MB / 会话，100 并发约 80MB，可接受
+STREAM_RESUME_EVENT_RING_MAX: int = 2000
+# 重连请求中 body 也允许传 last_event_id（除了 header 之外的兜底路径）
+STREAM_RESUME_BODY_LAST_EVENT_ID_ALLOW: bool = True
+# 服务端重启后 没有事件缓冲 时建议客户端："resync"=如果有 final_text 就一次性同步给它；
+#   否则就是 "restart"=返回 full replay_start 让客户端提示"请重新提问"
+STREAM_RESUME_COLD_RESTART_SUGGESTION: str = "resync"
+# 已"done"的会话缓冲保留时长（秒）：TTL 到期后重连会走 gap
+STREAM_RESUME_DONE_SESSION_TTL_SEC: int = 1800
+# 最多同时缓存"事件级"的线程数（与 bus max_subs 对齐）
+STREAM_RESUME_MAX_THREAD_STATES: int = 512
+
+
+# ======================================================================
+# 29. 检索来源展示：精简 Token + 减少视觉噪音
+# ======================================================================
+# 前端 [N] 悬停卡片 / 侧边栏「🔎 实时检索来源」/ 来源池快照 的 snippet 硬上限（中文字）
+# 用户规则：只显示最相关片段，最多 100 字；超过按"答案命中句中心窗口 ± 50"抽取（不是头部硬截）
+CITATION_SNIPPET_MAX_CHARS: int = 100
+# 中心窗口半径：命中关键词位置前后各取多少字（合计 ≈ 2*SNIPPET_HALO + max(命中词长)）
+CITATION_SNIPPET_HALO_CHARS: int = 50
+# 标题/URL 最大长度（避免极少数巨长 URL 吃掉一整个卡片的 token）
+CITATION_TITLE_MAX_CHARS: int = 80
+CITATION_URL_MAX_CHARS: int = 256
+# Prompt 中注入的单文档"元数据（可靠性/通道/时间）"是否仅在"与默认值不同"时才写入
+#  论坛=待验证 & web=默认渠道 → 不写 → 省 ~40 token/文档
+CITATION_PROMPT_OMIT_DEFAULT_META: bool = True
+# Prompt 中单文档正文上限（不是硬缩 snippet，而是给模型看的上下文正文；与 snippet 展示独立）
+CITATION_PROMPT_DOC_CONTENT_MAX: int = 800
+
+
+# ======================================================================
+# 30. RECENCY — 检索结果时效性窗口过滤
+# ======================================================================
+# 用户规则：只检索最近 1 个月的新闻；若近 1 个月无结果则自动扩大到近 3 个月
+# 优先级窗口（天数）：默认只保留 ≤ RECENCY_PREFER_DAYS 天内发布的条目
+RECENCY_PREFER_DAYS: int = 30
+# 降级窗口（天数）：只有当 prefer 过滤后全通道合计 0 条命中，才放宽到该值
+RECENCY_FALLBACK_DAYS: int = 90
+# published_at 字符串的 strptime 兼容格式列表（RFC3339/T+Z 会优先用 fromisoformat）
+RECENCY_PARSE_FORMATS: tuple = (
+    "%Y-%m-%d",
+    "%Y-%m-%d %H:%M:%S",
+    "%Y/%m/%d",
+    "%Y/%m/%d %H:%M:%S",
+    "%Y年%m月%d日",
+)
+# 在这些通道中，如果 published_at 无法解析 / 超期 也不删除（= 静态知识库 PDF
+# 的 created_at/updated_at 只是入库时间，不代表新闻时效性）。
+# 其它通道（tavily / zsxq）无法解析 则按"过期处理"删除，防止陈旧内容混入。
+RECENCY_KEEP_ON_PARSE_FAIL_CHANNELS: tuple = ("ima",)
+# 时间窗口基准时间计算时区（北京时间 UTC+8），与盘前复盘预测 SCHEDULER_TZ_OFFSET_HOURS 对齐
+RECENCY_TIMEZONE_OFFSET_HOURS: int = int(os.getenv("RECENCY_TZ_OFFSET", "8"))
+
+
+# ======================================================================
+# 31. STOCK_CACHE — 本地股票分析 txt 缓存（按小时粒度，加速查询响应）
+# ======================================================================
+# 用户规则：当日 08:00 / 20:00 提前预热热门股分析；用户问到时优先读缓存
+# 缓存根目录：<project>/cache/stock_cache （gitignore 已忽略 cache/）
+STOCK_CACHE_DIR: str = os.getenv("STOCK_CACHE_DIR",
+                                 os.path.abspath(os.path.join(
+                                     os.path.dirname(os.path.abspath(__file__)),
+                                     "..", "cache", "stock_cache"
+                                 )))
+# 单文件名格式：YYYYMMDDHH_<sanitized_stock_name>.txt
+STOCK_CACHE_FILE_FMT: str = "%Y%m%d%H"
+# 预热定时：工作日 早 08:00 / 晚 20:00（可通过 .env 覆盖，便于调试）
+STOCK_CACHE_WARMUP_HOURS: tuple = tuple(int(h.strip()) for h in os.getenv(
+    "STOCK_CACHE_WARMUP_HOURS", "8,20").split(",") if h.strip())
+STOCK_CACHE_WARMUP_MINUTE: int = int(os.getenv("STOCK_CACHE_WARMUP_MINUTE", "0"))
+STOCK_CACHE_WARMUP_WEEKDAY_ONLY: bool = os.getenv(
+    "STOCK_CACHE_WARMUP_WEEKDAY_ONLY", "1").strip() not in ("0", "false")
+# 预热时请求 DeepSeek 获取的热门股数量上限
+STOCK_CACHE_WARMUP_TOPK: int = int(os.getenv("STOCK_CACHE_WARMUP_TOPK", "10"))
+# 热门股候选来源清单（DeepSeek 会让联网搜索这些社区的最新热门股）
+STOCK_CACHE_WARMUP_SOURCES: tuple = (
+    "韭研社区", "东方财富股吧", "同花顺股吧", "雪球", "微信公众号",
+)
+# 缓存文件 TTL（秒）：用于『当小时未结束，但用户换了更准确的股票名后仍能刷新』——
+# 实际判断按『当日已存在的"时"粒度文件』优先级；当日 08 时缓存 → 20 时自动降级为旧数据，不覆盖新
+STOCK_CACHE_DEFAULT_TTL_SEC: int = int(os.getenv("STOCK_CACHE_DEFAULT_TTL_SEC",
+                                                  str(6 * 3600)))  # 默认 6 小时
+# 文件最大字节（保护磁盘 + 防止 warmup 产出 10M+ 垃圾）
+STOCK_CACHE_MAX_BYTES: int = int(os.getenv("STOCK_CACHE_MAX_BYTES", str(512 * 1024)))  # 512KB
+# 总缓存文件上限：超过后按 mtime 删除最旧文件
+STOCK_CACHE_TOTAL_FILES_LIMIT: int = int(os.getenv("STOCK_CACHE_TOTAL_FILES_LIMIT", str(500)))
+# 请求侧缓存是否启用：可通过 .env STOCK_CACHE_ENABLED=0 关闭（便于对比新老结果）
+STOCK_CACHE_ENABLED: bool = os.getenv("STOCK_CACHE_ENABLED", "1").strip() not in ("0", "false")
+# 风险声明强制：缓存文件末尾必须包含这条；命中时若缺失则在返回给前端时补回
+RISK_DISCLAIMER_CACHE_GUARD: str = (
+    "⚠️ 以上信息来自互联网公开资料，仅供参考，不构成投资建议。投资有风险，入市需谨慎，盈亏自负。"
+)
+
+

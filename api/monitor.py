@@ -1,11 +1,26 @@
 import datetime
 import asyncio
+import os as _os
+from pathlib import Path as _Path
 import re as _re
 from typing import Any, Dict, Optional, TYPE_CHECKING
 from fastapi import WebSocket
 from api.context import get_thread_context
 
 from config.constants import TEXT_SANITIZE_SHORT_TEXT_THRESHOLD_LEN
+
+# 项目根目录（所有缓存/输出文件的共同祖先）；用于把绝对路径脱敏成相对路径
+_PROJECT_ROOT = _Path(__file__).resolve().parents[1]
+_PROJECT_ROOT_STR = str(_PROJECT_ROOT).replace("\\", "/")
+# Windows 盘符路径（C:\、D:\…）+ Unix 绝对路径（/开头），匹配到下一个空白/引号/逗号之前
+#   Windows 盘符前置字符必须满足「非字母数字非冒号下划线/斜杠」（通过负向后顾实现），
+#   避免误伤 URL（http:/…、ftp:/…）；Unix / 同样排除冒号和斜杠前置。
+_FS_ABS_PATH_RE = _re.compile(
+    r"(?:"
+    r"(?<![A-Za-z0-9_:/\\])[A-Za-z]:[\\/][^\s\"',`)\]】）]+"    # Windows 盘符（前置排除字母/数字/_:\/）
+    r"|(?<![A-Za-z0-9_:/])/[A-Za-z0-9_.\-@][^\s\"',`)\]】）]*"   # Unix 绝对路径（排除 :// 或 // 后的 /）
+    r")"
+)
 
 # 尝试导入全局运行时（用于脚本模式下的流式输出）
 try:
@@ -111,6 +126,77 @@ def sanitize_user_facing_text(text: Optional[str]) -> str:
     return text
 
 
+def sanitize_abs_paths(text: Optional[str], fallback: str = "工作目录") -> str:
+    """把用户可见文本里的绝对文件路径脱敏：
+
+    1) 位于项目根目录内的 → 转成相对路径（保留最末一级语义）；
+    2) 项目根目录外的 → 统一替换成 fallback（默认「工作目录」）。
+
+    所有 monitor 出口、SSE 事件、前端显示都必须在"展示给用户"之前调用。
+    接受 None/非 str，都稳定返回 str。
+    """
+    if text is None:
+        return ""
+    if not isinstance(text, str):
+        try:
+            text = str(text)
+        except Exception:
+            return ""
+    if not text:
+        return text
+
+    def _replace_one(m: _re.Match) -> str:
+        raw = m.group(0)
+        # 归一化分隔符（Windows \ → /）便于做前缀匹配
+        norm = raw.replace("\\", "/")
+        # 清理末尾标点（正则把括号外的内容停在 ) 前，但有时尾部带 . / , 再剥一次）
+        while norm and norm[-1] in ".,;:，。；：":
+            norm = norm[:-1]
+        if not norm:
+            return raw
+        # 情形 A：项目根目录下的相对路径；优先用正斜杠版本再用原生 os.path.normpath 版
+        proj_prefixes = (_PROJECT_ROOT_STR + "/",)
+        norm_proj_path = _os.path.normpath(_PROJECT_ROOT_STR)
+        alt_prefix = norm_proj_path.replace("\\", "/") + "/"
+        if alt_prefix != proj_prefixes[0]:
+            proj_prefixes = (proj_prefixes[0], alt_prefix)
+        for pref in proj_prefixes:
+            if norm.startswith(pref):
+                rel = norm[len(pref):]
+                if rel:
+                    # 只保留 <子目录>/<末级>；若没有子目录就保留单一末级，避免空
+                    parts = [p for p in rel.split("/") if p]
+                    if len(parts) >= 2:
+                        return "./" + "/".join(parts[-2:])
+                    return "./" + parts[0]
+        # 情形 B：项目外的任何绝对路径 → 用末级文件名/目录名兜底 + fallback 前缀
+        last = norm.rstrip("/").rsplit("/", 1)[-1] if "/" in norm else norm.rsplit("\\", 1)[-1]
+        # 末级保留长度 ≤24 字符，过长得再截（例如 uuid 一般 36，这里放长点没事）
+        if len(last) > 48:
+            last = last[-48:]
+        if last:
+            return f"{fallback}(./…/{last})"
+        return fallback
+
+    return _FS_ABS_PATH_RE.sub(_replace_one, text)
+
+
+def sanitize_data_paths(data: Any, fallback: str = "工作目录") -> Any:
+    """对 dict/list/str 的嵌套容器，递归调用 sanitize_abs_paths，避免在 data.path
+    等深层字段里藏绝对路径泄漏。
+    """
+    if data is None:
+        return None
+    if isinstance(data, str):
+        return sanitize_abs_paths(data, fallback=fallback)
+    if isinstance(data, dict):
+        return {k: sanitize_data_paths(v, fallback=fallback) for k, v in data.items()}
+    if isinstance(data, (list, tuple)):
+        cls = type(data)
+        return cls(sanitize_data_paths(v, fallback=fallback) for v in data)
+    return data
+
+
 def _set_conn_actor(actor: Any, loop: asyncio.AbstractEventLoop) -> None:
     """由 server.py lifespan 注入 ConnectionManagerActor 句柄 + 主事件循环引用。"""
     global _conn_actor, _conn_actor_loop
@@ -145,11 +231,16 @@ class ToolMonitor:
 
     def _emit(self, event_type: str, message: str, data: Optional[Dict[str, Any]] = None):
         """内部发送方法"""
+        # ===== 绝对路径脱敏（在 payload 构建前先做）=====
+        # 所有推到前端用户可见区的 monitor.message / data 都必须在这里统一过一遍，
+        # 避免把 D:\code\xxx 这类后端磁盘结构泄漏给浏览器端用户。
+        safe_message = sanitize_abs_paths(message)
+        safe_data: Dict[str, Any] = sanitize_data_paths(data or {})
         payload = {
             "type": "monitor_event",
             "event": event_type,
-            "message": message,
-            "data": data or {},
+            "message": safe_message,
+            "data": safe_data,
             "timestamp": datetime.datetime.now().isoformat()
         }
 
@@ -206,14 +297,17 @@ class ToolMonitor:
         self._emit("tool_start", f"开始执行工具: {tool_name}", {"tool_name": tool_name, "args": args})
 
     def report_tool_end(self, tool_name: str, result_preview: str = ""):
-        """报告工具执行完成，推送结果给前端。
+        r"""报告工具执行完成，推送结果给前端。
 
         在送入 WS 前会调用 sanitize_user_facing_text()，确保 LLM 输出的
-        todo list / 日期交叉验证段等内部噪声不会出现在用户的工具结果气泡中。
+        todo list / 日期交叉验证段等内部噪声不会出现在用户的工具结果气泡中；
+        同时调用 sanitize_abs_paths() 做绝对路径脱敏（避免 generate_markdown 等
+        工具返回 "Markdown文件 'D:\\xxx\\xx.md' 已生成" 暴露服务器磁盘结构）。
         若净化后为空字符串（如 LLM/tool 返回的 "[]" / "null" 等实质空内容），
         则跳过本次推送，避免前端出现一条独立的 [] 空消息。
         """
         preview = sanitize_user_facing_text(result_preview[:5000] if result_preview else "")
+        preview = sanitize_abs_paths(preview)
         if not preview:
             # 净化后为空 → 跳过推送（避免前端出现独立的 [] / null 空消息气泡）
             return
@@ -238,10 +332,13 @@ class ToolMonitor:
         内部噪声的最后一道防线 —— 即使 prompt 约束 / server.py prompt 预处理
         因任何原因（server 未重启、缓存旧 prompt）失效，用户也看不到
         'Updated todo list to [...]' 或 '交叉验证当前北京时间' 的段落。
+        此外再调用 sanitize_abs_paths() 做绝对路径脱敏（DeepSeek 可能把工具
+        返回的 Markdown 文件绝对路径原样转述给前端）。
         若净化后为空字符串（如 LLM 返回的 "[]" / "null" 等实质空内容），
-        则跳过推送，避免前端出现一条独立的 [] 空消息。
+        则跳过推送，避免前端出现一条独立的 [] 空消息气泡。
         """
         safe = sanitize_user_facing_text(result)
+        safe = sanitize_abs_paths(safe)
         if not safe:
             # 净化后为空 → 跳过推送（避免前端出现独立的 [] / null 空消息气泡）
             return
@@ -253,8 +350,9 @@ class ToolMonitor:
 
     def report_error(self, message: str):
         """报告错误信息（公共方法，供外部调用，避免直接调用私有 _emit）"""
-        # 错误消息也做一次净化，避免级联取消等过程中的噪声字串被前端显示
+        # 错误消息：噪声过滤 + 绝对路径脱敏双保险（Exception str 常带着本机路径栈）
         safe_msg = sanitize_user_facing_text(message)
+        safe_msg = sanitize_abs_paths(safe_msg)
         if safe_msg:
             self._emit("error", safe_msg)
 

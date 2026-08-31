@@ -23,9 +23,44 @@ from typing import Optional, Dict, List
 from datetime import datetime
 
 # 确保项目根目录在 sys.path 中（直接运行本文件时需要）
-_PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
+# 鲁棒算法：向上查找项目根标志性文件 AGENTS.md（项目独有），找不到再退化 parent 层数：
+#   tools/<file>.py → parents[1] = 项目根（tools/ 本身就是项目根下的一级目录）
+def _find_project_root(start: Path) -> Path:
+    cur = start
+    for _ in range(12):
+        if (cur / "AGENTS.md").exists():
+            return cur
+        if cur.parent == cur:
+            break
+        cur = cur.parent
+    # 兜底：按本文件位于 <项目根>/tools/ 计算 → 上 1 层
+    return start.resolve().parents[1]
+
+_PROJECT_ROOT = str(_find_project_root(Path(__file__).resolve()))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
+
+from shared.utils.zsxq_paths import (  # noqa: E402
+    get_zsxq_news_dir,
+    ensure_zsxq_news_dir_ready,
+    ZSXQ_STATE_FILE_NAME,
+    ZSXQ_HISTORY_FILE_NAME,
+)
+ensure_zsxq_news_dir_ready(Path(_PROJECT_ROOT))  # 幂等，首次调用自动搬运旧数据
+
+# ===== 持久化层（独立 IO 模块，见 shared/data_sources/zsxq_history_store.py）=====
+from shared.data_sources.zsxq_history_store import (  # noqa: E402
+    save_topics_to_db as _zsxq_save_db_impl,
+    load_history as _zsxq_load_history_impl,
+    save_history as _zsxq_save_history_impl,
+    content_hash as _zsxq_content_hash_impl,
+)
+
+# ===== 文本处理纯工具（独立子包 tools/zsxq/_text_utils.py，无全局状态）=====
+from tools.zsxq import (  # noqa: E402
+    clean_text as _zsxq_clean_impl,
+    extract_topic_info as _zsxq_extract_impl,
+)
 
 from dotenv import load_dotenv, find_dotenv
 
@@ -38,6 +73,39 @@ except (Exception, KeyboardInterrupt):
         return func
 
 from api.monitor import monitor
+
+# bus 桥接：把检索结果作为 retrieve_result 发布，供 SSE 显示和引用元数据使用
+def _try_publish_retrieve_result(channel: str, query: str, items_list):
+    """尽力发布，跨线程/无事件循环时不阻塞（call_soon_threadsafe 安全兜底）。"""
+    try:
+        from api.stream_bus import get_stream_bus_sync
+        from api.context import get_thread_context
+        tid = get_thread_context()
+        if not tid:
+            return
+        bus = get_stream_bus_sync()
+        if bus._loop is None or not bus._loop.is_running():
+            return
+        def _sync_pub():
+            bus.ev_retrieve_result(tid, channel=channel, query=query, items=items_list)
+        bus._loop.call_soon_threadsafe(_sync_pub)
+    except Exception:
+        pass
+
+def _run_sync(coro):
+    """在同步工具环境中安全执行 async 协程：有运行 loop 就 run_coroutine_threadsafe，否则 asyncio.run()。"""
+    import asyncio as _aio
+    try:
+        loop = _aio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    if loop is None:
+        return _aio.run(coro)
+    # 有运行 loop：需在另一个线程里 asyncio.run（避免在同 loop 里嵌套）
+    import concurrent.futures as _cf
+    with _cf.ThreadPoolExecutor(max_workers=1) as ex:
+        fut = ex.submit(lambda: _aio.run(coro))
+        return fut.result()
 
 # 使用 find_dotenv() 递归查找 .env
 load_dotenv(find_dotenv())
@@ -114,12 +182,18 @@ from config.constants import (
     OLLAMA_DEFAULT_TEMPERATURE,
 )
 
+# ===== 股票清单匹配工具：统一验证 search_zsxq_by_stock 传入的是不是有效股票名/代码 =====
+from tools.stock_matcher import (
+    lookup_stock as _matcher_lookup_stock,
+    is_stock_entity as _matcher_is_stock_entity,
+)
+
 # ======================== 配置 ========================
 ZSXQ_GROUP_ID = os.getenv("ZSXQ_GROUP_ID", "48848484411448")
 ZSXQ_HEADLESS = os.getenv("ZSXQ_HEADLESS", "true").lower() == "true"
 # storage_state 文件路径（保存登录后的 Cookie）
-# 放在项目目录下，避免 TRAE 沙箱拦截 home 目录写入
-ZSXQ_STATE_FILE = Path(_PROJECT_ROOT) / "zsxq_news" / ".zsxq_state.json"
+# 统一放在 output/zsxq_news/ 下，AGENTS.md L55-56 约定 output/ 为生成文件根目录
+ZSXQ_STATE_FILE = get_zsxq_news_dir(Path(_PROJECT_ROOT)) / ZSXQ_STATE_FILE_NAME
 # 群组页面 URL
 ZSXQ_GROUP_URL = f"https://wx.zsxq.com/group/{ZSXQ_GROUP_ID}"
 
@@ -485,77 +559,18 @@ def _fetch_topics_via_browser(
 
 
 def _clean_text(text: str) -> str:
-    """清理知识星球正文中的 HTML 标签和多余空白"""
-    import re
-    if not text:
-        return ""
-    # 移除 <e type="hashtag" ... /> 等自闭合标签
-    text = re.sub(r'<e\s+[^>]*/?>', '', text)
-    # 移除其他常见 HTML 标签
-    text = re.sub(r'<[^>]+>', '', text)
-    # 移除末尾不完整的 HTML 标签（API 截断导致缺少闭合 >）
-    text = re.sub(r'<[a-zA-Z][^>]*$', '', text)
-    # URL 解码（如 %23 → #）
-    try:
-        from urllib.parse import unquote
-        # 只解码看起来像 URL 编码的部分
-        text = re.sub(
-            r'%[0-9A-Fa-f]{2}',
-            lambda m: unquote(m.group(0)),
-            text,
-        )
-    except Exception:
-        pass
-    # 合并多余空行
-    text = re.sub(r'\n{3,}', '\n\n', text)
-    # 去除首尾空白
-    return text.strip()
+    """清理知识星球正文中的 HTML 标签和多余空白。薄壳：转调 tools/zsxq/_text_utils.clean_text。"""
+    return _zsxq_clean_impl(text)
 
 
 def _extract_topic_info(topic: Dict) -> Dict:
-    """从 API 返回的 topic JSON 中提取关键字段"""
-    talk = topic.get("talk", {})
-    owner = topic.get("talk", {}).get("owner", {}) or topic.get("owner", {})
-
-    title = _clean_text(talk.get("title") or "")
-    text = _clean_text(talk.get("text") or "")
-    # 合并标题和正文
-    full_content = f"{title}\n\n{text}" if title else text
-
-    # 处理时间（知识星球返回 ISO 8601 字符串，如 "2026-08-07T19:22:47.900+0800"）
-    create_time_raw = topic.get("create_time", "")
-    create_time_str = str(create_time_raw)
-    create_time_ts = 0
-    try:
-        if isinstance(create_time_raw, str) and "T" in create_time_raw:
-            # ISO 8601 格式：2026-08-07T19:22:47.900+0800
-            # Python 3.7+ 的 fromisoformat 不支持毫秒+时区，需处理
-            ts_str = create_time_raw.replace("+0800", "+08:00").replace("+0000", "+00:00")
-            dt = datetime.fromisoformat(ts_str)
-            create_time_str = dt.strftime("%Y-%m-%d %H:%M:%S")
-            create_time_ts = int(dt.timestamp())
-        elif create_time_raw:
-            # 可能是毫秒时间戳
-            create_time_ts = int(create_time_raw)
-            dt = datetime.fromtimestamp(create_time_ts / 1000)
-            create_time_str = dt.strftime("%Y-%m-%d %H:%M:%S")
-    except Exception:
-        pass
-
-    return {
-        "topic_id": str(topic.get("topic_id", "")),
-        "title": title[:ZSXQ_EXTRACT_TITLE_TRUNCATE_CHARS] if title else "",
-        "content": full_content,
-        "author_name": (owner.get("name") or "")[:ZSXQ_EXTRACT_AUTHOR_NAME_TRUNCATE_CHARS],
-        "author_id": str(owner.get("user_id", "")),
-        "create_time": create_time_str,
-        "create_time_ts": create_time_ts,
-        "like_count": int(topic.get("likes_count", 0) or 0),
-        "comment_count": int(topic.get("comments_count", 0) or 0),
-        "digested": bool(topic.get("digested", False)),
-        "group_id": ZSXQ_GROUP_ID,
-        "raw_json": json.dumps(topic, ensure_ascii=False),
-    }
+    """从 API 返回的 topic JSON 中提取关键字段。薄壳：转调 tools/zsxq/_text_utils.extract_topic_info，注入常量参数。"""
+    return _zsxq_extract_impl(
+        topic,
+        group_id=ZSXQ_GROUP_ID,
+        title_truncate_chars=ZSXQ_EXTRACT_TITLE_TRUNCATE_CHARS,
+        author_name_truncate_chars=ZSXQ_EXTRACT_AUTHOR_NAME_TRUNCATE_CHARS,
+    )
 
 
 def _print_topic_preview(topic_info: Dict, index: int):
@@ -572,103 +587,30 @@ def _print_topic_preview(topic_info: Dict, index: int):
 
 
 def _save_to_db(topics_info: List[Dict]) -> str:
-    """保存到 MySQL 数据库"""
-    try:
-        from mysql.connector import connect, Error
-        from tools.db_tools import get_db_config
-
-        cfg = get_db_config()
-        conn = connect(**cfg)
-        cur = conn.cursor()
-
-        # 建表
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS zsxq_posts (
-                id VARCHAR(64) PRIMARY KEY,
-                group_id VARCHAR(64) NOT NULL,
-                title VARCHAR(255),
-                content TEXT,
-                author_name VARCHAR(128),
-                author_id VARCHAR(64),
-                create_time VARCHAR(32),
-                create_time_ts BIGINT,
-                like_count INT DEFAULT 0,
-                comment_count INT DEFAULT 0,
-                digested TINYINT DEFAULT 0,
-                raw_json LONGTEXT,
-                fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE KEY uk_id (id)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-        """)
-
-        # 插入数据
-        sql = """
-            INSERT INTO zsxq_posts
-            (id, group_id, title, content, author_name, author_id,
-             create_time, create_time_ts, like_count, comment_count, digested, raw_json)
-            VALUES (%(id)s, %(group_id)s, %(title)s, %(content)s, %(author_name)s,
-                    %(author_id)s, %(create_time)s, %(create_time_ts)s, %(like_count)s,
-                    %(comment_count)s, %(digested)s, %(raw_json)s)
-            ON DUPLICATE KEY UPDATE
-                title=VALUES(title), content=VALUES(content),
-                like_count=VALUES(like_count), comment_count=VALUES(comment_count)
-        """
-        for info in topics_info:
-            db_data = {
-                "id": info["topic_id"],
-                "group_id": info["group_id"],
-                "title": info["title"],
-                "content": info["content"],
-                "author_name": info["author_name"],
-                "author_id": info["author_id"],
-                "create_time": info["create_time"],
-                "create_time_ts": info["create_time_ts"],
-                "like_count": info["like_count"],
-                "comment_count": info["comment_count"],
-                "digested": 1 if info["digested"] else 0,
-                "raw_json": info["raw_json"],
-            }
-            cur.execute(sql, db_data)
-
-        conn.commit()
-        cur.close()
-        conn.close()
-        return f"已写入 {len(topics_info)} 条到数据库"
-    except Exception as e:
-        return f"写入数据库失败: {e}"
+    """保存到 MySQL 数据库（委托 shared/data_sources/zsxq_history_store.py:save_topics_to_db）。"""
+    return _zsxq_save_db_impl(topics_info)
 
 
 # ======================== LangChain 工具 ========================
 
 # 已抓取记录文件路径（记录每个 topic_id 的 create_time + content 摘要，用于增量判断）
-# 放在项目目录下，避免 TRAE 沙箱拦截 home 目录写入导致进程被杀
-ZSXQ_HISTORY_FILE = Path(_PROJECT_ROOT) / "zsxq_news" / ".zsxq_history.json"
+# 统一放在 output/zsxq_news/ 下，AGENTS.md L55-56 约定 output/ 为生成文件根目录
+ZSXQ_HISTORY_FILE = get_zsxq_news_dir(Path(_PROJECT_ROOT)) / ZSXQ_HISTORY_FILE_NAME
 
 
 def _load_history() -> Dict:
-    """加载已抓取历史记录 {topic_id: {ts: int, content_hash: str, create_time: str}}"""
-    if not ZSXQ_HISTORY_FILE.exists():
-        return {"topics": {}}
-    try:
-        return json.loads(ZSXQ_HISTORY_FILE.read_text(encoding="utf-8"))
-    except Exception:
-        return {"topics": {}}
+    """加载已抓取历史记录 {topic_id: {ts: int, content_hash: str, create_time: str}}（委托 load_history）。"""
+    return _zsxq_load_history_impl(ZSXQ_HISTORY_FILE)
 
 
 def _save_history(history: Dict):
-    """保存已抓取历史记录"""
-    try:
-        ZSXQ_HISTORY_FILE.write_text(
-            json.dumps(history, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-    except Exception as e:
-        print(f"[ZSXQ] 保存历史记录失败: {e}")
+    """保存已抓取历史记录（委托 save_history）。"""
+    return _zsxq_save_history_impl(ZSXQ_HISTORY_FILE, history)
 
 
 def _content_hash(text: str) -> str:
-    """计算内容摘要（MD5 前 16 位，足够去重）"""
-    import hashlib
-    return hashlib.md5(text.encode("utf-8")).hexdigest()[:ZSXQ_CONTENT_HASH_HEAD_CHARS]
+    """计算内容摘要（MD5 前 N 位，足够去重）。"""
+    return _zsxq_content_hash_impl(text, ZSXQ_CONTENT_HASH_HEAD_CHARS)
 
 
 @tool
@@ -801,10 +743,9 @@ def fetch_zsxq_group_topics(
     print(f"\n[ZSXQ] JSON 结果（{len(json_result)} 条）：")
     print(json.dumps(json_result, ensure_ascii=False, indent=2))
 
-    # 保存 JSON 到项目目录下的 zsxq_news 文件夹，文件名为输出时间戳
+    # 保存 JSON 到 output/zsxq_news/ 目录（AGENTS.md L55-56），文件名为输出时间戳
     try:
-        news_dir = Path(_PROJECT_ROOT) / "zsxq_news"
-        news_dir.mkdir(parents=True, exist_ok=True)
+        news_dir = ensure_zsxq_news_dir_ready(Path(_PROJECT_ROOT))
         file_name = datetime.now().strftime("%Y%m%d%H%M%S") + ".json"
         news_file = news_dir / file_name
         news_file.write_text(
@@ -1328,33 +1269,243 @@ def _fetch_topics_by_search(
 def _analyze_with_qwen8b(stock_name: str, topics_info: List[Dict]) -> str:
     """调用本地 Ollama Qwen3-8B 模型对知识星球搜索结果进行分析汇总。
 
-    Args:
-        stock_name: 用户查询的股票名
-        topics_info: 从知识星球搜索到的主题信息列表
+    使用 adapter.ollama_synthesize 门面：
+      - 将 topics_info 规范化为带 [citation:N] 的上下文块注入
+      - 回调 bus.ev_reasoning / ev_delta / ev_citation_meta 流式显示
+      - 失败时回退为原 urllib 非流式调用，保证用户始终能拿到结果
 
     Returns:
         分析汇总文本
     """
-    from urllib import request as _url_req, error as _url_err
-
-    # 拼接搜索结果内容
-    entries = []
-    for i, info in enumerate(topics_info, 1):
-        author = info.get("author_name", "未知")
-        t = info.get("create_time", "")
-        content = info.get("content", "")[:ZSXQ_OLLAMA_ENTRY_TRUNCATE_CHARS]
-        entries.append(f"{i}. [{author} {t}] {content}")
-    content_text = "\n\n".join(entries)
-
-    if not content_text.strip():
+    if not topics_info:
         return f"知识星球中未搜索到与「{stock_name}」相关的内容"
 
-    system_prompt = (
-        "你是A股金融分析师。分析知识星球社区中关于特定股票的讨论，"
-        "提取关键观点、市场情绪（利好/利空），并汇总核心信息。"
-        "注意区分可靠信息（来自研报/公告）和不可靠信息（来自股吧/论坛/个人观点）。"
+    # 1) 构造标准化 docs Dict：topic_id 映射到引用编号
+    docs_dict: List[Dict] = []
+    for info in topics_info:
+        topic_id = str(info.get("topic_id") or "")
+        title = str(info.get("title") or "").strip()
+        author = str(info.get("author_name") or "未知")
+        t = str(info.get("create_time") or "")
+        content = str(info.get("content") or "")[:ZSXQ_OLLAMA_ENTRY_TRUNCATE_CHARS]
+        if not title and content:
+            title = content[:40].replace("\n", " ").strip() + "…"
+        if not title:
+            title = f"{author} 的讨论"
+        # 构造知识星球帖子链接
+        gid = str(info.get("group_id") or ZSXQ_GROUP_ID or "")
+        url = ""
+        if topic_id and gid:
+            url = f"https://wx.zsxq.com/dweb2/index/topicDetail/{topic_id}?groupId={gid}"
+        # 热度分：点赞*3 + 评论*5
+        likes = int(info.get("like_count") or 0)
+        comments = int(info.get("comment_count") or 0)
+        score = min(1.0, (likes * 3 + comments * 5) / 200.0)
+        # doc_id：topic_id 存在时直接用（字符串），否则生成 hash 十六进制
+        # 注意：f"{A or B:x}" 因运算符优先级会把 A(str) 送到 :x → ValueError。这里显式分支。
+        if topic_id:
+            _zsxq_doc_id = f"zsxq-{topic_id}"
+        else:
+            _zsxq_doc_id = "zsxq-{:x}".format(abs(int(hash((title, author, t)))) & 0xffffffff)
+        docs_dict.append({
+            "doc_id": _zsxq_doc_id,
+            "title": title,
+            "url": url,
+            "content": content,
+            "source_type": "forum",
+            "reliability": "信息来源可靠性待验证",  # AGENTS.md 规则：论坛/社群=待验证
+            "channel": "zsxq",
+            "score": score,
+            "published_at": t,
+            "meta": {"author": author, "likes": likes, "comments": comments, "digested": bool(info.get("digested", False))},
+        })
+
+    # 2) 通过 thread context 拿 bus + thread_id（如果在流式环境中），回调做 SSE 推送
+    tid = None
+    bus = None
+    try:
+        from api.context import get_thread_context
+        from api.stream_bus import get_stream_bus_sync
+        tid = get_thread_context()
+        bus = get_stream_bus_sync() if tid else None
+        if bus is not None and (bus._loop is None or not bus._loop.is_running()):
+            bus = None
+    except Exception:
+        bus = None
+
+    def _stage_title(stage):
+        _MAP = {
+            "intent_classify": "① 意图识别（本地 qwen-8b）",
+            "retrieval_plan":  "② 检索计划",
+            "synthesis_plan":  "③ 综合推理",
+            "risk_check":      "④ 风险核查",
+            "model_coT":       "⑤ 模型 Chain-of-Thought（qwen-8b <think>）",
+        }
+        return _MAP.get(stage, f"推理步骤（{stage}）")
+
+    def _make_stage_cb():
+        if bus is None or tid is None:
+            return None
+        def _cb(stage, seg):
+            try:
+                content = (seg or "")[:3000]
+                title = _stage_title(stage)
+                loop = bus._loop
+                loop.call_soon_threadsafe(lambda: bus.ev_reasoning(
+                    tid, title=title, content=content, stage=stage
+                ))
+            except Exception:
+                pass
+        return _cb
+
+    def _make_delta_cb():
+        """ZSXQ 本地分析：不再向最终 assistant 正文区 (is_reasoning=False) 打字机双写，
+        改为把增量累积成"分析进度"推到 reasoning 折叠面板 —— 作为工具的中间可视化。
+        否则主 agent 最终 answer 与 zsxq 本地分析会在同一 .stream-text 内并列出现两段
+        （例如『一、检索结果汇总』紧接『二、XX市场最新行情与信息汇总报告』）。
+        最终正文唯一由 main_agent.report_task_result → bus.ev_done(force_final_text=...)
+        决定，避免"两报告并列"的视觉冗余。"""
+        if bus is None or tid is None:
+            return None
+        _buf: list = []
+        _flush_at = [0]
+        def _cb(text):
+            if not text:
+                return
+            try:
+                _buf.append(text)
+                # 简单节流：每 ~12 增量或累计 > 240 字 flush 一次，避免频繁 SSE
+                _flush_at[0] += 1
+                need_flush = (
+                    _flush_at[0] % 12 == 0
+                    or sum(len(x) for x in _buf) > 240
+                )
+                if need_flush:
+                    joined = "".join(_buf)
+                    title = _stage_title("synthesis_plan") + " · ZSXQ 本地分析（Qwen-8B）"
+                    loop = bus._loop
+                    loop.call_soon_threadsafe(
+                        lambda j=joined, t=title: bus.ev_reasoning(
+                            tid, title=t, content=j, stage="zsxq_local_analysis"
+                        )
+                    )
+            except Exception:
+                pass
+        return _cb
+
+    def _make_cit_cb():
+        if bus is None or tid is None:
+            return None
+        def _cb(idxs, snippet):
+            try:
+                loop = bus._loop
+                loop.call_soon_threadsafe(lambda: bus.ev_citation_meta(tid, indices=list(idxs), attach_snippet=snippet))
+            except Exception:
+                pass
+        return _cb
+
+    # 3) 调用 ollama_synthesize（同步包装 async）
+    user_query = (
+        f"请分析知识星球中关于「{stock_name}」的讨论，给出：\n"
+        f"1. 市场情绪判断（利好/利空/中性）\n"
+        f"2. 核心观点汇总（3-5条要点，严格使用 [N] 角标引用来源；空帖/无效帖直接跳过，不要写未找到/暂无占位；"
+        f"摘要全文 ≤400 字，超过 400 字按末尾要点整条省略）\n"
+        f"3. 关键数据或事件（如有）\n"
+        f"4. 信息来源可靠性评估\n"
+        f"5. 【时效性窗口（用户强制）】本分析只使用最近两天内发布的知识星球讨论；"
+        f"若近 两天内无结果则扩大到最近 1个月；超期帖子已被服务端过滤，"
+        f"不要基于超期帖子输出结论；若近1个月仍无结果，就写「近1个月无相关检索结果」不要写其他占位。"
     )
-    user_prompt = f"""请分析以下知识星球中关于「{stock_name}」的搜索结果，给出：
+    try:
+        try:
+            from adapter.stream_adapters import build_citation_context, filter_items_by_recency
+            from adapter.ollama_client import ollama_synthesize, ollama_probe
+        except Exception as e_adpt:
+            raise RuntimeError(f"adapter 模块不可用：{e_adpt}")
+
+        # 先探测 Ollama 是否可达（不可达直接降级，不浪费 30s 超时）
+        reachable = _run_sync(ollama_probe(timeout=3.0))
+        if not reachable:
+            raise RuntimeError(f"Ollama 不可达（{OLLAMA_DEFAULT_BASE_URL}/api/tags 无响应）")
+
+        # === 用户规则：时效性窗口过滤（近 1 个月优先，近 1 个月空→ build_citation_context
+        #   汇总时自动降级近 3 个月）；docs_dict 先按 30 天硬过滤，Qwen-8B 本地模型看不到超期内容。
+        docs_dict, _ads_zsxq, _fb_zsxq = filter_items_by_recency(
+            docs_dict, channel="zsxq", auto_fallback=False
+        )
+
+        _, ctx_block = build_citation_context(docs_dict)
+
+        sys_tail = (
+            "业务规则（必须遵守）：\n"
+            "  - 个股新闻速览：每条结论≤200字，必须判定利空/利多\n"
+            "  - 涉及投资建议或价格判断时，文末必须附风险声明：⚠️ 以上信息来自互联网公开资料…\n"
+            "  - 股吧/论坛/自媒体信息，引用时显式标注'信息来源可靠性待验证'\n"
+            "  - 时效性：只使用近 1 个月（30 天）帖子；若上下文已扩大到近 3 个月，按服务端实际保留内容。\n"
+        )
+        # 注册 citation_meta（doc_id→index 映射），让 callback 触发时可按 index 直接取
+        if bus is not None and tid is not None:
+            try:
+                from adapter.stream_adapters import build_citation_context as _bcc2
+                # title/url 长度：主常量控制 CITATION_TITLE_MAX_CHARS=80 / CITATION_URL_MAX_CHARS=256
+                from config.constants import (
+                    CITATION_TITLE_MAX_CHARS as _TMAX,
+                    CITATION_URL_MAX_CHARS as _UMAX,
+                )
+                # 再次保证 citation_meta items 也和过滤后的 docs_dict 对齐（过期条目不挂悬垂 [N]）
+                norm_docs, _ = _bcc2(docs_dict)
+                items = []
+                for d in norm_docs:
+                    items.append({
+                        "index": d.index, "doc_id": str(d.index),
+                        "title": (str(d.title or "")[:_TMAX]),
+                        "url": (str(d.url or "")[:_UMAX]),
+                        "source_type": d.source_type, "reliability": d.reliability,
+                        "channel": d.channel,
+                        # snippet：bus 端会统一聚焦截到 100 字，这里传原文即可（无需提前截 300）
+                        "snippet": d.content,
+                        "published_at": d.published_at,
+                    })
+                loop = bus._loop
+                loop.call_soon_threadsafe(lambda: bus.ev_citation_meta(tid, items=items))
+            except Exception:
+                pass
+
+        result = _run_sync(
+            ollama_synthesize(
+                user_query,
+                ctx_block,
+                system_prompt_tail=sys_tail,
+                reasoning_segment_cb=_make_stage_cb(),
+                delta_cb=_make_delta_cb(),
+                citation_hit_cb=_make_cit_cb(),
+            )
+        )
+        text = result.final_text.strip()
+        if not text:
+            raise RuntimeError("ollama_synthesize 返回空文本")
+        # 风险声明强制兜底（adapter 层 patch 已加，但再次保险）
+        _RISK = "⚠️ 以上信息来自互联网公开资料，仅供参考，不构成投资建议。投资有风险，入市需谨慎，盈亏自负。"
+        if _RISK[:20] not in text:
+            text = text + "\n\n" + _RISK
+        return text
+    except Exception as e:
+        # 降级：原 urllib 硬编码调用（保证功能不丢失）
+        print(f"[ZSXQ] ollama_synthesize 降级（{type(e).__name__}: {e}），回退到原 urllib 调用")
+        from urllib import request as _url_req, error as _url_err
+        entries = []
+        for i, info in enumerate(topics_info, 1):
+            author = info.get("author_name", "未知")
+            t = info.get("create_time", "")
+            content = info.get("content", "")[:ZSXQ_OLLAMA_ENTRY_TRUNCATE_CHARS]
+            entries.append(f"{i}. [{author} {t}] {content}")
+        content_text = "\n\n".join(entries)
+        system_prompt = (
+            "你是A股金融分析师。分析知识星球社区中关于特定股票的讨论，"
+            "提取关键观点、市场情绪（利好/利空），并汇总核心信息。"
+            "注意区分可靠信息（来自研报/公告）和不可靠信息（来自股吧/论坛/个人观点）。"
+        )
+        user_prompt = f"""请分析以下知识星球中关于「{stock_name}」的搜索结果，给出：
 1. 市场情绪判断（利好/利空/中性）
 2. 核心观点汇总（3-5条要点）
 3. 关键数据或事件（如有）
@@ -1362,31 +1513,29 @@ def _analyze_with_qwen8b(stock_name: str, topics_info: List[Dict]) -> str:
 
 搜索结果（共{len(topics_info)}条）：
 {content_text}"""
-
-    payload = json.dumps({
-        "model": "qwen3:8b",
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        "options": {"temperature": OLLAMA_DEFAULT_TEMPERATURE},
-        "stream": False,
-    }).encode("utf-8")
-
-    req = _url_req.Request(
-        OLLAMA_DEFAULT_BASE_URL.rstrip("/") + "/api/chat",
-        data=payload,
-        method="POST",
-        headers={"Content-Type": "application/json"},
-    )
-    try:
-        with _url_req.urlopen(req, timeout=OLLAMA_CHAT_DEFAULT_TIMEOUT_SEC) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
-            return body["message"]["content"]
-    except _url_err.URLError as e:
-        return f"[Qwen8B分析失败] Ollama连接失败: {e}，原始搜索结果如下：\n\n{content_text[:ZSXQ_OLLAMA_ERROR_FALLBACK_TRUNCATE_CHARS]}"
-    except Exception as e:
-        return f"[Qwen8B分析失败] {e}，原始搜索结果如下：\n\n{content_text[:ZSXQ_OLLAMA_ERROR_FALLBACK_TRUNCATE_CHARS]}"
+        payload = json.dumps({
+            "model": "qwen3:8b",
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "options": {"temperature": OLLAMA_DEFAULT_TEMPERATURE},
+            "stream": False,
+        }).encode("utf-8")
+        req = _url_req.Request(
+            OLLAMA_DEFAULT_BASE_URL.rstrip("/") + "/api/chat",
+            data=payload,
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            with _url_req.urlopen(req, timeout=OLLAMA_CHAT_DEFAULT_TIMEOUT_SEC) as resp:
+                body = json.loads(resp.read().decode("utf-8"))
+                return body["message"]["content"]
+        except _url_err.URLError as e2:
+            return f"[Qwen8B分析失败] Ollama连接失败: {e2}，原始搜索结果如下：\n\n{content_text[:ZSXQ_OLLAMA_ERROR_FALLBACK_TRUNCATE_CHARS]}"
+        except Exception as e2:
+            return f"[Qwen8B分析失败] {e2}，原始搜索结果如下：\n\n{content_text[:ZSXQ_OLLAMA_ERROR_FALLBACK_TRUNCATE_CHARS]}"
 
 
 @tool
@@ -1401,7 +1550,7 @@ def search_zsxq_by_stock(stock_name: str) -> str:
     这些场景应改用 task/网络搜索助手 完成新闻/研报获取。
 
     Args:
-        stock_name: 要搜索的股票名称（如"贵州茅台"、"宁德时代"）
+        stock_name: 要搜索的股票名称（如"贵州茅台"、"宁德时代"）或代码（如"600519"）
 
     Returns:
         知识星球搜索结果 + Qwen8B 分析汇总
@@ -1410,6 +1559,32 @@ def search_zsxq_by_stock(stock_name: str) -> str:
         monitor.report_tool("知识星球股票搜索", "start")
     except Exception:
         pass
+
+    # ================================================================
+    # 前置：参数合法化校验（集成 StockMatcher）——
+    #   防止 LLM 把"今日复盘""大盘""大金融板块"等非股票词汇当作搜索词
+    #   浪费一次浏览器启动与搜索成本（动辄 30~120 秒）。
+    # ================================================================
+    raw_name = (stock_name or "").strip()
+    if not raw_name:
+        return "未提供股票名称，无法搜索。请给出具体的股票名或6位代码。"
+
+    normalized_info = _matcher_lookup_stock(raw_name)
+    search_target_name: str      # 实际给浏览器搜索框/URL 的字符串（尽量用标准化的股票名）
+    if normalized_info is not None:
+        # 传入是有效代码/名称/别名 → 用标准全称，能显著提升搜索命中率
+        search_target_name = normalized_info.name
+        extra_hint = f"（{normalized_info.display}）"
+    else:
+        # 传入不在清单中：进一步判断是否只是"通用关键词"（大盘/复盘/板块）
+        if len(raw_name) <= 6 and _matcher_is_stock_entity(raw_name, ""):
+            search_target_name = raw_name
+            extra_hint = ""
+        else:
+            return (
+                f"「{raw_name}」未在 A 股上市股票清单中匹配到对应股票。"
+                f"请提供准确的股票全称（如「贵州茅台」）或 6 位代码（如「600519」）后重试。"
+            )
 
     # 获取浏览器互斥锁：防止 fetch_zsxq_group_topics 同时运行
     global _zsxq_active_operation
@@ -1432,23 +1607,22 @@ def search_zsxq_by_stock(stock_name: str) -> str:
             if not _login_interactive():
                 return "知识星球登录失败，请重试。"
 
-        print(f"[ZSXQ-Search] 开始搜索股票: {stock_name}")
-        topics = _fetch_topics_by_search(stock_name, max_topics=ZSXQ_TOOL_SEARCH_STOCK_MAX_TOPICS)
+        print(f"[ZSXQ-Search] 开始搜索股票: {search_target_name}{extra_hint}")
+        topics = _fetch_topics_by_search(search_target_name, max_topics=ZSXQ_TOOL_SEARCH_STOCK_MAX_TOPICS)
 
         if not topics:
-            return f"知识星球中未搜索到与「{stock_name}」相关的内容"
+            return f"知识星球中未搜索到与「{search_target_name}」相关的内容"
 
         # 提取关键信息
         topics_info = [_extract_topic_info(t) for t in topics]
-        print(f"[ZSXQ-Search] 搜索到 {len(topics_info)} 条关于「{stock_name}」的内容")
+        print(f"[ZSXQ-Search] 搜索到 {len(topics_info)} 条关于「{search_target_name}」的内容")
 
-        # 保存搜索结果到 JSON 文件（供后续连续问答使用）
+        # 保存搜索结果到 JSON 文件（统一写入 output/zsxq_news/，AGENTS.md L55-56）
         try:
-            news_dir = Path(_PROJECT_ROOT) / "zsxq_news"
-            news_dir.mkdir(parents=True, exist_ok=True)
+            news_dir = ensure_zsxq_news_dir_ready(Path(_PROJECT_ROOT))
             ts = datetime.now().strftime("%Y%m%d%H%M%S")
             search_result = {
-                "stock_name": stock_name,
+                "stock_name": search_target_name,
                 "search_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "total": len(topics_info),
                 "topics": [
@@ -1462,7 +1636,10 @@ def search_zsxq_by_stock(stock_name: str) -> str:
                     for info in topics_info
                 ],
             }
-            result_file = news_dir / f"search_{stock_name}_{ts}.json"
+            # 文件名用安全名（去除特殊字符，避免中文子串在 Windows 非法文件名下报错）
+            import re as _re
+            safe_name = _re.sub(r"[\\/:*?\"<>|\s]", "_", search_target_name) or "unknown"
+            result_file = news_dir / f"search_{safe_name}_{ts}.json"
             result_file.write_text(
                 json.dumps(search_result, ensure_ascii=False, indent=2),
                 encoding="utf-8",
@@ -1477,7 +1654,7 @@ def search_zsxq_by_stock(stock_name: str) -> str:
 
         # 调用 Qwen3-8B 进行分析汇总
         print(f"\n[ZSXQ-Search] 调用 Qwen3-8B 分析汇总...")
-        analysis = _analyze_with_qwen8b(stock_name, topics_info)
+        analysis = _analyze_with_qwen8b(search_target_name, topics_info)
 
         # 组装最终返回内容（包含原始内容 + 分析汇总）
         raw_summary = "\n\n".join([
@@ -1487,11 +1664,73 @@ def search_zsxq_by_stock(stock_name: str) -> str:
         ])
 
         result = (
-            f"【知识星球搜索结果 - {stock_name}】\n"
+            f"【知识星球搜索结果 - {search_target_name}】\n"
             f"搜索到 {len(topics_info)} 条相关内容\n\n"
             f"=== Qwen8B 分析汇总 ===\n{analysis}\n\n"
             f"=== 原始搜索内容 ===\n{raw_summary}"
         )
+
+        # -------- §4.3 ZSXQ 检索结果结构化 + SSE bridge --------
+        try:
+            items_list = []
+            for info in topics_info:
+                topic_id = str(info.get("topic_id") or "")
+                author = str(info.get("author_name") or "未知")
+                t = str(info.get("create_time") or "")
+                title = str(info.get("title") or "").strip()
+                content = str(info.get("content") or "")
+                if not title and content:
+                    title = content[:40].replace("\n", " ").strip() + "…"
+                if not title:
+                    title = f"{author} 的讨论"
+                gid = str(info.get("group_id") or ZSXQ_GROUP_ID or "")
+                url = ""
+                if topic_id and gid:
+                    url = f"https://wx.zsxq.com/dweb2/index/topicDetail/{topic_id}?groupId={gid}"
+                likes = int(info.get("like_count") or 0)
+                comments = int(info.get("comment_count") or 0)
+                score = min(1.0, (likes * 3 + comments * 5) / 200.0)
+                if topic_id:
+                    _zsxq_doc_id2 = f"zsxq-{topic_id}"
+                else:
+                    _zsxq_doc_id2 = "zsxq-{:x}".format(abs(int(hash((title, author, t)))) & 0xffffffff)
+                items_list.append({
+                    "doc_id": _zsxq_doc_id2,
+                    "title": title,
+                    "url": url,
+                    "content": content[:ZSXQ_OLLAMA_ENTRY_TRUNCATE_CHARS],
+                    "source_type": "forum",
+                    "reliability": "信息来源可靠性待验证",
+                    "channel": "zsxq",
+                    "score": score,
+                    "published_at": t,
+                })
+            # === 用户规则：时效性窗口过滤（只保留近 1 个月；全通道汇总后若仍空再自动降级 3 个月）。
+            try:
+                from adapter.stream_adapters import filter_items_by_recency
+                items_list, _ap2, _fb2 = filter_items_by_recency(
+                    items_list, channel="zsxq", auto_fallback=False
+                )
+            except Exception:
+                pass
+            if items_list:
+                _try_publish_retrieve_result("zsxq", search_target_name, items_list)
+                # 内嵌结构化 JSON（便于 orchestrator 抽取后注入 [citation:N] 上下文）
+                try:
+                    structured_json = json.dumps(
+                        {"_structured_items": items_list},
+                        ensure_ascii=False,
+                    )
+                    result = (
+                        result
+                        + "\n\n<structured>\n"
+                        + structured_json
+                        + "\n</structured>\n"
+                    )
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
         try:
             monitor.report_tool("知识星球股票搜索", "end")

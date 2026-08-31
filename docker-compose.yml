@@ -1,0 +1,66 @@
+services:
+  app:
+    build: .
+    container_name: moss-app
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      # OTel 追踪导出到本地 Jaeger（不接 Jaeger 可注释掉这两行）
+      OTEL_EXPORTER_TYPE: otlp
+      OTEL_OTLP_ENDPOINT: http://jaeger:4317
+      # MySQL 业务数据（按需启用：配好后数据库查询子 Agent 自动生效）
+      # MYSQL_HOST: mysql
+      # MYSQL_PORT: "3306"
+      # MYSQL_USER: moss
+      # MYSQL_PASSWORD: moss_pwd
+      # MYSQL_DATABASE: moss_finance
+      # Redis（语义缓存 / Actor 快照的集群后端）
+      # REDIS_URL: redis://redis:6379/0
+    volumes:
+      - ./data:/app/data
+      - ./output:/app/output
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    restart: unless-stopped
+
+  mysql:
+    image: mysql:8.0
+    container_name: moss-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: moss_root_pwd
+      MYSQL_DATABASE: moss_finance
+      MYSQL_USER: moss
+      MYSQL_PASSWORD: moss_pwd
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-pmoss_root_pwd"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: moss-redis
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.57
+    container_name: moss-jaeger
+    ports:
+      - "16686:16686"   # Jaeger UI
+      - "4317:4317"     # OTLP gRPC
+    restart: unless-stopped
+
+volumes:
+  mysql_data:

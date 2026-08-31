@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 CancellationToken + RequestContext 三位一体机制验证测试。
 
@@ -20,6 +19,7 @@ import asyncio
 import sys
 import time
 from pathlib import Path
+import pytest
 
 _root = Path(__file__).resolve().parent.parent
 if str(_root) not in sys.path:
@@ -42,6 +42,7 @@ from agent.request_context import (
 # ======================================================================
 # Test 1. 基础语义
 # ======================================================================
+@pytest.mark.asyncio
 async def test_token_basic():
     tok = CancellationToken()
     assert tok.is_cancelled is False
@@ -72,6 +73,7 @@ async def test_token_basic():
 # ======================================================================
 # Test 2. 级联取消子任务
 # ======================================================================
+@pytest.mark.asyncio
 async def test_cancel_child_task():
     tok = CancellationToken()
 
@@ -103,6 +105,7 @@ async def test_cancel_child_task():
 # ======================================================================
 # Test 3. thread_id 反向索引
 # ======================================================================
+@pytest.mark.asyncio
 async def test_thread_id_index():
     tid = "test_thread_" + str(int(time.time() * 1000))
     # 模拟请求链路：创建 ctx → bind → 用 cancel_by_thread_id 取消
@@ -132,6 +135,7 @@ async def test_thread_id_index():
 # ======================================================================
 # Test 4. 超时自动取消
 # ======================================================================
+@pytest.mark.asyncio
 async def test_timeout_cancel():
     # 0.1s 超时
     tok = CancellationToken(timeout_sec=0.1)
@@ -155,6 +159,7 @@ async def test_timeout_cancel():
 # ======================================================================
 # Test 5. 取消速度（核心）: 循环中主动 check_cancelled → call_later 触发后 <100ms 感知
 # ======================================================================
+@pytest.mark.asyncio
 async def test_cancel_speed_sync_loop():
     """模拟 LLM 后处理 / 大 JSON 解析这类"每轮都能检查取消"的代码：
     check_cancelled() 仅为 ns 级 bool 读 + monotonic()，开销极低。
@@ -205,6 +210,7 @@ async def test_cancel_speed_sync_loop():
 # ======================================================================
 # Test 6. DISCONNECT 场景模拟
 # ======================================================================
+@pytest.mark.asyncio
 async def test_disconnect_scenario():
     """模拟：一个协程正在密集循环写文件/后处理 → WebSocket断开 → cancel_by_thread_id
     → 立即在下次 check 停止，不再继续写。"""
@@ -258,6 +264,7 @@ async def test_disconnect_scenario():
 # ======================================================================
 # Test 7. 孤儿任务验证：父取消 → 子压缩任务也取消
 # ======================================================================
+@pytest.mark.asyncio
 async def test_orphan_child_cancel():
     ctx = create_request_context(thread_id="orphan_test")
     bind_tok = bind_request_context(ctx)
@@ -303,6 +310,7 @@ async def test_orphan_child_cancel():
 # ======================================================================
 # Test 8. 取消回调（幂等 + 异步回调）
 # ======================================================================
+@pytest.mark.asyncio
 async def test_cancel_callback():
     tok = CancellationToken()
     calls: list[str] = []

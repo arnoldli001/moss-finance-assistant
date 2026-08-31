@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: 单元测试 + Import 冒烟
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-cov ruff
+
+      - name: 语法级静态检查（fatal-only 温和起步：未定义名/语法错误即失败）
+        run: ruff check . --select=E9,F63,F7,F82 --exclude output,data
+
+      - name: Import 链冒烟（新结构路径 + 兼容别名全量验证）
+        run: python main.py test-imports
+
+      - name: 单元测试（含覆盖率）
+        env:
+          PTD_ENABLED: "0"   # 测试环境关闭 PTD 路由，走全量工具披露
+        run: pytest tests/ -q --tb=short --cov --cov-report=term-missing --cov-report=xml
+
+      - name: 上传覆盖率到 Codecov（失败不阻断 CI）
+        uses: codecov/codecov-action@v4
+        with:
+          files: coverage.xml
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+  eval:
+    name: LLM 评估回归（direct 抽样）
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: LLM-as-Judge 评估（无 API Key 自动跳过；阈值不达标非零退出阻断）
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          OPENAI_BASE_URL: https://api.deepseek.com
+        run: |
+          if [ -z "$DEEPSEEK_API_KEY" ]; then
+            echo "::notice::未配置 DEEPSEEK_API_KEY（仓库 Settings → Secrets and variables → Actions 添加后自动启用），本次跳过 LLM 评估"
+            exit 0
+          fi
+          python -m tests.eval.run_eval --mode direct --limit 3

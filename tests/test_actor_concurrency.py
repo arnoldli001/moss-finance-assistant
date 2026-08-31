@@ -272,7 +272,7 @@ async def test_slo_actor_concurrent_record():
     await actor.start()
 
     N = 200
-    N_SUCCESS = 240  # 240 成功，50 失败
+    N_SUCCESS = 150  # 150 成功，50 失败（150/200 = 0.75 可用性）
 
     async def _record(i: int):
         success = i < N_SUCCESS
