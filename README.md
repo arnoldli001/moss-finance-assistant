@@ -317,34 +317,6 @@ moss_finance_assistant/
 
 ---
 
-## 🎤 面试 Q&A 地图
-
-面试官最可能追问的 10 个问题，以及答案在仓库中的证据位置：
-
-| # | 追问 | 证据位置 |
-|---|------|---------|
-| 1 | 为什么 4 工具池 PTD 是负优化？ | `benchmarks/bench_ptd_tokens.py` 实测（607 vs 678 tok）+ `docs/adr/adr-0003` |
-| 2 | 语义缓存阈值怎么定的？ | `bench_semantic_cache_threshold.py` 扫描 0.70~0.98 + 嵌入区分度教训 |
-| 3 | LLM 当裁判可信吗？ | `bench_judge_consistency.py`：自一致 100% / 位置无偏 100% / 与人工对齐 80% |
-| 4 | 幻觉怎么防？会不会阻断回答？ | 三重管道 + "警示附加不阻断"策略（FAQ §幻觉防护） |
-| 5 | 注入防护为什么 fail-open？ | 可用性优先 + JSONL 审计兜底 + 可切 fail-closed（核心亮点 §4） |
-| 6 | 10 万 DAU 怎么扩？ | 本文「生产部署拓扑与扩容路径」L0→L4 |
-| 7 | 任务失控怎么办？ | 150s/1M token 双硬上限 + 错误四象限 + 熔断降级链（核心亮点 §3） |
-| 8 | WS 断线了怎么办？ | StreamResume + SSE Last-Event-ID 断点续传（API 表） |
-| 9 | 评估怎么防止"自嗨"？ | Judge 可靠性先行实测 + golden set 阈值阻断 CI（核心亮点 §5） |
-| 10 | 压测数据是真的吗？ | `benchmarks/results/k6_*_summary.json` + 本文基准表实测数字，可现场复跑 |
-
-## ✅ 面试前自证清单
-
-演示项目的可信度取决于"点开都能看"，任何 404/空 badge 都会减分：
-
-- [ ] **仓库设为 Public**（GitHub → Settings → General → Danger Zone）——badge/CI/ADR 链接才可访问
-- [ ] **推送最新代码**（P1/P2/P3 改动提交并 push，`git status` 应为 clean）
-- [ ] GitHub Actions **配 secrets**：`DEEPSEEK_API_KEY`（eval 抽样才不 skip）、`CODECOV_TOKEN`（覆盖率上传）
-- [ ] CI 首页绿勾：Actions 页确认 ruff + pytest(cov) + eval 三步全绿
-- [ ] 现场演示兜底：`python main.py server` + `k6 run benchmarks/k6/smoke.js` 3 分钟内可复跑全部断言
-
----
 
 ## ❓ FAQ
 
