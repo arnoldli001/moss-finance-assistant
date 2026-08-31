@@ -4,7 +4,7 @@
   <p align="center">
     <a href="https://github.com/arnoldli001/moss-finance-assistant/actions/workflows/ci.yml"><img src="https://github.com/arnoldli001/moss-finance-assistant/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
     <a href="https://codecov.io/gh/arnoldli001/moss-finance-assistant"><img src="https://codecov.io/gh/arnoldli001/moss-finance-assistant/graph/badge.svg" alt="Coverage"></a>
-    <img src="https://img.shields.io/badge/Python-3.10+-blue.svg" alt="Python">
+    <img src="https://img.shields.io/badge/Python-3.13-blue.svg" alt="Python">
     <img src="https://img.shields.io/badge/FastAPI-0.129.2-green.svg" alt="FastAPI">
     <img src="https://img.shields.io/badge/LangChain-1.2.10-orange.svg" alt="LangChain">
     <img src="https://img.shields.io/badge/deepagents-0.4.3-purple.svg" alt="deepagents">
