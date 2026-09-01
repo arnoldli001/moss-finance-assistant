@@ -349,7 +349,7 @@ def _bridged_record_success(self: TimeWindowCircuitBreaker) -> None:
         return
     if loop.is_running():
         try:
-            asyncio.create_task(_cb_actor.send(_CB_MSG_RECORD_SUCCESS, {"name": self.name}))
+            asyncio.create_task(_cb_actor.send(_CB_MSG_SUCCESS, {"name": self.name}))
         except Exception:
             pass
 
@@ -364,7 +364,7 @@ def _bridged_record_failure(self: TimeWindowCircuitBreaker) -> None:
         return
     if loop.is_running():
         try:
-            asyncio.create_task(_cb_actor.send(_CB_MSG_RECORD_FAILURE, {"name": self.name}))
+            asyncio.create_task(_cb_actor.send(_CB_MSG_FAILURE, {"name": self.name}))
         except Exception:
             pass
 
