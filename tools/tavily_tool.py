@@ -47,11 +47,22 @@ def _try_publish_retrieve_result(channel: str, query: str, items_list):
 # 使用 find_dotenv() 递归查找 .env 文件，确保从项目根目录加载
 load_dotenv(find_dotenv())
 
-# 步骤1： 定义一个TavilyClient对象
+# 步骤1： 定义一个TavilyClient对象（惰性：无 key 时不实例化，import 期不因缺 key 失败——CI/无 key 环境可安全加载）
 _tavily_api_key = os.getenv("TAVILY_API_KEY")
 if not _tavily_api_key:
     print("[Tavily] 警告: TAVILY_API_KEY 未加载，网络搜索将不可用！请检查 .env 文件")
-tavily_client = TavilyClient(api_key=_tavily_api_key)
+tavily_client = TavilyClient(api_key=_tavily_api_key) if _tavily_api_key else None
+
+
+def _get_tavily_client() -> TavilyClient:
+    """惰性获取 Tavily 客户端；首次调用时才强制要求 key（import 期保持零副作用）。"""
+    global tavily_client
+    if tavily_client is None:
+        key = os.getenv("TAVILY_API_KEY")
+        if not key:
+            raise RuntimeError("TAVILY_API_KEY 未配置：网络搜索不可用，请检查 .env 或环境变量")
+        tavily_client = TavilyClient(api_key=key)
+    return tavily_client
 
 # 连接重置等网络异常时的可重试异常类型集合
 _CONNECTION_ERRORS = (
@@ -94,8 +105,8 @@ def _raw_tavily_search_once(
     拆分后的每个子查询里使用：由 run_sync_parallel / run_async_parallel 并发驱动。
     返回：Tavily 原始返回 dict（已注入 _structured_items & publish SSE）。
     """
-    result = tavily_client.search(query=query, topic=topic,
-                                  max_results=max_results, include_raw_content=include_raw_content)
+    result = _get_tavily_client().search(query=query, topic=topic,
+                                         max_results=max_results, include_raw_content=include_raw_content)
     if isinstance(result, dict):
         raw_results = result.get("results") or []
         items_list = []

@@ -88,6 +88,8 @@ def cmd_test_imports(_args) -> int:
         except Exception as e:
             failed.append((name, f"{type(e).__name__}: {e}"))
             print(f"  [FAIL] {name}  ->  {type(e).__name__}: {e}")
+            # GitHub Actions 注解：失败详情直接显示在 PR/Actions UI 与 annotations API
+            print(f"::error::[import] {name} -> {type(e).__name__}: {str(e)[:180]}")
 
     print(f"\nImport test: {len(passed)} passed / {len(failed)} failed / total {len(cases)}")
     if failed:
