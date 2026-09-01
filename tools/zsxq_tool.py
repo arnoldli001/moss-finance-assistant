@@ -11,7 +11,7 @@
     后续运行自动加载 storage_state，无需重新登录。
 
 环境变量（写入 .env）：
-    ZSXQ_GROUP_ID=48848484411448   # 默认群组ID
+    ZSXQ_GROUP_ID=your-zsxq-group-id   # 默认群组ID（群组页面 URL 末段）
     ZSXQ_HEADLESS=true             # 是否无头模式（首次登录需设为 false）
 """
 import os
@@ -189,13 +189,24 @@ from tools.stock_matcher import (
 )
 
 # ======================== 配置 ========================
-ZSXQ_GROUP_ID = os.getenv("ZSXQ_GROUP_ID", "48848484411448")
+ZSXQ_GROUP_ID = os.getenv("ZSXQ_GROUP_ID", "").strip()
 ZSXQ_HEADLESS = os.getenv("ZSXQ_HEADLESS", "true").lower() == "true"
 # storage_state 文件路径（保存登录后的 Cookie）
 # 统一放在 output/zsxq_news/ 下，AGENTS.md L55-56 约定 output/ 为生成文件根目录
 ZSXQ_STATE_FILE = get_zsxq_news_dir(Path(_PROJECT_ROOT)) / ZSXQ_STATE_FILE_NAME
 # 群组页面 URL
 ZSXQ_GROUP_URL = f"https://wx.zsxq.com/group/{ZSXQ_GROUP_ID}"
+
+
+def _require_group_id(explicit: str | None = None) -> str:
+    """解析并校验群组ID：显式参数 > .env 配置；两者皆空时给出可行动的报错。"""
+    gid = (explicit or ZSXQ_GROUP_ID or "").strip()
+    if not gid:
+        raise ValueError(
+            "ZSXQ_GROUP_ID 未配置：请在 .env 设置 ZSXQ_GROUP_ID=<群组ID>"
+            "（登录 https://wx.zsxq.com 进入群组后，URL 末段即为群组ID）"
+        )
+    return gid
 
 # ======================== 浏览器互斥锁 ========================
 # 防止 search_zsxq_by_stock（按股票搜索）和 fetch_zsxq_group_topics（全量抓取）
@@ -205,10 +216,7 @@ _zsxq_browser_lock = _threading.Lock()
 _zsxq_active_operation = None  # 记录当前正在运行的操作名（"search" / "fetch_all" / None）
 # 浏览器可执行文件路径（支持任意 Chromium 内核浏览器：360极速、Chrome、Edge 等）
 # 留空则使用 Playwright 自带的 Chromium
-ZSXQ_BROWSER_PATH = os.getenv(
-    "ZSXQ_BROWSER_PATH",
-    r"C:\Users\Administrator\AppData\Local\360Chrome\Chrome\Application\360chrome.exe",
-)
+ZSXQ_BROWSER_PATH = os.getenv("ZSXQ_BROWSER_PATH", "")
 
 
 def _launch_browser(playwright, headless: bool):
@@ -636,7 +644,7 @@ def fetch_zsxq_group_topics(
     Returns:
         抓取结果摘要
     """
-    gid = group_id or ZSXQ_GROUP_ID
+    gid = _require_group_id(group_id)
 
     try:
         monitor.report_tool("知识星球抓取工具", "start")
@@ -800,7 +808,7 @@ def search_zsxq_topics(query: str, group_id: str = "") -> str:
     Returns:
         匹配的主题列表
     """
-    gid = group_id or ZSXQ_GROUP_ID
+    gid = _require_group_id(group_id)
 
     try:
         from mysql.connector import connect
@@ -856,7 +864,7 @@ def _fetch_topics_by_search(
     """
     from playwright.sync_api import sync_playwright
 
-    gid = group_id or ZSXQ_GROUP_ID
+    gid = _require_group_id(group_id)
     topics: List[Dict] = []
     api_topics: Dict[str, Dict] = {}  # API 拦截到的元数据（topic_id → raw dict）
 
