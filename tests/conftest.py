@@ -87,6 +87,48 @@ def pytest_pyfunc_call(pyfuncitem: pytest.Function) -> Any:
     return True
 
 
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> int:
+    """收尾兜底：关闭测试期间泄漏的 aiosqlite 连接。
+
+    aiosqlite 每个连接持有一个**非 daemon** 的 _connection_worker_thread，
+    若测试结束（尤其事件循环被本 conftest 每用例新建/关闭）时连接未 close，
+    该线程会永久存活并阻塞解释器退出（threading._shutdown 无限 join）——
+    表现为 pytest 打完汇总后进程挂死，CI 上直到 job 超时被杀。
+    这里在会话结束时统一扫描并关闭残留连接（close() 不依赖原事件循环，
+    可在新循环中安全执行；未真正启动线程的连接 close() 会立即返回）。
+    """
+    try:
+        import gc
+
+        import aiosqlite
+    except ImportError:  # pragma: no cover
+        return exitstatus
+
+    leaked = [o for o in gc.get_objects() if isinstance(o, aiosqlite.Connection)]
+    if not leaked:
+        return exitstatus
+
+    loop: Any = None
+    try:
+        loop = asyncio.new_event_loop()
+        for conn in leaked:
+            try:
+                loop.run_until_complete(
+                    asyncio.wait_for(conn.close(), timeout=5)
+                )
+            except Exception:
+                pass
+    except Exception:
+        pass
+    finally:
+        if loop is not None:
+            try:
+                loop.close()
+            except Exception:
+                pass
+    return exitstatus
+
+
 # ======================================================================
 # P0 鉴权 + 限流：共享 fixtures（tests/test_auth.py 复用，亦可供其它单测用）
 # ======================================================================

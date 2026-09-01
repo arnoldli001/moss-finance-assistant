@@ -24,7 +24,13 @@ __pycache__/
 # ========================
 output/
 updated/
-data/
+data/*
+!data/stock_list.txt
+# 嵌套子包的运行时数据（SQLite 等）继续忽略；根 data/ 仅白名单股票清单
+agents/data/
+governance/data/
+interfaces/data/
+shared/data/
 cache/
 logs/
 *.log
