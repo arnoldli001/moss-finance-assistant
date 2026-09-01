@@ -34,10 +34,10 @@ jobs:
       - name: Import 链冒烟（新结构路径 + 兼容别名全量验证）
         run: python main.py test-imports
 
-      - name: 单元测试（含覆盖率）
+      - name: 单元测试（含覆盖率；-v 显示逐测试进度，faulthandler 在测试卡死 120s 时转储全线程栈定位卡点）
         env:
           PTD_ENABLED: "0"   # 测试环境关闭 PTD 路由，走全量工具披露
-        run: pytest tests/ -q --tb=short --cov --cov-report=term-missing --cov-report=xml
+        run: pytest tests/ -v --tb=short --cov --cov-report=term-missing --cov-report=xml --faulthandler-timeout=120
 
       - name: 上传覆盖率到 Codecov（失败不阻断 CI）
         uses: codecov/codecov-action@v5
