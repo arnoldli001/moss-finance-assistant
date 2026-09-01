@@ -973,8 +973,11 @@ _AUTH_PUBLIC_PREFIXES: Tuple[str, ...] = (
     "/health", "/docs", "/openapi.json", "/redoc",
     "/favicon.ico", "/static/",
     "/api/auth/", "/api/auth-",  # 登录/注册/刷新/游客/改密码 5 端点
-    "/api/users",                 # 兼容旧 POST /api/users（明文 create_or_login）与 GET /api/users/{id}（router smoke 用例）
 )
+# /api/users 白名单在 _is_public 内精细实现：仅 POST /api/users（旧明文登录）与
+# 单段 GET /api/users/{id} 保持公开；/api/users/{uid}/sessions* 一律走 JWT 强制鉴权
+# （P1 修复：白名单曾导致 sessions 端点按匿名 IP guest 档限流——登录用户点会话页签易 429，
+#   且匿名请求绕过行级校验可读任意用户会话列表）
 _AUTH_PUBLIC_EXACT: Tuple[str, ...] = ("/",)
 
 # 旧 IP 限流兜底保留：未登录（无 JWT）时用 client_ip 当 key，不再只做 60/60s 统一，
@@ -1003,6 +1006,11 @@ class AuthAndRateLimitMiddleware(BaseHTTPMiddleware):
     def _is_public(self, path: str) -> bool:
         if path in _AUTH_PUBLIC_EXACT:
             return True
+        # 旧明文登录与单段用户信息查询保持公开；更深路径（/api/users/{uid}/sessions*）强制 JWT
+        if path == "/api/users":
+            return True
+        if path.startswith("/api/users/"):
+            return "/" not in path[len("/api/users/"):]
         for p in _AUTH_PUBLIC_PREFIXES:
             if path.startswith(p):
                 return True
@@ -2469,22 +2477,20 @@ async def get_user_info(user_id: str,
 
 @app.get("/api/users/{user_id}/sessions")
 async def list_user_sessions(user_id: str,
-                             current: Optional[CurrentUser] = _Depends(get_current_user_optional)):
-    """列出某用户的所有会话。登录态强制行级校验。"""
+                             current: CurrentUser = _Depends(get_current_user)):
+    """列出某用户的所有会话（P1：强制登录 + 行级校验，匿名一律 401）。"""
     if not storage.get_user(user_id):
         raise HTTPException(status_code=HTTP_CODE_NOT_FOUND, detail="用户不存在")
-    if current is not None:
-        current_user_id_must_match(current, user_id)
+    current_user_id_must_match(current, user_id)
     sessions = storage.list_sessions(user_id)
     return {"sessions": sessions}
 
 
 @app.post("/api/users/{user_id}/sessions")
 async def create_session(user_id: str, req: SessionRequest,
-                         current: Optional[CurrentUser] = _Depends(get_current_user_optional)):
-    """为用户新建一个会话，返回 session_id。登录态强制行级校验。"""
-    if current is not None:
-        current_user_id_must_match(current, user_id)
+                         current: CurrentUser = _Depends(get_current_user)):
+    """为用户新建一个会话（P1：强制登录 + 行级校验，堵住匿名预埋会话口子）。"""
+    current_user_id_must_match(current, user_id)
     storage.get_or_create_user(user_id)
     session = storage.create_session(user_id, req.title)
     return {"status": "ok", "session": session}

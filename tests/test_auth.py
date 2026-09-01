@@ -235,3 +235,32 @@ def test_change_password_old_wrong_401(authenticated_user):
     detail = (r.json() or {}).get("detail") or {}
     code = detail.get("code") if isinstance(detail, dict) else None
     assert code == "OLD_PASSWORD_MISMATCH", f"期望 OLD_PASSWORD_MISMATCH，实={code}"
+
+
+# ======================================================================
+# S10：/api/users/{uid}/sessions 强制鉴权（P1 修复回归）
+#   修复前：端点在 _AUTH_PUBLIC_PREFIXES 白名单内按匿名放行 ——
+#     a) 匿名可读任意用户会话列表/预埋会话（越权）；
+#     b) 登录用户点会话页签也按 IP guest 档(10 QPM)限流 → RATE_LIMIT_PUBLIC 429
+# ======================================================================
+def test_user_sessions_require_auth(unauth_client, two_users):
+    user_a, user_b = two_users
+    uid = user_a["user_id"]
+
+    # 匿名（无 token）：列表/创建一律 401（middleware 层拦截）
+    r_get = unauth_client.get(f"/api/users/{uid}/sessions")
+    assert r_get.status_code == 401, f"sessions(no token) 期望 401，实={r_get.status_code}"
+    r_post = unauth_client.post(f"/api/users/{uid}/sessions", json={"title": "x"})
+    assert r_post.status_code == 401, f"create(no token) 期望 401，实={r_post.status_code}"
+
+    # 登录用户访问他人 sessions → 403 行级隔离
+    r_other = user_b["client"].get(f"/api/users/{uid}/sessions")
+    assert r_other.status_code == 403, f"他人 sessions 期望 403，实={r_other.status_code}"
+
+    # 登录用户本人 → 200
+    r_self = user_a["client"].get(f"/api/users/{uid}/sessions")
+    assert r_self.status_code == 200, f"本人 sessions 期望 200，实={r_self.status_code} {r_self.text}"
+
+    # 旧明文登录端点 POST /api/users 与单段 GET /api/users/{id} 仍保持公开（兼容）
+    r_legacy = unauth_client.post("/api/users", json={"user_id": f"t_s10_{uuid.uuid4().hex[:8]}"})
+    assert r_legacy.status_code == 200, f"旧明文登录应保持公开，实={r_legacy.status_code}"
