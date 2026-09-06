@@ -1,4 +1,4 @@
-from agent.prompts import sub_agents_content
+from agents.analyst.prompts_legacy import sub_agents_content
 from tools.db_tools import list_sql_tables,get_table_data,execute_sql_query
 
 database_query_agent = {

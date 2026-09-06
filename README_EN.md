@@ -249,7 +249,7 @@ python -m tests.eval.run_eval --mode direct --limit 3   # LLM eval sampling
 | POST | `/api/task/stop` | Stop the current task (CancellationToken cascading cancel) |
 | POST | `/api/auth/register` / `login` / `refresh` / `guest` | JWT auth endpoints (guest = one-click, 10 QPM) |
 | POST | `/api/zsxq-analysis` | Pre-market note heatmap analysis |
-| POST | `/api/review-prediction` | Review & prediction (injects Beijing time + auto search window) |
+| POST | `/api/review-prediction` | Review & prediction: stage1 note heatmap ∥ stage2 pre-market news (reuses button workflow: 6h cache → dual-source → direct synthesis) in parallel → stage3 DeepSeek index forecast; per-stage budgets 150/280/150s with a 450s background cap; on timeout, raw results of finished stages degrade gracefully |
 | GET/POST/DELETE | `/api/users/*` `/api/sessions/*` | User/session management (JWT + row-level ownership checks) |
 | **GET** | **`/api/slo/status`** | **SLO snapshot (availability/error budget/degradation/breakers; owner/admin)** |
 | **GET** | **`/api/circuit-breakers`** | **Real-time breaker states (CLOSED/OPEN/HALF_OPEN)** |

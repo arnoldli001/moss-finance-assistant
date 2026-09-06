@@ -154,24 +154,50 @@ class SkillManager:
         scored.sort(key=lambda x: (-x[0], x[1].name))
         return [sd for _, sd in scored]
 
+    # 注入体积硬上限：巨型 SKILL.md（如 trading-reliability 17KB）整段注入会
+    # 撑爆上下文，并诱发模型在回答中复读规范原文（实测泄露到前端）。双层限制：
+    _MAX_CHARS_PER_SKILL: int = 4000   # 单个 skill 注入上限
+    _MAX_TOTAL_CHARS: int = 8000       # 单次注入总量上限（max_skills 个累计）
+
     def build_skill_prefix(self, user_query: str, max_skills: int = 2) -> str:
         """
         将匹配到的 SKILL.md 内容拼成注入到 user query 前的前缀字符串。
         匹配不到返回空串。
-        为防止 context 爆炸，默认最多注入 2 个 skill（按匹配度排序取前 2）。
+        为防止 context 爆炸，默认最多注入 2 个 skill（按匹配度排序取前 2），
+        且每个/总量受 _MAX_CHARS_PER_SKILL / _MAX_TOTAL_CHARS 硬上限约束，
+        超长截断并标注，保证 query 本体始终占据上下文主体。
         """
         matched = self.match_skills(user_query)[:max_skills]
         if not matched:
             return ""
         blocks: List[str] = []
+        total = 0
         for sd in matched:
-            content = sd.load_content()
+            content = self._injectable_content(sd)
+            if len(content) > self._MAX_CHARS_PER_SKILL:
+                content = (
+                    content[: self._MAX_CHARS_PER_SKILL]
+                    + f"\n…（SKILL「{sd.name}」内容过长已截断，完整规范见 skills/{sd.name}/SKILL.md）"
+                )
+            if total + len(content) > self._MAX_TOTAL_CHARS:
+                break  # 剩余预算不足：宁可少注入也不挤占用户 query
+            total += len(content)
             blocks.append(
                 f"\n{'='*6} 自动加载 Skill: {sd.name} {'='*6}\n"
                 f"{content}\n"
                 f"{'='*10} Skill 结束: {sd.name} {'='*10}\n"
             )
         return "\n".join(blocks)
+
+    @staticmethod
+    def _injectable_content(sd: SkillDef) -> str:
+        """注入给 LLM 的内容 = SKILL.md 去掉 YAML frontmatter。
+        frontmatter（name/description/trigger-keywords/allowed-tools）是注册元数据，
+        对回答无益，注入反而诱导模型复读元数据。"""
+        raw = sd.load_content()
+        _, body = _split_frontmatter(raw)
+        body = body.strip()
+        return body if body else raw.strip()
 
     # --------------------------------------------------------------
     # 调试/健康检查

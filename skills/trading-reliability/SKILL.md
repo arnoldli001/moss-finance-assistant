@@ -3,82 +3,43 @@ name: trading-reliability
 description: 金融量化交易系统可靠性工程专家。用于指导企业级量化交易系统的错误处理、故障恢复、熔断降级、灾备切换与SLO驱动的可靠性治理。
 allowed-tools: Read, Write, Bash, MCP
 trigger-keywords:
-  # 交易场景
-  - 交易
-  - 下单
-  - 撤单
-  - 撮合
-  - 券商
-  - 交易所
-  - 实盘
-  - 回测
-  - 策略
-  - 风控
-  - 持仓
-  - 订单
+  # 交易系统故障场景（必须用复合词！单个"交易/策略/风控"等宽泛词
+  # 会误命中普通投研查询，把 17KB SRE 规范注入对话，诱发模型复读泄露）
+  - 交易系统
+  - 下单失败
+  - 下单重试
+  - 撤单失败
+  - 券商接口
+  - 实盘下单
+  - 订单重复
   - 幂等
-  - trading
-  - order
-  - strategy
-  - broker
-  # 故障与可靠性场景
-  - 故障
-  - 报错
-  - 错误处理
-  - 熔断
-  - 降级
-  - 重试
-  - 灾备
+  - trading system
+  - order failure
+  - idempotent
+  # 故障与可靠性场景（同样只保留复合/专业词）
+  - 熔断降级
+  - 故障恢复
+  - 灾备切换
   - 容灾
+  - 混沌工程
+  - 故障演练
+  - 故障复盘
+  - postmortem
+  - circuit breaker
+  - degradation chain
+  - observability
   - SLO
   - SLA
-  - 可靠性
-  - 可观测性
-  - 监控
-  - 告警
-  - 事故
-  - 复盘
-  - 混沌工程
-  - failure
-  - retry
-  - circuit
-  - breaker
-  - degrade
-  - observability
-  - incident
-  - postmortem
-  # 代码生成/排查场景
-  - 生成代码
-  - 写代码
-  - 代码审查
-  - 排查问题
-  - 问题排查
-  - debug
-  - 调试
-  - 异常
-  - exception
-  - 超时
-  - timeout
-  - 网络抖动
-  - 丢包
-  - 数据校验
-  - 数据一致性
-  # 幻觉防护场景
-  - 幻觉
-  - hallucination
-  - 引用追踪
-  - 来源标注
-  - LLM-as-Judge
-  - JSON Schema
-  - 输出验证
-  - citation
   # 降级链场景
   - 降级链
-  - degradation chain
-  - 兜底
-  - 静态模板
+  - 静态模板兜底
   - Token 预算
-  - 硬上限
+  # 幻觉防护场景
+  - 幻觉检测
+  - LLM-as-Judge
+  - 引用追踪
+  - 来源标注
+  - 输出验证
 ---
 
 # 金融量化交易系统可靠性工程规范

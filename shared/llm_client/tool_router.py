@@ -17,14 +17,13 @@ from __future__ import annotations
 
 import re
 import json
-import copy
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set, Tuple, AsyncIterator
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from langchain_core.runnables import Runnable
 from langchain_core.messages import (
-    AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
+    AIMessage, HumanMessage
 )
 from langchain_core.outputs import ChatGenerationChunk
 from langchain_core.tools import BaseTool
@@ -38,8 +37,7 @@ from dotenv import load_dotenv, find_dotenv
 load_dotenv(find_dotenv())
 
 # 运行时提示词模板访问器（路由菜单的 header/footer 抽取到 prompts.yml）
-from agent.prompts import format_prompt
-
+from agents.analyst.prompts_legacy import format_prompt
 # 取消联动检查点（路由/执行前主动检查）
 from agent.request_context import check_cancelled
 

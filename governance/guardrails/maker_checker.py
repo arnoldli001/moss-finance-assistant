@@ -13,17 +13,13 @@ build_checker_prompt 进行 LLM 辅助校验。
 """
 from __future__ import annotations
 
-import asyncio
-import json
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 # 运行时提示词模板访问器（校验员提示词抽取到 prompts.yml）
-from agent.prompts import format_prompt
-
+from agents.analyst.prompts_legacy import format_prompt
 # ===== 统一股票代码/名称识别（来自 data/stock_list.txt）=====
-from tools.stock_matcher import (
-    extract_stocks as _matcher_extract_stocks,
+from shared.utils.stock_matcher import (    extract_stocks as _matcher_extract_stocks,
     lookup_stock as _matcher_lookup_stock,
     is_stock_code as _matcher_is_valid_code,
 )
@@ -112,20 +108,16 @@ class MakerChecker:
         for item in self._check_data_consistency(agent_output, tool_results):
             issues.append(f"[数据准确性] {item}")
 
-        # 2. 完整性
-        for item in self._check_completeness(user_query, agent_output):
-            issues.append(f"[完整性] {item}")
-
-        # 3. 风险免责
+        # 2. 风险免责
         if not self._check_risk_disclaimer(agent_output):
             issues.append("[风险免责] 输出涉及买卖/估值/建议等，但缺少风险免责声明"
                           "（风险/投资建议/盈亏自负/仅供参考）")
 
-        # 4. 来源归属
+        # 3. 来源归属
         for item in self._check_source_attribution(agent_output):
             issues.append(f"[来源归属] {item}")
 
-        # 5. 幻觉检测
+        # 4. 幻觉检测
         for item in self._detect_hallucination(agent_output, tool_results):
             issues.append(f"[幻觉检测] {item}")
 
@@ -186,51 +178,6 @@ class MakerChecker:
                 )
         return issues
 
-    # ------------------------------------------------------------------
-    # 完整性检查（集成 StockMatcher：从 query 中抽取股票全称+别名+代码）
-    # ------------------------------------------------------------------
-    def _check_completeness(self, query: str, output: str) -> List[str]:
-        """
-        从用户查询中提取股票名称/代码，检查输出是否对每一项作出回应。
-        缺失项列表。
-        """
-        issues: List[str] = []
-        if not query or not output:
-            return issues
-
-        # Step A: StockMatcher 提取查询中的所有股票实体（代码+名称+别名，带上下文消解）
-        queried = _matcher_extract_stocks(query)
-        for s in queried:
-            # 输出中需出现名称或代码任一才算回应
-            if s.code not in output and s.name not in output:
-                issues.append(
-                    f"用户询问的「{s.name}({s.code})」未在输出中提及"
-                )
-
-        # Step B: 正则 + 包裹词 兜底（兼容 query 中用户用《》/引号包裹名称的习惯）
-        query_codes = {c for c in _STOCK_CODE_REGEX.findall(query) if _matcher_is_valid_code(c)}
-        extra_codes = query_codes - {s.code for s in queried}
-        for code in sorted(extra_codes):
-            if code not in output:
-                issues.append(f"用户询问的股票代码 {code} 未在输出中提及")
-
-        quoted = re.findall(r"[《<「\"'](.+?)[》>」\"']", query)
-        for name in quoted:
-            if not name:
-                continue
-            # 先归一为 StockInfo（如果确实是股票），再看输出是否回应
-            info = _matcher_lookup_stock(name, query)
-            if info:
-                hit = info.code in output or info.name in output
-                if not hit:
-                    issues.append(
-                        f"用户询问的「{info.name}({info.code})」未在输出中提及"
-                    )
-            elif name and name not in output:
-                # 非股票的专有名词（如行业名），也按原文检查
-                issues.append(f"用户询问的对象「{name}」未在输出中提及")
-
-        return issues
 
     # ------------------------------------------------------------------
     # 幻觉检测

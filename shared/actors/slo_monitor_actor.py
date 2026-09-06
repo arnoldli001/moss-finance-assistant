@@ -25,8 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Deque, Dict, List, Optional
 
-from agent.actor_base import Actor, Envelope
-
+from shared.actors.actor_base import Actor, Envelope
 # ===== 全局常量集中引用（替代魔鬼数字，统一修改一处即全局生效）=====
 from config.constants import (
     SLO_AVAILABILITY_TARGET,

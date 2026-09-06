@@ -12,33 +12,30 @@ from tools.upload_file_read_tool import read_file_content
 
 from deepagents import create_deep_agent
 
-from agent.llm import model
-from agent.prompts import main_agent_content, format_prompt
-
+from shared.llm_client.deepseek_client import model
+from agents.analyst.prompts_legacy import main_agent_content, format_prompt
 # Loop Engineering — SKILL 自动加载（按用户提问关键词注入专业规范）
 from agent.skill_manager import get_skill_manager
 
 # Context Engineering 记忆管理（滑窗 + 摘要压缩 + 优先级排序）
-from agent.memory_manager import get_memory_manager
+from agents.reasoning.memory_manager import get_memory_manager
 # Progressive Tool Disclosure 渐进式工具披露（两阶段路由：零Schema→选子集披露）
-from agent.tool_router import reset_route_state, set_ptd_query, reset_ptd_query
+from shared.llm_client.tool_router import reset_route_state, set_ptd_query, reset_ptd_query
 # Layer2: Context Engineer — 时效性去重、来源可靠性甄别、2000字精简裁剪
-from agent.context_engineer import get_context_engineer
+from agents.reasoning.context_engineer_legacy import get_context_engineer
 # 知识星球股票搜索工具（按股票名搜索研报/小作文/新闻 + Qwen8B分析汇总）
 from tools.zsxq_tool import search_zsxq_by_stock
 # Layer3: Trace 可观测性 — 记录每轮 input/output/tool_calls/token/latency
-from agent.trace import get_trace_logger
+from governance.monitor.trace import get_trace_logger
 # Layer3: Feedback Handler — 用户质疑反驳检测 + 错误学习记忆
-from agent.feedback_handler import get_feedback_handler
+from governance.feedback.feedback_handler import get_feedback_handler
 # Layer3: Maker-Checker — 输出质量校验（数据一致性/风险声明/幻觉检测）
-from agent.maker_checker import get_maker_checker
+from governance.guardrails.maker_checker import get_maker_checker
 # Layer3: 可靠性组件 — 熔断器、错误分类、降级链、幻觉防护、SLO 监控
-from agent.circuit_breaker import get_circuit_registry
-from agent.error_classifier import get_error_classifier, ErrorQuadrant
-from agent.degradation_chain import get_degradation_chain, DegradationTier
-from agent.hallucination_guard import get_hallucination_guard
-from agent.slo_monitor import get_slo_monitor, SLOEvent
-
+from governance.guardrails.circuit_breaker import get_circuit_registry
+from governance.guardrails.error_classifier import get_error_classifier
+from governance.guardrails.hallucination_guard import get_hallucination_guard
+from governance.monitor.slo_monitor import get_slo_monitor, SLOEvent
 from config.constants import (
     SLO_MAX_TASK_SEC,
     MAIN_AGENT_RECURSION_LIMIT,
@@ -51,31 +48,23 @@ from config.constants import (
 from api.monitor import monitor
 import re
 import asyncio
-import uuid
-import shutil
 import time
 import os
 from contextvars import ContextVar
 from pathlib import Path
 
-# §3 / §4 协议适配与编排路由层新增引用（adapter）
-try:
-    from adapter import (
-        build_citation_context,
-        patch_system_prompt_require_reasoning_and_citations,
-        assign_citations_by_overlap,
-        normalize_citation_markers,
-        ThinkTagSplitter,
-    )
-    _HAS_ADAPTER = True
-except Exception as _e_adapter:
-    # 导入失败不应阻塞启动（比如 adapter/__init__.py 被误删），给打印告警
-    print(f"[main_agent] adapter 导入失败（断点续传/引用注入降级运行）: {_e_adapter}")
-    _HAS_ADAPTER = False
+# §3 / §4 协议适配与编排路由层（引用注入/思考标签拆分；真源 shared/llm_client/stream_adapters.py）
+from shared.llm_client.stream_adapters import (
+    build_citation_context,
+    patch_system_prompt_require_reasoning_and_citations,
+    assign_citations_by_overlap,
+    normalize_citation_markers,
+    ThinkTagSplitter,
+)
+_HAS_ADAPTER = True
 
 from api.context import set_session_context, reset_session_context, set_thread_context
 
-from langchain_core.messages import AIMessage
 
 # 【工作环境指令】及后续"规则/工作目录"段落的过滤正则
 # 匹配：换行 + 缩进空格 + 【工作环境指令】开始直到结尾的整段内容（包含、规则1-4等）
@@ -528,7 +517,6 @@ def _emit_model_cot_and_normalize_citations(
     # ----- 7. 注册 citation_meta（用于"悬停卡片"）并下发一次 citation_meta + delta（最终文本整段） -----
     # 7.1 给 bus.set_citation_meta 的"聚焦 snippet 中心窗口"提供答案命中句 hint
     try:
-        from api.stream_bus import get_stream_bus_sync as _gbus_sync
         _state = bus.get_thread_state(thread_id)
         _sents = _split_into_sentences(normalized_body, max_chars=220)
         _state._final_sentences_hint = list(_sents)[:12]  # 最多 12 句就够匹配
@@ -676,7 +664,7 @@ def _set_slo_actor(actor: _Any) -> None:
     global _slo_actor
     _slo_actor = actor
     # 给 slo_monitor 模块也打个补丁：record_event 有 Actor 就先 Actor 后本地（幂等双写）
-    import agent.slo_monitor as _slo_mod
+    import governance.monitor.slo_monitor as _slo_mod
     _orig_record = _slo_mod.SLOMonitor.record_event
 
     def _bridged_record_event(self: _slo_mod.SLOMonitor, event: _slo_mod.SLOEvent) -> None:
@@ -715,9 +703,8 @@ import aiosqlite
 from agent.request_context import (
     check_cancelled,
     current_context,
-    current_token,
 )
-_project_root = Path(__file__).resolve().parents[1]
+_project_root = Path(__file__).resolve().parents[2]  # 本文件在 agents/analyst/ 下，parents[2] 才是项目根（曾因 parents[1] 漂移到 agents/data/）
 _data_dir = _project_root / "data"
 _data_dir.mkdir(parents=True, exist_ok=True)
 _checkpointer_db = _data_dir / "checkpointer.db"
@@ -847,7 +834,7 @@ async def get_main_agent():
 
 
 
-project_root_path = Path(__file__).parents[1].resolve() # 绝对 解析路径标识以及软连接
+project_root_path = Path(__file__).parents[2].resolve() # 绝对 解析路径标识以及软连接（parents[2]=项目根，output/ 会话目录统一到根下）
 
 async def run_deep_agent(task_query, session_id, user_id=None, quiet: bool = False):
     """
@@ -883,7 +870,7 @@ async def run_deep_agent(task_query, session_id, user_id=None, quiet: bool = Fal
     # 更新会话元数据：首条消息时自动生成标题（user_id+关键词+日期），刷新 updated_at
     if user_id:
         try:
-            from api import storage
+            from interfaces.api import storage
             existing = storage.get_session(session_id)
             if existing and (existing.get("title") in (None, "", "新会话")):
                 auto_title = storage.generate_default_title(user_id, task_query)
@@ -1136,7 +1123,7 @@ async def run_deep_agent(task_query, session_id, user_id=None, quiet: bool = Fal
                             try:
                                 from config.constants import STOCK_CACHE_ENABLED as _sce_on
                                 if _sce_on:
-                                    from cache.stock_cache import extract_stock_name, write_stock_cache
+                                    from orchestration.skills.stock_cache import extract_stock_name, write_stock_cache
                                     _stk = extract_stock_name(pure_user_query_inner)
                                     if _stk:
                                         _wpath = write_stock_cache(
@@ -1349,7 +1336,7 @@ async def run_deep_agent(task_query, session_id, user_id=None, quiet: bool = Fal
             tl = get_trace_logger()
             latency_ms = int((time.time() - _trace_start) * 1000)
             # 获取 PTD 披露的工具列表
-            from agent.tool_router import _get_or_init_state
+            from shared.llm_client.tool_router import _get_or_init_state
             ptd_state = _get_or_init_state()
             ptd_tools = sorted(ptd_state.selected_tool_ids) if ptd_state else []
             # 获取记忆统计
@@ -1408,11 +1395,10 @@ async def get_session_history(session_id: str, limit: int = MAIN_AGENT_SESSION_H
     try:
         agent = await get_main_agent()
         config = {"configurable": {"thread_id": session_id}}
-        # aget_state_history 从新到旧迭代，取最新的一个快照即可（它包含完整消息列表）
-        latest_state = None
-        async for chunk in agent.aget_state_history(config):  # type: ignore[arg-type]
-            latest_state = chunk
-            break  # 只取第一个（最新）
+        # aget_state 只读主图（checkpoint_ns=''）最新快照：
+        # 旧实现用 aget_state_history 取第一个，会误读子图（tools:*）快照，
+        # 导致切会话时只看到子任务消息、主历史"消失"。
+        latest_state = await agent.aget_state(config)  # type: ignore[attr-defined]
         if not latest_state or not latest_state.values:
             return []
         msgs = []

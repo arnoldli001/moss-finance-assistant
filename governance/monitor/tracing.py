@@ -12,8 +12,9 @@ OpenTelemetry 分布式追踪接入层：SLO 指标但无分布式追踪，跨Ag
 
 典型用法：
     # 应用启动时
-    from agent.observability import init_tracing, shutdown_tracing, agent_span, llm_span
-    init_tracing()
+    from governance.monitor.tracing import init_tracing, shutdown_tracing, agent_span, llm_span
+init_tracing
+()
 
     # 主流程入口（FastAPI middleware / WebSocket handler）
     set_request_trace_context(request_id="abc123", user_id="u1", session_id="s1")

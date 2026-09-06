@@ -61,7 +61,6 @@ from config.constants import (
 from tests.eval.judge_prompt import (
     JUDGE_SYSTEM_PROMPT,
     JUDGE_USER_PROMPT_TEMPLATE,
-    HALLUCINATION_CHECK_PROMPT,
 )
 
 

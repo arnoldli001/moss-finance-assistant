@@ -4,7 +4,7 @@ from typing import Optional
 
 
 def resolve_path(filename: str, session_dir: Optional[str] = None) -> str:
-    import os
+    pass
 from pathlib import Path
 from typing import Optional
 

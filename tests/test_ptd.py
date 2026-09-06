@@ -4,30 +4,23 @@
 工具裁剪、Schema 节省估算等。
 运行方式：python tests/test_ptd.py
 """
-import asyncio
 import sys
-import json
 from pathlib import Path
 
 # 测试文件位于 tests/ 子目录，需要向上一级找到项目根目录
 project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(project_root))
 
-from agent.tool_router import (
-    PRESET_INDEX, VIRTUAL_TO_REAL,
+from shared.llm_client.tool_router import (    PRESET_INDEX, VIRTUAL_TO_REAL,
     build_route_menu, parse_route_output,
     heuristic_select_from_query, filter_tools_by_selected,
-    _tool_name, reset_route_state, _get_or_init_state,
-    ProgressiveToolDisclosureModel,
+    _tool_name, ProgressiveToolDisclosureModel,
 )
 
 # 引入项目实际 tools（用于真实估算 schema 大小）
 from tools.markdown_tools import generate_markdown
 from tools.pdf_tools import convert_md_to_pdf
 from tools.upload_file_read_tool import read_file_content
-from tools.ragflow_tools import search_knowledge_base
-from tools.tavily_tool import internet_search
-from tools.db_tools import list_sql_tables, get_table_data, execute_sql_query
 
 
 def _make_mock_task_tool():

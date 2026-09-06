@@ -249,7 +249,7 @@ python -m tests.eval.run_eval --mode direct --limit 3   # LLM 评估抽样
 | POST | `/api/task/stop` | 停止当前任务（CancellationToken 级联取消） |
 | POST | `/api/auth/register` / `login` / `refresh` / `guest` | JWT 认证四端点（guest 一键游客，10 QPM） |
 | POST | `/api/zsxq-analysis` | 盘前小作文热度分析 |
-| POST | `/api/review-prediction` | 复盘预测（注入北京时间 + 自动搜索时间窗口） |
+| POST | `/api/review-prediction` | 复盘预测：阶段1小作文热度 ∥ 阶段2盘前新闻（复用按钮工作流：6h缓存→双源并发→直连综答）并行 → 阶段3 DeepSeek 指数预测；分段预算 150/280/150s，后台 450s 兜底，任一阶段超时降级输出已完成阶段原始结果 |
 | GET/POST/DELETE | `/api/users/*` `/api/sessions/*` | 用户/会话管理（JWT + 行级越权校验） |
 | **GET** | **`/api/slo/status`** | **SLO 快照（可用性/错误预算/降级链/熔断器，owner/admin）** |
 | **GET** | **`/api/circuit-breakers`** | **熔断器实时状态（CLOSED/OPEN/HALF_OPEN）** |

@@ -11,19 +11,17 @@ Context Engineering 记忆管理模块。
 from __future__ import annotations
 
 import re
-import json
 import asyncio
 import sqlite3
 import aiosqlite
 import threading
 import datetime
-from dataclasses import dataclass, asdict, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 
 from dotenv import load_dotenv, find_dotenv
 load_dotenv(find_dotenv())
-import os
 
 # ===== 全局常量集中引用（替代魔鬼数字，统一修改一处即全局生效）=====
 from config.constants import (
@@ -57,7 +55,7 @@ from agent.request_context import check_cancelled, current_token
 
 # ======================================================================
 # 配置项（已统一迁移到 config/constants.py，按 .env 环境变量覆盖后重新赋值）
-# 保留变量名以兼容外部直接 from agent.memory_manager import WINDOW_KEEP_LAST_N 的使用方式
+# 变量名保持稳定：外部通过 from agents.reasoning.memory_manager import WINDOW_KEEP_LAST_N 引用
 # ======================================================================
 # 滑窗：最近 N 轮完整保留原始内容
 WINDOW_KEEP_LAST_N = MEMORY_WINDOW_KEEP_LAST_N
@@ -159,7 +157,7 @@ class MemoryManager:
         if hasattr(self, "_initialized") and self._initialized:
             return
         self._initialized = True
-        project_root = Path(__file__).resolve().parents[1]
+        project_root = Path(__file__).resolve().parents[2]  # 本文件在 agents/reasoning/ 下，parents[2] 才是项目根（曾因 parents[1] 漂移到 agents/data/）
         data_dir = project_root / "data"
         data_dir.mkdir(parents=True, exist_ok=True)
         self._db_path = data_dir / "memory.db"

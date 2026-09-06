@@ -17,12 +17,10 @@ Actor 化后：
 """
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional, Set
+from typing import Any, Dict, Set
 
-from agent.actor_base import Actor, Envelope, Msg
-
+from shared.actors.actor_base import Actor, Envelope
 
 # ======================================================================
 # 消息类型常量

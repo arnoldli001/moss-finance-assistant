@@ -131,7 +131,7 @@ def search_knowledge_base(query: str, knowledge_base_name: str = "") -> str:
         #   按常量 RECENCY_KEEP_ON_PARSE_FAIL_CHANNELS=(ima,)，解析失败/超期条目仍保留
         #   （入库时间不代表新闻时效性）；只在三通道汇总时再做 prefer→fallback 降级判定。
         try:
-            from adapter.stream_adapters import filter_items_by_recency
+            from shared.llm_client.stream_adapters import filter_items_by_recency
             all_results, _applied_ima, _fb_ima = filter_items_by_recency(
                 all_results, channel="ima", auto_fallback=False
             )

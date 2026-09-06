@@ -13,20 +13,18 @@ Layer 3 Harness Engineering —— 用户质疑 / 反驳处理 + 错误学习模
 from __future__ import annotations
 
 import re
-import json
 import sqlite3
 import aiosqlite
-import asyncio
 import datetime
-import os
-from typing import Any, Dict, List, Optional, Tuple
-from dataclasses import dataclass, field
+from typing import Dict, List, Optional
+from dataclasses import dataclass
 from pathlib import Path
 
 from dotenv import load_dotenv, find_dotenv
 
 # 运行时提示词模板访问器（错误规避/重搜上下文提示词抽取到 prompts.yml）
-from agent.prompts import format_prompt
+from agents.analyst.prompts_legacy import format_prompt
+
 load_dotenv(find_dotenv())
 
 # ======================================================================

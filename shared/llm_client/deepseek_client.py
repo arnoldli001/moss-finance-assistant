@@ -28,6 +28,5 @@ _base_model = init_chat_model(
 #
 # 说明：此层对上层 create_deep_agent 零侵入——create_deep_agent 依然接收
 # 全量 tools 参数并绑定，但所有真正的 LLM API 请求走到这里时会按阶段裁剪 tools。
-from agent.tool_router import ProgressiveToolDisclosureModel
-
+from shared.llm_client.tool_router import ProgressiveToolDisclosureModel
 model = ProgressiveToolDisclosureModel(_base_model, verbose=True)

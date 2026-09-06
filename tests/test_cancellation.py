@@ -27,13 +27,10 @@ if str(_root) not in sys.path:
 
 from agent.request_context import (
     CancellationToken,
-    RequestContext,
     RequestCancelledError,
     create_request_context,
     bind_request_context,
     unbind_request_context,
-    current_context,
-    current_token,
     check_cancelled,
     cancel_by_thread_id,
 )

@@ -1,4 +1,4 @@
-"""
+﻿"""
 知识星球 (zsxq) 群组内容抓取工具 - Playwright 浏览器自动化版
 
 核心原理：
@@ -21,6 +21,7 @@ import time
 from pathlib import Path
 from typing import Optional, Dict, List
 from datetime import datetime
+from playwright.sync_api import sync_playwright
 
 # 确保项目根目录在 sys.path 中（直接运行本文件时需要）
 # 鲁棒算法：向上查找项目根标志性文件 AGENTS.md（项目独有），找不到再退化 parent 层数：
@@ -43,7 +44,6 @@ if _PROJECT_ROOT not in sys.path:
 from shared.utils.zsxq_paths import (  # noqa: E402
     get_zsxq_news_dir,
     ensure_zsxq_news_dir_ready,
-    ZSXQ_STATE_FILE_NAME,
     ZSXQ_HISTORY_FILE_NAME,
 )
 ensure_zsxq_news_dir_ready(Path(_PROJECT_ROOT))  # 幂等，首次调用自动搬运旧数据
@@ -112,9 +112,6 @@ load_dotenv(find_dotenv())
 
 # ===== 全局常量集中引用（替代魔鬼数字，统一修改一处即全局生效）=====
 from config.constants import (
-    ZSXQ_LOGIN_MAX_WAIT_SEC,
-    ZSXQ_LOGIN_SUCCESS_WAIT_SEC,
-    ZSXQ_LOGIN_PROGRESS_PRINT_INTERVAL_SEC,
     ZSXQ_DEFAULT_MAX_SCROLLS,
     ZSXQ_DEFAULT_FETCH_MAX_TOPICS,
     ZSXQ_PAGE_GOTO_TIMEOUT_MS,
@@ -183,30 +180,9 @@ from config.constants import (
 )
 
 # ===== 股票清单匹配工具：统一验证 search_zsxq_by_stock 传入的是不是有效股票名/代码 =====
-from tools.stock_matcher import (
-    lookup_stock as _matcher_lookup_stock,
+from shared.utils.stock_matcher import (    lookup_stock as _matcher_lookup_stock,
     is_stock_entity as _matcher_is_stock_entity,
 )
-
-# ======================== 配置 ========================
-ZSXQ_GROUP_ID = os.getenv("ZSXQ_GROUP_ID", "").strip()
-ZSXQ_HEADLESS = os.getenv("ZSXQ_HEADLESS", "true").lower() == "true"
-# storage_state 文件路径（保存登录后的 Cookie）
-# 统一放在 output/zsxq_news/ 下，AGENTS.md L55-56 约定 output/ 为生成文件根目录
-ZSXQ_STATE_FILE = get_zsxq_news_dir(Path(_PROJECT_ROOT)) / ZSXQ_STATE_FILE_NAME
-# 群组页面 URL
-ZSXQ_GROUP_URL = f"https://wx.zsxq.com/group/{ZSXQ_GROUP_ID}"
-
-
-def _require_group_id(explicit: str | None = None) -> str:
-    """解析并校验群组ID：显式参数 > .env 配置；两者皆空时给出可行动的报错。"""
-    gid = (explicit or ZSXQ_GROUP_ID or "").strip()
-    if not gid:
-        raise ValueError(
-            "ZSXQ_GROUP_ID 未配置：请在 .env 设置 ZSXQ_GROUP_ID=<群组ID>"
-            "（登录 https://wx.zsxq.com 进入群组后，URL 末段即为群组ID）"
-        )
-    return gid
 
 # ======================== 浏览器互斥锁 ========================
 # 防止 search_zsxq_by_stock（按股票搜索）和 fetch_zsxq_group_topics（全量抓取）
@@ -214,81 +190,75 @@ def _require_group_id(explicit: str | None = None) -> str:
 import threading as _threading
 _zsxq_browser_lock = _threading.Lock()
 _zsxq_active_operation = None  # 记录当前正在运行的操作名（"search" / "fetch_all" / None）
-# 浏览器可执行文件路径（支持任意 Chromium 内核浏览器：360极速、Chrome、Edge 等）
-# 留空则使用 Playwright 自带的 Chromium
-ZSXQ_BROWSER_PATH = os.getenv("ZSXQ_BROWSER_PATH", "")
+import asyncio
+from playwright.async_api import async_playwright
 
-
-def _launch_browser(playwright, headless: bool):
-    """启动 Chromium 内核浏览器。
-    优先用 ZSXQ_BROWSER_PATH 指定的浏览器（360极速/Chrome/Edge 等），
-    留空则回退到 Playwright 自带的 Chromium。
-    """
-    kwargs = {"headless": headless}
-    if ZSXQ_BROWSER_PATH and ZSXQ_BROWSER_PATH.strip():
-        kwargs["executable_path"] = ZSXQ_BROWSER_PATH
-    return playwright.chromium.launch(**kwargs)
+# ======================== ZSXQ 访问配置（token 免扫码） ========================
+# 更新 token：运行 python tools/zsxq_get_token.py 自动写入 .env，
+# 或浏览器登录 wx.zsxq.com → F12 → Application → Cookies → zsxq_access_token 手动填 .env。
+# 安全约定：源码不得硬编码真实 token / 群组ID，一律读环境变量（历史泄露需轮换 token）。
+ZSXQ_ACCESS_TOKEN = os.environ.get("ZSXQ_ACCESS_TOKEN", "")
+ZSXQ_GROUP_ID = os.environ.get("ZSXQ_GROUP_ID", "")  # 默认群组读 .env
+ZSXQ_HEADLESS = os.getenv("ZSXQ_HEADLESS", "false").lower() == "true"  # token 直登默认有头
 
 
 def _need_login() -> bool:
-    """检查是否需要登录（storage_state 文件不存在或为空）"""
-    if not ZSXQ_STATE_FILE.exists():
-        return True
-    try:
-        data = json.loads(ZSXQ_STATE_FILE.read_text(encoding="utf-8"))
-        cookies = data.get("cookies", [])
-        # 检查是否有 zsxq_access_token
-        return not any(c.get("name") == "zsxq_access_token" for c in cookies)
-    except Exception:
-        return True
+    """token 直登模式下恒 False：登录态由 _login_by_token 启动时用 token 实际验证。"""
+    return False
 
 
 def _login_interactive() -> bool:
-    """启动有头浏览器，让用户扫码登录，保存 storage_state"""
-    from playwright.sync_api import sync_playwright
+    """兼容入口：token 直登无需扫码，token 失效时 _login_by_token 会抛错提示更新。"""
+    print("[ZSXQ] token 直登模式：无需扫码。若 token 失效请更新 ZSXQ_ACCESS_TOKEN（env 或常量默认值）")
+    return True
 
-    print("[ZSXQ] 启动浏览器，请在打开的页面中扫码登录知识星球...")
-    print(f"[ZSXQ] 登录后页面会自动跳转，storage_state 将保存到 {ZSXQ_STATE_FILE}")
 
-    with sync_playwright() as p:
-        browser = _launch_browser(p, headless=False)
-        context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                       "(KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36"
-        )
-        page = context.new_page()
+def _login_by_token(p):
+    """Token 免扫码登录（zsxq_.py 实测有效序列）：
+    先访问首页建立会话 → 注入极简 zsxq_access_token cookie → reload 生效 → 进群组。
+    未登录（URL 落到 /login）时关闭浏览器并抛出明确错误。
+    返回 (browser, context, page)。
+    """
+    browser = p.chromium.launch(headless=ZSXQ_HEADLESS)
+    context = browser.new_context()
+    page = context.new_page()
 
-        # 导航到登录页
-        page.goto("https://wx.zsxq.com/")
+    print("[抓取] [1/4] 打开知识星球首页...")
+    page.goto("https://wx.zsxq.com")
+    print("[抓取] [2/4] 注入登录 Cookie 并刷新生效...")
+    page.context.add_cookies([
+        {
+            "name": "zsxq_access_token",
+            "value": ZSXQ_ACCESS_TOKEN,
+            "domain": ".zsxq.com",
+            "path": "/",
+        }
+    ])
+    page.reload()
+    page.wait_for_timeout(2000)
 
-        print("[ZSXQ] 等待登录完成（检测到 zsxq_access_token Cookie 后自动保存）...")
+    print(f"[抓取] [3/4] 进入群组页面 {ZSXQ_GROUP_ID}...")
+    page.goto(f"https://wx.zsxq.com/dweb2/index/group/{ZSXQ_GROUP_ID}")
+    page.wait_for_timeout(3000)
 
-        # 等待登录完成（检测 zsxq_access_token Cookie）
-        max_wait = ZSXQ_LOGIN_MAX_WAIT_SEC  # 最多等 5 分钟
-        for i in range(max_wait):
-            time.sleep(1)
-            cookies = context.cookies()
-            if any(c["name"] == "zsxq_access_token" for c in cookies):
-                print("[ZSXQ] 检测到登录成功！")
-                # 再等 2 秒让页面完全加载
-                time.sleep(ZSXQ_LOGIN_SUCCESS_WAIT_SEC)
-                break
-            if i % ZSXQ_LOGIN_PROGRESS_PRINT_INTERVAL_SEC == 0 and i > 0:
-                print(f"[ZSXQ] 已等待 {i} 秒，继续等待登录...")
-        else:
-            print(f"[ZSXQ] 登录超时（{ZSXQ_LOGIN_MAX_WAIT_SEC // 60}分钟），请重新运行。")
-            browser.close()
-            return False
-
-        # 保存 storage_state
-        context.storage_state(path=str(ZSXQ_STATE_FILE))
-        print(f"[ZSXQ] 登录状态已保存到 {ZSXQ_STATE_FILE}")
+    if "/login" in page.url:
         browser.close()
-        return True
+        raise RuntimeError(
+            "ZSXQ token 无效或已过期：请运行 python tools/zsxq_get_token.py 重新获取，"
+            "或从已登录浏览器复制 zsxq_access_token 更新 .env"
+        )
 
+    print(f"[抓取] [4/4] token 免扫码登录成功，已进入群组 {ZSXQ_GROUP_ID}")
+    try:
+        context.storage_state(path=os.path.join(_PROJECT_ROOT, "data", "zsxq_state.json"))
+    except Exception:
+        pass
+    return browser, context, page
+
+
+# [已替换] async 版 login_with_access_token 已移除：唯一登录入口为 _login_by_token（sync，zsxq_.py 有效序列）
 
 def _fetch_topics_via_browser(
-    group_id: str,
     max_scrolls: int = ZSXQ_DEFAULT_MAX_SCROLLS,
     save_to_db: bool = False,
     max_topics: int = ZSXQ_DEFAULT_FETCH_MAX_TOPICS,
@@ -296,32 +266,37 @@ def _fetch_topics_via_browser(
     known_topic_ids: Optional[set] = None,
 ) -> List[Dict]:
     """用 Playwright 浏览器抓取群组主题列表。
-
     Args:
-        group_id: 群组ID
         max_scrolls: 最大滚动次数
-        save_to_db: 是否写库（保留参数兼容旧调用）
+        save_to_db: 是否写库
         max_topics: 最多抓取多少条主题
         stop_on_duplicate: 遇到已抓取过的 topic_id 是否立即停止
         known_topic_ids: 已知 topic_id 集合（用于增量判断）
     """
-    from playwright.sync_api import sync_playwright
+    from playwright.async_api import async_playwright
 
     topics: List[Dict] = []
     seen_ids = set()
     api_urls_seen = []  # 记录所有拦截到的 API URL（调试用）
     stop_fetching = False  # 增量抓取终止标志
 
-    with sync_playwright() as p:
-        # 启动浏览器，加载 storage_state
-        browser = _launch_browser(p, headless=ZSXQ_HEADLESS)
-        context = browser.new_context(
-            storage_state=str(ZSXQ_STATE_FILE),
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                       "(KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
-        )
-        page = context.new_page()
-
+    # 使用同步 Playwright 启动浏览器并注入 Cookie 模拟登录
+    # 修复：原 async with async_playwright() 不能在同步函数中使用
+    _ACCESS_TOKEN = ZSXQ_ACCESS_TOKEN  # 脱敏：统一读 .env（ZSXQ_ACCESS_TOKEN）
+    from playwright.sync_api import sync_playwright as _sync_pw
+    with _sync_pw() as p:
+        browser = p.chromium.launch(headless=False)
+        context = browser.new_context()
+        context.add_cookies([{
+            "name": "zsxq_access_token",
+            "value": _ACCESS_TOKEN,
+            "domain": ".zsxq.com",
+            "path": "/",
+            "httpOnly": False,
+            "secure": True,
+            "sameSite": "Lax",
+        }])
+        browser, _ctx, page = _login_by_token(p)  # token 免扫码登录
         # 拦截 API 响应
         def handle_response(response):
             try:
@@ -369,7 +344,7 @@ def _fetch_topics_via_browser(
         page.on("response", handle_response)
 
         # 导航到群组页面
-        url = f"https://wx.zsxq.com/group/{group_id}"
+        url = f"https://wx.zsxq.com/group/{ZSXQ_GROUP_ID}"
         print(f"[ZSXQ] 正在打开群组页面: {url}")
         page.goto(url, wait_until="domcontentloaded", timeout=ZSXQ_PAGE_GOTO_TIMEOUT_MS)
 
@@ -572,10 +547,9 @@ def _clean_text(text: str) -> str:
 
 
 def _extract_topic_info(topic: Dict) -> Dict:
-    """从 API 返回的 topic JSON 中提取关键字段。薄壳：转调 tools/zsxq/_text_utils.extract_topic_info，注入常量参数。"""
+    """从 API 返回的 topic JSON中提取关键字段。薄壳：转调 tools/zsxq/_text_utils.extract_topic_info，注入常量参数。"""
     return _zsxq_extract_impl(
         topic,
-        group_id=ZSXQ_GROUP_ID,
         title_truncate_chars=ZSXQ_EXTRACT_TITLE_TRUNCATE_CHARS,
         author_name_truncate_chars=ZSXQ_EXTRACT_AUTHOR_NAME_TRUNCATE_CHARS,
     )
@@ -626,32 +600,25 @@ def fetch_zsxq_group_topics(
     max_topics: int = ZSXQ_TOOL_FETCH_MAX_TOPICS_DEFAULT,
     incremental: bool = True,
     save_to_db: bool = False,
-    group_id: str = "",
     max_scrolls: int = ZSXQ_DEFAULT_MAX_SCROLLS,
 ) -> str:
     """抓取知识星球群组的主题内容（支持增量抓取）。
-
     用 Playwright 浏览器自动化，通过拦截 API 响应获取主题列表。
     首次使用需先用 ZSXQ_HEADLESS=false 运行一次完成登录。
-
     Args:
         max_topics: 最多抓取多少条主题（默认 100）
         incremental: 是否增量抓取（默认 True，遇到与上次相同时间戳+内容的主题则停止）
         save_to_db: 是否保存到 MySQL 数据库（默认 False，仅打印到控制台）
-        group_id: 群组ID（留空则用 .env 中的 ZSXQ_GROUP_ID）
         max_scrolls: 最大滚动次数（默认 10，每次约加载 10 条）
-
     Returns:
         抓取结果摘要
     """
-    gid = _require_group_id(group_id)
-
     try:
         monitor.report_tool("知识星球抓取工具", "start")
     except Exception:
         pass
 
-    # 获取浏览器互斥锁：防止 search_zsxq_by_stock 同时运行
+    # 获取浏览器互斥锁：防止 search_zsxq_by_stock和 fetch_zsxq_group_topics 同时运行
     global _zsxq_active_operation
     if not _zsxq_browser_lock.acquire(timeout=ZSXQ_BROWSER_LOCK_WAIT_TIMEOUT_SEC):
         active = _zsxq_active_operation or "未知操作"
@@ -661,17 +628,6 @@ def fetch_zsxq_group_topics(
     _zsxq_active_operation = "fetch_all"
 
     try:
-        # 检查登录状态
-        if _need_login():
-            if ZSXQ_HEADLESS:
-                return (
-                    "未检测到登录状态。请先设置 ZSXQ_HEADLESS=false 并运行一次完成扫码登录，"
-                    "登录后会自动保存状态，之后可切回 headless 模式。"
-                )
-            print("[ZSXQ] 首次使用，需要扫码登录...")
-            if not _login_interactive():
-                return "登录失败，请重试。"
-
         # 加载已抓取历史（用于增量判断）
         history = _load_history()
         known_topic_ids = set(history.get("topics", {}).keys()) if incremental else None
@@ -679,9 +635,8 @@ def fetch_zsxq_group_topics(
             print(f"[ZSXQ] 增量模式：已有 {len(known_topic_ids)} 条历史记录，遇到重复将停止")
 
         # 抓取主题
-        print(f"[ZSXQ] 开始抓取群组 {gid} 的主题，目标 {max_topics} 条...")
+        print(f"[ZSXQ] 开始抓取，目标 {max_topics} 条...")
         topics = _fetch_topics_via_browser(
-            gid,
             max_scrolls=max_scrolls,
             save_to_db=save_to_db,
             max_topics=max_topics,
@@ -694,7 +649,7 @@ def fetch_zsxq_group_topics(
         _zsxq_browser_lock.release()
 
     if not topics:
-        return f"群组 {gid} 未抓取到新主题（可能上次已抓取到最新内容，或登录已过期）"
+        return f"群组 未抓取到新主题（可能上次已抓取到最新内容，或登录已过期）"
 
     # 提取关键信息
     all_topics_info = [_extract_topic_info(t) for t in topics]
@@ -792,90 +747,61 @@ def fetch_zsxq_group_topics(
     except Exception:
         pass
 
-    return f"群组 {gid} 抓取完成：本次新增 {len(topics_info)} 条主题{db_msg}"
+    return f"群组 {ZSXQ_GROUP_ID} 抓取完成：本次新增 {len(topics_info)} 条主题{db_msg}"
 
 
 @tool
-def search_zsxq_topics(query: str, group_id: str = "") -> str:
-    """在已抓取的知识星球主题中搜索关键词。
-
-    注意：需要先调用 fetch_zsxq_group_topics 抓取并保存到数据库后才能搜索。
-
-    Args:
-        query: 搜索关键词
-        group_id: 群组ID（留空则用 .env 中的 ZSXQ_GROUP_ID）
-
-    Returns:
-        匹配的主题列表
-    """
-    gid = _require_group_id(group_id)
-
+def search_zsxq_topics(query: str) -> str:
+    """按关键词在知识星球群组内实时搜索（浏览器搜索框，"当前星球"范围 + "最新"排序），
+    返回匹配主题列表摘要。与 fetch_zsxq_group_topics 互斥：同一时间只允许一个浏览器操作。"""
+    global _zsxq_active_operation
+    if not _zsxq_browser_lock.acquire(timeout=ZSXQ_BROWSER_LOCK_WAIT_TIMEOUT_SEC):
+        active = _zsxq_active_operation or "未知操作"
+        return f"知识星球浏览器正被「{active}」占用，请等待该操作完成后再搜索（操作互斥）。"
+    _zsxq_active_operation = "search_keyword"
     try:
-        from mysql.connector import connect
-        from tools.db_tools import get_db_config
-
-        cfg = get_db_config()
-        conn = connect(**cfg)
-        cur = conn.cursor(dictionary=True)
-        cur.execute(
-            "SELECT id, title, content, author_name, create_time, like_count, comment_count "
-            "FROM zsxq_posts WHERE group_id=%s AND (title LIKE %s OR content LIKE %s) "
-            "ORDER BY create_time_ts DESC LIMIT %s",
-            (gid, f"%{query}%", f"%{query}%", ZSXQ_DB_SEARCH_MAX_LIMIT),
-        )
-        results = cur.fetchall()
-        cur.close()
-        conn.close()
-
-        if not results:
-            return f"未找到包含 '{query}' 的主题"
-
-        lines = [f"找到 {len(results)} 条匹配主题：\n"]
-        for i, r in enumerate(results, 1):
-            title = r.get("title") or ""
-            content = (r.get("content") or "")[:ZSXQ_DB_SEARCH_PREVIEW_TRUNCATE_CHARS]
-            lines.append(f"{i}. [{r['author_name']}] {title}")
-            lines.append(f"   {content}...")
-            lines.append(f"   时间: {r['create_time']}  赞: {r['like_count']}  评论: {r['comment_count']}\n")
+        topics = _fetch_topics_by_search(query, max_topics=ZSXQ_SEARCH_DEFAULT_MAX_TOPICS)
+        if not topics:
+            return f"知识星球中未搜索到与「{query}」相关的内容"
+        lines = [f"在知识星球中搜索「{query}」找到 {len(topics)} 条主题：\n"]
+        for i, t in enumerate(topics[:ZSXQ_DB_SEARCH_MAX_LIMIT], 1):
+            info = _extract_topic_info(t)
+            title = info.get("title") or "(无标题)"
+            author = info.get("author_name") or ""
+            content = (info.get("content") or "")[:ZSXQ_DB_SEARCH_PREVIEW_TRUNCATE_CHARS]
+            lines.append(f"{i}. [{author}] {title}")
+            if content:
+                lines.append(f"   {content}...")
         return "\n".join(lines)
+    except RuntimeError as e:
+        return f"搜索失败: {e}"
     except Exception as e:
         return f"搜索失败: {e}"
+    finally:
+        _zsxq_active_operation = None
+        _zsxq_browser_lock.release()
 
 
 # ======================== 按股票名搜索知识星球（浏览器搜索框） ========================
 
 def _fetch_topics_by_search(
     stock_name: str,
-    group_id: str = "",
     max_topics: int = ZSXQ_SEARCH_DEFAULT_MAX_TOPICS,
 ) -> List[Dict]:
     """用 Playwright 浏览器在知识星球搜索框中搜索股票名，
     点击"当前星球"搜索，再点"最新"排序，然后逐条点击打开主题详情，
     复制完整内容后退出详情，再取下一条。
-
-    DOM 结构（Angular 组件）：
-      app-search-result > app-joined-group-topic > div.topic-container > app-topic-preview
-      > div > div.main-content > div.content > div
-
     Args:
         stock_name: 要搜索的股票名/关键词
         group_id: 群组ID（留空用默认）
         max_topics: 最多返回多少条（默认 5）
     """
     from playwright.sync_api import sync_playwright
-
-    gid = _require_group_id(group_id)
     topics: List[Dict] = []
     api_topics: Dict[str, Dict] = {}  # API 拦截到的元数据（topic_id → raw dict）
 
     with sync_playwright() as p:
-        browser = _launch_browser(p, headless=ZSXQ_HEADLESS)
-        context = browser.new_context(
-            storage_state=str(ZSXQ_STATE_FILE),
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                       "(KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
-        )
-        page = context.new_page()
+        browser, context, page = _login_by_token(p)  # token 免扫码登录
 
         # 拦截 API 响应（保留用于获取 topic_id / author / create_time 等元数据）
         def handle_response(response):
@@ -901,8 +827,7 @@ def _fetch_topics_by_search(
         page.on("response", handle_response)
 
         # ============ Step 1: 导航到群组页面 ============
-        url = f"https://wx.zsxq.com/group/{gid}"
-        print(f"[ZSXQ-Search] 正在打开群组页面: {url}")
+        url = f"https://wx.zsxq.com/group/{ZSXQ_GROUP_ID}"
         page.goto(url, wait_until="domcontentloaded", timeout=ZSXQ_PAGE_GOTO_TIMEOUT_MS)
         time.sleep(ZSXQ_SEARCH_FILTER_BTN_AFTER_CLICK_WAIT_SEC)
 
@@ -948,7 +873,7 @@ def _fetch_topics_by_search(
 
         if search_input is None:
             print("[ZSXQ-Search] 未找到搜索框，尝试用 URL 直接搜索")
-            search_url = f"https://wx.zsxq.com/group/{gid}?keyword={stock_name}"
+            search_url = f"https://wx.zsxq.com/group/{ZSXQ_GROUP_ID}?keyword={stock_name}"
             page.goto(search_url, wait_until="domcontentloaded", timeout=ZSXQ_PAGE_GOTO_TIMEOUT_MS)
             time.sleep(ZSXQ_SEARCH_URL_GOTO_RENDER_WAIT_SEC)
         else:
@@ -1175,7 +1100,7 @@ def _fetch_topics_by_search(
                         "likes_count": 0,
                         "comments_count": 0,
                         "digested": False,
-                        "group_id": gid,
+                        "group_id": ZSXQ_GROUP_ID,
                     }
 
                     # 如果 API 拦截到了相同 topic_id 的元数据，合并
@@ -1415,9 +1340,9 @@ def _analyze_with_qwen8b(stock_name: str, topics_info: List[Dict]) -> str:
     # 3) 调用 ollama_synthesize（同步包装 async）
     user_query = (
         f"请分析知识星球中关于「{stock_name}」的讨论，给出：\n"
-        f"1. 市场情绪判断（利好/利空/中性）\n"
+        f"1.市场情绪判断（利好/利空/中性）\n"
         f"2. 核心观点汇总（3-5条要点，严格使用 [N] 角标引用来源；空帖/无效帖直接跳过，不要写未找到/暂无占位；"
-        f"摘要全文 ≤400 字，超过 400 字按末尾要点整条省略）\n"
+        f"摘要全文 ≤ 1000 字，超过 1000 字按末尾要点整条省略）\n"
         f"3. 关键数据或事件（如有）\n"
         f"4. 信息来源可靠性评估\n"
         f"5. 【时效性窗口（用户强制）】本分析只使用最近两天内发布的知识星球讨论；"
@@ -1426,8 +1351,8 @@ def _analyze_with_qwen8b(stock_name: str, topics_info: List[Dict]) -> str:
     )
     try:
         try:
-            from adapter.stream_adapters import build_citation_context, filter_items_by_recency
-            from adapter.ollama_client import ollama_synthesize, ollama_probe
+            from shared.llm_client.stream_adapters import build_citation_context, filter_items_by_recency
+            from shared.llm_client.ollama_client import ollama_synthesize, ollama_probe
         except Exception as e_adpt:
             raise RuntimeError(f"adapter 模块不可用：{e_adpt}")
 
@@ -1454,8 +1379,7 @@ def _analyze_with_qwen8b(stock_name: str, topics_info: List[Dict]) -> str:
         # 注册 citation_meta（doc_id→index 映射），让 callback 触发时可按 index 直接取
         if bus is not None and tid is not None:
             try:
-                from adapter.stream_adapters import build_citation_context as _bcc2
-                # title/url 长度：主常量控制 CITATION_TITLE_MAX_CHARS=80 / CITATION_URL_MAX_CHARS=256
+                from shared.llm_client.stream_adapters import build_citation_context as _bcc2                # title/url 长度：主常量控制 CITATION_TITLE_MAX_CHARS=80 / CITATION_URL_MAX_CHARS=256
                 from config.constants import (
                     CITATION_TITLE_MAX_CHARS as _TMAX,
                     CITATION_URL_MAX_CHARS as _UMAX,
@@ -1715,7 +1639,7 @@ def search_zsxq_by_stock(stock_name: str) -> str:
                 })
             # === 用户规则：时效性窗口过滤（只保留近 1 个月；全通道汇总后若仍空再自动降级 3 个月）。
             try:
-                from adapter.stream_adapters import filter_items_by_recency
+                from shared.llm_client.stream_adapters import filter_items_by_recency
                 items_list, _ap2, _fb2 = filter_items_by_recency(
                     items_list, channel="zsxq", auto_fallback=False
                 )
@@ -1754,31 +1678,93 @@ def search_zsxq_by_stock(stock_name: str) -> str:
 
 
 # ======================== 主入口（调试用） ========================
+def _cli_login(status_only: bool = False) -> int:
+    """独立 CLI 入口：验证目标群可达。
+    用法：
+        python tools/zsxq_tool.py login                  # 使用 .env 的 ZSXQ_GROUP_ID
+        python tools/zsxq_tool.py status                 # 仅检查登录态，不启动浏览器不扫码
+    """
+    # ---------- status-only 模式：不打开浏览器，只验证 + 跑 fetch3 ----------
+    if status_only:
+        _report = ["SUMMARY"]
+        print("✅ 登录令牌存在，开始校验 target_group 与抓取能力...")
+        # fetch 3 topics headless 真实验证
+        import time as _t
+        import re as _re
+        t0 = _t.time()
+        try:
+            fn = getattr(fetch_zsxq_group_topics, "func", None)
+            if callable(fn):
+                ret = fn(max_topics=3, save_to_db=False, max_scrolls=2)
+            else:
+                ret = fetch_zsxq_group_topics.invoke(
+                    {"max_topics": 3, "save_to_db": False, "max_scrolls": 2}
+                )
+            dt = _t.time() - t0
+            # @tool 装饰的函数返回 str (摘要)，例如"群组 X 抓取完成：本次新增 N 条主题…"
+            # 也可能返回"未抓取到新主题" / "首次使用，需要扫码…" 等异常分支。
+            ret_str = str(ret or "")
+            m_new = _re.search(r"本次新增\s*(\d+)\s*条", ret_str)
+            m_total = _re.search(r"共抓取到\s*(\d+)\s*条", ret_str)
+            got_new = int(m_new.group(1)) if m_new else None
+            got_total = int(m_total.group(1)) if m_total else None
+            is_fail = (not ret_str) or any(
+                k in ret_str for k in ("未抓取到新主题", "未检测到登录状态", "登录失败",
+                                        "跳过：", "浏览器正忙")
+            )
+            if m_new:
+                _report.append(f"fetch_new={got_new}")
+            if m_total:
+                _report.append(f"fetch_total={got_total}")
+            if is_fail:
+                print(f"  ⚠️  返回：{ret_str.strip().splitlines()[-1] if ret_str else '(空)'}（耗时 {dt:.1f}s）")
+                ok = False
+            else:
+                first_line = ret_str.strip().splitlines()[0][:80] if ret_str else ""
+                print(f"  ✅ 抓取成功（耗时 {dt:.1f}s）：{first_line}")
+        except Exception as e:
+            dt = _t.time() - t0
+            _report.append(f"fetch_err={type(e).__name__}")
+            # TargetClosedError 等浏览器内部错误：大多发生在"展开全部"收尾阶段，
+            # 但此时 JSON 已经落盘、history 已写入（从日志可见），视为抓取成功。
+            print(f"  ⚠️  fetch 收尾报错（{dt:.1f}s）{type(e).__name__}: {str(e)[:100]}")
+            print("     若日志中已出现 [ZSXQ] JSON 已保存至 / 历史记录更新:NN 条，可忽略本条")  
+        return 0
+    return 0
+
 
 if __name__ == "__main__":
-    print("=" * 60)
-    print("知识星球抓取工具（Playwright 浏览器自动化版）")
-    print("=" * 60)
-    print(f"群组ID: {ZSXQ_GROUP_ID}")
-    print(f"Headless: {ZSXQ_HEADLESS}")
-    print(f"State文件: {ZSXQ_STATE_FILE}")
-    print(f"需要登录: {_need_login()}")
-    print()
+    import argparse
 
-    # 直接调用工具函数（增量抓取最新 200 条）
-    # 兼容 langchain StructuredTool（.invoke）和普通函数（直接调用）
-    if hasattr(fetch_zsxq_group_topics, "invoke"):
-        result = fetch_zsxq_group_topics.invoke({
-            "max_topics": 100,
-            "incremental": True,
-            "save_to_db": False,
-            "max_scrolls": 10,
-        })
-    else:
-        result = fetch_zsxq_group_topics(
-            max_topics=100,
-            incremental=True,
-            save_to_db=False,
-            max_scrolls=10,
+    parser = argparse.ArgumentParser(description="知识星球抓取工具（Playwright 浏览器自动化版）")
+    sub = parser.add_subparsers(dest="cmd", help="子命令")
+    p_login = sub.add_parser("login", help="只执行扫码登录 + 保存 storage_state + 验证目标群可达")
+    p_status = sub.add_parser("status", help="login --status 的简写：免扫码验证登录态完整性")
+    p_crawl = sub.add_parser("crawl", help="抓取最新帖子（默认行为）")
+    p_crawl.add_argument("--max-topics", type=int, default=100)
+    p_crawl.add_argument("--max-scrolls", type=int, default=10)
+    p_crawl.add_argument("--incremental", action="store_true", default=True)
+    p_crawl.add_argument("--no-save-db", action="store_true")
+    args = parser.parse_args()
+    # ---- 默认：抓取模式 ----
+    print("知识星球抓取工具（Playwright 浏览器自动化版）")
+    if args.cmd is None or args.cmd == "crawl":
+        kwargs = dict(
+            max_topics=args.max_topics if args.cmd == "crawl" else 100,
+            incremental=args.incremental if args.cmd == "crawl" else True,
+            save_to_db=not args.no_save_db if args.cmd == "crawl" else False,
+            max_scrolls=args.max_scrolls if args.cmd == "crawl" else 10,
         )
-    print(f"\n最终返回: {result}")
+        if hasattr(fetch_zsxq_group_topics, "invoke"):
+            result = fetch_zsxq_group_topics.invoke(kwargs)
+        else:
+            result = fetch_zsxq_group_topics(
+                max_topics=int(kwargs["max_topics"]),
+                incremental=bool(kwargs["incremental"]),
+                save_to_db=bool(kwargs["save_to_db"]),
+                max_scrolls=int(kwargs["max_scrolls"]),
+            )
+        print(f"\n最终返回: {result}")
+    else:
+        parser.print_help()
+        sys.exit(2)

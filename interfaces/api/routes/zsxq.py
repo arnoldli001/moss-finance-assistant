@@ -112,7 +112,7 @@ async def _save_zsxq_to_history(thread_id: str, txt_content: str):
     同时写入 Context Engineering 记忆管理，供后续摘要压缩和关键决策检索。"""
     try:
         from langchain_core.messages import HumanMessage, AIMessage
-        from agent.main_agent import get_main_agent
+        from agents.analyst.agent import get_main_agent
         agent = await get_main_agent()
         config = {"configurable": {"thread_id": thread_id}}
         await agent.aupdate_state(config, {"messages": [  # type: ignore[attr-defined]
@@ -121,7 +121,7 @@ async def _save_zsxq_to_history(thread_id: str, txt_content: str):
         ]})
         # 同步写入记忆管理（该条为高优关键决策）
         try:
-            from agent.memory_manager import get_memory_manager
+            from agents.reasoning.memory_manager import get_memory_manager
             mm = get_memory_manager()
             await mm.add_turn(thread_id, "盘前小作文热度分析", txt_content)
         except Exception as mm_err:
@@ -372,7 +372,7 @@ async def _ensure_ollama_ready(
 # ===========================================================
 async def _fetch_zsxq_txt_summary(thread_id: str) -> str:
     """
-    【server 端薄适配层】盘前小作文热度 **抓取 + 返回 txt 总结**。
+    【server 端适配层】盘前小作文热度 **抓取 + 返回 txt 总结**。
       - 若当天已有 txt 总结，直接复用，跳过抓取；
       - 否则运行 tools/zsxq_analysis_runner.py 完整流程（抓取 + LLM 分析）。
 
@@ -476,7 +476,6 @@ async def _run_zsxq_analysis(thread_id: str, emit_to_frontend: bool = True) -> s
     编排函数：串起「抓取」和「推送」两个阶段。保持原调用签名不变，
     所有调用链（POST /api/zsxq-analysis、复盘预测 _run_review_prediction、scheduler 回调）
     无需改动。
-
     步骤：
         1) _fetch_zsxq_txt_summary(thread_id)：返回纯 txt 总结字符串，失败返回 ""；
         2) 非空 & emit_to_frontend → _push_zsxq_summary_via_ws(thread_id, txt)：

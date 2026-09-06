@@ -23,9 +23,8 @@ from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
-from agent.circuit_breaker import get_circuit_registry
-from agent.error_classifier import ErrorClassifier, ErrorQuadrant, get_error_classifier
-
+from governance.guardrails.circuit_breaker import get_circuit_registry
+from governance.guardrails.error_classifier import ErrorQuadrant, get_error_classifier
 # ===== 全局常量集中引用（替代魔鬼数字，统一修改一处即全局生效）=====
 from config.constants import (
     DEGRADE_MAX_TASK_SECONDS,

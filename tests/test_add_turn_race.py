@@ -27,8 +27,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from agent.memory_manager import MemoryManager, get_memory_manager  # noqa: E402
-
+from agents.reasoning.memory_manager import MemoryManager  # noqa: E402
 
 async def run_race(n_concurrent: int = 20) -> None:
     # 用独立 DB，避免污染正式数据：临时实例
@@ -83,8 +82,7 @@ async def run_compress_race() -> None:
     重复 segment_index，build_prompt_context 读到双倍内容。
     修复后：每个 session_id 一把 asyncio.Lock，压缩任务串行执行。
     """
-    from agent.memory_manager import SUMMARY_TRIGGER_TURNS, SUMMARY_SEGMENTS
-
+    from agents.reasoning.memory_manager import SUMMARY_TRIGGER_TURNS
     mm = MemoryManager()
     sid = "compress-race-session"
     await mm.clear_session(sid)

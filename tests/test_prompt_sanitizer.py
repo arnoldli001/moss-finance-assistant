@@ -26,7 +26,7 @@ _ROOT = os.path.dirname(_HERE)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from api.middleware import prompt_sanitizer as ps  # noqa: E402
+import governance.guardrails.prompt_sanitizer as ps  # noqa: E402
 
 PASS = 0
 FAIL = 0
@@ -229,7 +229,7 @@ def test_audit_log_written():
 
 def test_enterprise_pipeline_integration():
     try:
-        from agent.enterprise_hooks import enter_request_pipeline
+        from agents.analyst.enterprise_hooks import enter_request_pipeline
     except Exception as e:
         expect("流水线导入", False, f"import error: {e}")
         return

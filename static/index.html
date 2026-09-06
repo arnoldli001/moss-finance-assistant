@@ -1016,6 +1016,13 @@ async function loadSessions() {
   if (!currentUserId) return [];
   try {
     const r = await fetch(`/api/users/${currentUserId}/sessions`);
+    // 修复：未检查 r.ok 时（如 429 限流返回错误体），data.sessions 为空仍会
+    // 清空列表 → 重命名/删除后页签全部"消失"。失败时保留现有列表并提示。
+    if (!r.ok) {
+      console.error('加载会话列表失败: HTTP', r.status);
+      showToast(`会话列表刷新失败（HTTP ${r.status}），已保留当前列表`, APP_CONSTANTS.TOAST_DEFAULT_DURATION_MS);
+      return [];
+    }
     const data = await r.json();
     const sessions = data.sessions || [];
     const list = $('session-list');
@@ -1055,17 +1062,24 @@ async function loadSessions() {
 async function newSession() {
   if (!currentUserId) { alert('请先登录'); return; }
   _retrievalResetAll();
-  // 生成随机会话标题：session_时间_uuid片段，确保唯一不重复
+  // 生成随机会话标题：时间_uuid片段，确保唯一不重复
   const now = new Date();
   const ts = `${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}-${String(now.getHours()).padStart(2,'0')}${String(now.getMinutes()).padStart(2,'0')}`;
   const uuidFrag = (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2)).slice(0, 8);
-  const randomTitle = `session_${ts}_${uuidFrag}`;
+  const randomTitle = `${ts}_${uuidFrag}`;
   try {
     const r = await fetch(`/api/users/${currentUserId}/sessions`, {
       method: 'POST', headers: {'Content-Type':'application/json'},
       body: JSON.stringify({title: randomTitle})
     });
     const data = await r.json();
+    if (!r.ok) {
+      const msg = (r.status === 401)
+        ? '登录已过期，请重新登录'
+        : ((data.detail && (data.detail.message || JSON.stringify(data.detail))) || `HTTP ${r.status}`);
+      throw new Error(msg);
+    }
+    if (!data.session || !data.session.session_id) throw new Error('响应缺少 session 字段');
     await loadSessions();
     switchSession(data.session.session_id, data.session.title);
   } catch (e) { alert('新建会话失败: ' + e.message); }
@@ -1132,15 +1146,20 @@ function startRename(elem, sid, oldTitle) {
     if (submit && newTitle && newTitle !== oldText) {
       try {
         // 用户隔离校验：带上 user_id 防止越权修改他人会话标题
-        await fetch(`/api/sessions/${sid}/title`, {
+        const rr = await fetch(`/api/sessions/${sid}/title`, {
           method: 'PATCH', headers: {'Content-Type':'application/json'},
           body: JSON.stringify({title: newTitle, user_id: currentUserId})
         });
-        // 更新头部标题（如果是当前会话）
-        if (sid === currentSessionId) $('session-title').textContent = newTitle;
-      } catch (e) { alert('重命名失败: ' + e.message); }
+        if (!rr.ok) {
+          const errData = await rr.json().catch(() => ({}));
+          showToast('重命名失败: ' + (errData.detail || rr.statusText), APP_CONSTANTS.TOAST_DEFAULT_DURATION_MS);
+        } else if (sid === currentSessionId) {
+          // 更新头部标题（如果是当前会话）
+          $('session-title').textContent = newTitle;
+        }
+      } catch (e) { showToast('重命名失败: ' + e.message, APP_CONSTANTS.TOAST_DEFAULT_DURATION_MS); }
     }
-    await loadSessions(); // 刷新列表（恢复 span 显示）
+    await loadSessions(); // 刷新列表（恢复 span 显示；loadSessions 失败时保留现有列表）
   };
   input.addEventListener('keydown', e => {
     if (e.key === 'Enter') { e.preventDefault(); finish(true); }
@@ -1990,7 +2009,7 @@ async function sendPreMarketNews() {
   if (!currentSessionId) { alert('请先选择或新建会话'); return; }
   if (isRunning) { alert('当前任务进行中，请等待完成'); return; }
 
-  const fullQuery = `请根据系统提供的搜索时间范围，执行网络搜索，涉及到多个股票或多个平台的搜索任务，拆分任务，调用网络搜索助手并发搜索以提高效率，并汇总获取的结果，输入给本地模型deepseek-r1:7b进行汇总分类、分析之后再输出，最好是表格输出或其他直观输出。1）韭研社区、炒股吧、雪球、同花顺股吧、东方财富股吧、微信公众号讨论热度最高的新闻和个股前10；2）美股最新夜盘科技股（特别是美光、海力士、谷歌、meta、应用光电、康宁、英伟达的最新盘前或盘中股价涨跌情况、走势、相关最新当天的新闻）；最后汇总简要输出：1、热门个股按出现在各平台上数量，从高到低排序的股票清单；2）利好还是利空的逻辑A股概念板块或个股，给出1、利好和利空个股清单。字数控制在1000字以内，精简输出；`;
+  const fullQuery = `请根据系统提供的搜索时间范围，执行网络搜索，涉及到多个股票或多个平台的搜索任务，拆分任务，调用网络搜索助手并发搜索以提高效率，并汇总获取的结果，输入给本地模型deepseek-r1:7b进行汇总分类、分析之后再输出，最好是表格输出或其他直观输出。1）韭研社区、炒股吧、雪球、同花顺股吧、东方财富股吧、微信公众号, 财联社讨论热度最高的新闻和个股前10；2）美股最新夜盘科技股（特别是美光、海力士、谷歌、meta、应用光电、康宁、英伟达的最新盘前或盘中股价涨跌情况、走势、相关最新当天的新闻）；最后汇总简要输出：1、热门个股按出现在各平台上数量，从高到低排序的股票清单；2）利好还是利空的逻辑A股概念板块或个股，给出1、利好和利空个股清单。字数控制在1000字以内，精简输出；`;
 
   if (SSE_STREAM_ENABLED) {
     // SSE 分支：走 /api/task/stream，打字机 + 来源引用 + 推理面板
@@ -2069,7 +2088,7 @@ async function sendZsxqHotNews() {
   }
 }
 
-// ============ 复盘预测：串行执行小作文热度 + 盘前新闻 + DeepSeek 指数预测 ============
+// ============ 复盘预测：执行小作文热度 + 盘前新闻 + DeepSeek 指数预测 ============
 async function sendReviewPrediction() {
   if (!currentSessionId) { alert('请先选择或新建会话'); return; }
   if (isRunning) { alert('当前任务进行中，请等待完成'); return; }

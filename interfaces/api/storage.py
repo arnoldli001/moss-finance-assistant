@@ -14,6 +14,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 import threading
 import uuid
@@ -25,10 +26,13 @@ from shared.utils.auth import (
     GUEST_USER_PREFIX,
     hash_password as _hash_password,
     verify_password as _verify_password,
+    async_hash_password,
+    async_verify_password,
 )
 
-# 项目根目录
-project_root = Path(__file__).resolve().parents[1]
+# 项目根目录（本文件位于 interfaces/api/ 下，需 parents[2] 才是项目根；
+# 曾因 parents[1] 漂移到 interfaces/data/ 造成会话数据分裂）
+project_root = Path(__file__).resolve().parents[2]
 # 数据目录：存放 SQLite 文件
 data_dir = project_root / "data"
 data_dir.mkdir(parents=True, exist_ok=True)
@@ -193,6 +197,13 @@ def get_or_create_user(user_id: str, display_name: Optional[str] = None,
     # 原注释「password 仅在新用户创建时生效」与之前 L186 UPDATE password_hash 分支
     # 自相矛盾，导致同 user_id 第二次 register 会把旧密码覆盖（违反幂等 + 安全风险）。
     # 已存在用户改密码必须显式调用 update_password()（带 old_pw 校验）。
+    # ===== 例外（2026-09-06）：账号存在但从未设置过密码（password_hash 为空，如早期
+    # 游客建档/旧版注册缺陷产生的账号）时，允许经注册入口"首次设置密码"。 =====
+    # 不违反 P0：仅对无密码账号生效，绝不覆盖已有哈希；忘记密码走 update_password 的
+    # old_pw 校验通道（或管理员重置）。
+    if password and not (row["password_hash"] if "password_hash" in row.keys() else None):
+        updates.append("password_hash = ?")
+        params.append(_hash_password(password))
     if role:
         # 单向升级：仅当目标权限高于现有才允许（owner > admin > user > guest）
         rank = {"guest": 0, "user": 1, "admin": 2, "owner": 3}
@@ -231,17 +242,26 @@ def touch_last_login(user_id: str) -> None:
     conn.commit()
 
 
+def _lookup_user_auth(user_id: str) -> Tuple[Optional[str], Optional[str]]:
+    """读取用户 (role, password_hash)；用户不存在返回 (None, None)。仅 SQLite 快查，无哈希 CPU。"""
+    row = _select_user_full(user_id)
+    if row is None:
+        return None, None
+    role = (row["role"] if "role" in row.keys() else None) or _default_role_for(user_id)
+    pw_hash = row["password_hash"] if "password_hash" in row.keys() else None
+    return role, pw_hash
+
+
 def verify_user_password(user_id: str, password: str) -> Tuple[bool, bool, Optional[str]]:
     """校验登录密码。返回 (ok, need_upgrade, role)。
 
     ok: True = 密码对；need_upgrade: True = 登录成功但应重新 hash_password()（算法升级）。
     role 为当前用户角色，用于签发 JWT。
+    同步版（含哈希 CPU，会阻塞调用线程）：仅供同步上下文/测试；异步路由用 verify_user_password_async。
     """
-    row = _select_user_full(user_id)
-    if row is None:
+    role, pw_hash = _lookup_user_auth(user_id)
+    if role is None:
         return False, False, None
-    role = (row["role"] if "role" in row.keys() else None) or _default_role_for(user_id)
-    pw_hash = row["password_hash"] if "password_hash" in row.keys() else None
     if not pw_hash:
         # 空密码 = 未设置密码（游客或老用户从未设置）
         return False, False, role
@@ -249,20 +269,48 @@ def verify_user_password(user_id: str, password: str) -> Tuple[bool, bool, Optio
     return ok, need, role
 
 
+async def verify_user_password_async(user_id: str, password: str) -> Tuple[bool, bool, Optional[str]]:
+    """异步版：SQLite 读取与 PBKDF2/bcrypt 哈希验证均不阻塞事件循环。语义同 verify_user_password。"""
+    role, pw_hash = await asyncio.to_thread(_lookup_user_auth, user_id)
+    if role is None:
+        return False, False, None
+    if not pw_hash:
+        return False, False, role
+    ok, need = await async_verify_password(password, pw_hash)
+    return ok, need, role
+
+
+def _write_password_hash(user_id: str, pw_hash: str) -> bool:
+    """将已计算好的 hash 写入用户行（调用方保证用户存在）。"""
+    conn = _get_conn()
+    conn.execute(
+        "UPDATE users SET password_hash = ? WHERE user_id = ?",
+        (pw_hash, user_id),
+    )
+    conn.commit()
+    return True
+
+
 def update_password(user_id: str, new_password: str) -> bool:
-    """改密码。成功 True；用户不存在或新密码为空 -> False 或 raise。"""
+    """改密码（同步版：哈希 CPU 阻塞，仅供同步上下文/测试；异步路由用 update_password_async）。
+    成功 True；用户不存在或新密码为空 -> False 或 raise。"""
     if not new_password:
         raise ValueError("new_password 不能为空")
     row = _select_user_full(user_id)
     if row is None:
         return False
-    conn = _get_conn()
-    conn.execute(
-        "UPDATE users SET password_hash = ? WHERE user_id = ?",
-        (_hash_password(new_password), user_id),
-    )
-    conn.commit()
-    return True
+    return _write_password_hash(user_id, _hash_password(new_password))
+
+
+async def update_password_async(user_id: str, new_password: str) -> bool:
+    """异步版：密码哈希在线程池执行，不阻塞事件循环。语义同 update_password。"""
+    if not new_password:
+        raise ValueError("new_password 不能为空")
+    row = await asyncio.to_thread(_select_user_full, user_id)
+    if row is None:
+        return False
+    pw_hash = await async_hash_password(new_password)
+    return await asyncio.to_thread(_write_password_hash, user_id, pw_hash)
 
 
 def assign_role(user_id: str, role: str, *, by_role: str = "owner") -> bool:

@@ -1,15 +1,14 @@
 # -*- coding: utf-8 -*-
 """
 跨层级任务终止联动：RequestContext 三位一体。
-
-解决的问题（原架构缺失）：
+解决如下问题：
   1) WebSocket 断开时只移除连接，不取消任务 → LLM 推理/工具调用继续跑，浪费 token 与算力；
   2) 只有 task.cancel()（被动 await 点生效），同步长耗时代码（大循环/预处理）无"主动检查"→
-     取消延迟可达数百毫秒甚至秒级（用户体感"点了停止还在跑"）；
+     取消延迟可达数百毫秒甚至秒级（体感"点了停止还在跑"）；
   3) 父任务 cancel 不传递到后台 create_task 的子任务（摘要压缩/反馈写入）→ 孤儿任务泄漏；
   4) 取消语义与超时、请求元数据分散 → 无统一上下文对象贯穿请求全链路。
 
-本模块提供：
+本模块功能：
   - CancellationToken：事件驱动取消 + 主动 check + 子任务级联取消 + 可选 deadline；
   - RequestContext（三位一体）：取消令牌 + 元数据（thread_id/user_id/request_id/session_dir）+
     超时控制，ContextVar 存储，无需层层传参即可在任意调用深度访问；
@@ -40,9 +39,8 @@ import uuid
 import weakref
 from contextvars import ContextVar, Token as _CtxToken
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Set
+from typing import Any, Callable, Dict, List, Optional, Set
 
-from config.constants import REQUEST_CONTEXT_DEFAULT_TIMEOUT_SEC
 
 
 # ======================================================================
@@ -382,7 +380,6 @@ def create_request_context(
     extras: Optional[Dict[str, Any]] = None,
 ) -> RequestContext:
     """创建一份新的 RequestContext，并登记 thread_id → token 反向索引。
-
     注意：创建后必须 **立即** 调用 bind_request_context(ctx) 绑定到当前协程，
     且在 finally 块中 unbind + dispose。
     """
@@ -480,7 +477,6 @@ def check_cancelled(where: Optional[str] = None) -> None:
 
 def cancel_current_token_with_reason(reason: str) -> bool:
     """在当前请求链路内主动触发取消（例如：搜索调用次数超限）。返回是否首次触发。
-
     - 无当前上下文 → 返回 False（不抛异常，降级为仅记录错误提示）
     - 有上下文 → 调用 token.cancel(reason)，下一处 check_cancelled() / CancelledError
       会立即感知并退出循环，避免继续等待工具执行

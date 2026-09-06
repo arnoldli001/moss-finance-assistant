@@ -13,10 +13,10 @@ def test_interfaces_app_and_middleware():
     """FastAPI app 对象 + SSE Router + 关键治理模块能正常 import（不启动 lifespan）。"""
     from interfaces.api.server import app  # noqa: F401
     from interfaces.api.stream_bus import StreamEventBus, get_stream_bus_sync  # noqa: F401
-    # 三个治理模块（compat 层 api.middleware.XXX 会落到 governance.XXX 真实实现）—— 只验证模块级 import 闭合 + 导出最核心符号
-    from api.middleware import audit_logger as audit_mod  # type: ignore  # noqa: F401
-    from api.middleware.rbac import RBACMiddleware  # type: ignore  # noqa: F401
-    from api.middleware.prompt_sanitizer import SanitizeResult, sanitize_user_input  # type: ignore  # noqa: F401
+    # 三个治理模块直接 import governance 真实实现——只验证模块级 import 闭合 + 导出最核心符号
+    import governance.logger.audit_logger as audit_mod  # type: ignore  # noqa: F401
+    from governance.guardrails.rbac import RBACMiddleware  # type: ignore  # noqa: F401
+    from governance.guardrails.prompt_sanitizer import SanitizeResult, sanitize_user_input  # type: ignore  # noqa: F401
     # 应用可调用（FastAPI 实例本身就是 ASGI callable）
     assert callable(app)
     # 方案一两 POST 接口必须已挂载到路由表

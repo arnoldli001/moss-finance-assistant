@@ -11,8 +11,7 @@ AGENTS.md 规定"必须输出风险声明"靠prompt约束，无 output validator
   5) 所有违规落盘 JSONL，便于审计
 
 典型用法：
-    from agent.output_validator import get_output_validator, ValidationContext
-
+    from governance.guardrails.output_validator import get_output_validator, ValidationContext
     validator = get_output_validator()
 
     # 校验
@@ -55,8 +54,7 @@ from config.constants import (
     OUTPUT_VALIDATOR_VIOLATION_SEVERITY,
     OUTPUT_VALIDATOR_LOG_PATH,
 )
-from tools.stock_matcher import is_stock_code as _matcher_is_valid_code
-
+from shared.utils.stock_matcher import is_stock_code as _matcher_is_valid_code
 logger = logging.getLogger(__name__)
 
 

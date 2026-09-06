@@ -11,12 +11,12 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 
 def test_agents_import_chain():
-    """核心 Agents + prompts/context_engineer compat 层双路径都能 import。"""
+    """核心 Agents + prompts/context_engineer legacy 模块都能 import。"""
     # 新目录（AGENTS.md 架构：5 专业 Agent 位置）
     from agents.analyst.agent import run_deep_agent as _  # noqa: F401
     from agents.reasoning.memory_manager import MemoryManager  # noqa: F401
-    # compat 层短路径（保证 `from agent.main_agent` 不挂）
-    from agent.prompts import format_prompt  # noqa: F401
-    from agent.context_engineer import get_context_engineer  # type: ignore  # noqa: F401
+    # agents 层 legacy 模块（prompts_legacy / context_engineer_legacy）
+    from agents.analyst.prompts_legacy import format_prompt  # noqa: F401
+    from agents.reasoning.context_engineer_legacy import get_context_engineer  # type: ignore  # noqa: F401
     # 能运行到这里说明 import chain 闭合
     assert callable(get_context_engineer)

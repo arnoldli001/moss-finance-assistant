@@ -40,6 +40,15 @@ DEFAULT_AGENT_TIMEOUT_SEC: float = 180.0
 # 后台任务默认超时（知识星球抓取+分析、盘前自动化等更耗时的任务）
 DEFAULT_BACKGROUND_TIMEOUT_SEC: float = 300.0
 
+# 复盘/盘前预测按钮专用：阶段1+2 并行（小作文150/新闻280 → max=280s）+ 阶段3 DeepSeek 150，
+# 最坏 430s，故后台上限须高于 DEFAULT_BACKGROUND_TIMEOUT_SEC，否则最坏情况会在
+# 阶段3 途中被后台超时整体击杀，用户连分段兜底文本都收不到。
+# 阶段2 构成：路由~5s + 双源并发≤120s + 直连综合作答≤120s（2026-09-06 实测 agent 循环
+# 综合作答在 DeepSeek 拥堵下自然结束返回空串，已改直连 _base_model.ainvoke）；
+# 阶段3 实测（deepseek-v4-flash，6.4K 字符 prompt，输出 2235 字）：120.5s → 150s 留 25% 余量
+REVIEW_PREDICTION_BG_TIMEOUT_SEC: float = 450.0
+REVIEW_STAGE3_DEEPSEEK_TIMEOUT_SEC: float = 150.0
+
 # HTTP 请求类短超时（Ollama 预检、ngrok 隧道 API 读取、探针等）
 SHORT_HTTP_TIMEOUT_SEC: float = 2.0
 
@@ -73,7 +82,7 @@ NGROK_TUNNEL_MAX_POLL_ROUNDS: int = 10
 TAVILY_DEFAULT_MAX_RESULTS: int = 5
 
 # 知识星球群组抓取：默认最大滚动次数（触发更多主题加载）
-ZSXQ_DEFAULT_MAX_SCROLLS: int = 10
+ZSXQ_DEFAULT_MAX_SCROLLS: int = 15
 
 # 知识星球群组抓取：单轮最多抓取的主题条数
 ZSXQ_DEFAULT_MAX_TOPICS: int = 200
@@ -469,7 +478,7 @@ ZSXQ_OLLAMA_ENTRY_TRUNCATE_CHARS: int = 500
 ZSXQ_OLLAMA_ERROR_FALLBACK_TRUNCATE_CHARS: int = 2000
 
 # 浏览器互斥锁 acquire 最大等待秒数（超时则返回"浏览器正忙"，避免永久阻塞）
-ZSXQ_BROWSER_LOCK_WAIT_TIMEOUT_SEC: int = 5
+ZSXQ_BROWSER_LOCK_WAIT_TIMEOUT_SEC: int = 4
 
 # _print_topic_preview 中正文预览截断长度（Windows gbk 控制台避免刷爆）
 ZSXQ_PREVIEW_CONTENT_TRUNCATE_CHARS: int = 500
@@ -526,7 +535,7 @@ ZSXQ_TOOL_SEARCH_STOCK_MAX_TOPICS: int = 5
 ZSXQ_RESULT_RAW_PREVIEW_TRUNCATE_CHARS: int = 300
 
 # _fetch_topics_via_browser 默认抓取主题数上限（与 ZSXQ_DEFAULT_MAX_TOPICS 保持一致，用于明确语义）
-ZSXQ_DEFAULT_FETCH_MAX_TOPICS: int = 200
+ZSXQ_DEFAULT_FETCH_MAX_TOPICS: int = 100
 
 
 # ======================================================================
@@ -1129,7 +1138,7 @@ STOCK_CACHE_WARMUP_WEEKDAY_ONLY: bool = os.getenv(
 STOCK_CACHE_WARMUP_TOPK: int = int(os.getenv("STOCK_CACHE_WARMUP_TOPK", "10"))
 # 热门股候选来源清单（DeepSeek 会让联网搜索这些社区的最新热门股）
 STOCK_CACHE_WARMUP_SOURCES: tuple = (
-    "韭研社区", "东方财富股吧", "同花顺股吧", "雪球", "微信公众号",
+    "韭研社区", "东方财富股吧", "同花顺股吧", "雪球", "微信公众号", "财联社",
 )
 # 缓存文件 TTL（秒）：用于『当小时未结束，但用户换了更准确的股票名后仍能刷新』——
 # 实际判断按『当日已存在的"时"粒度文件』优先级；当日 08 时缓存 → 20 时自动降级为旧数据，不覆盖新

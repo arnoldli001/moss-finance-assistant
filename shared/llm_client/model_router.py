@@ -11,8 +11,7 @@
   4) 调用统计：每日调用次数、累计 token、累计 USD 成本
 
 典型用法：
-    from agent.model_router import ModelRouter
-
+    from shared.llm_client.model_router import ModelRouter
     router = ModelRouter()
 
     # 路由决策

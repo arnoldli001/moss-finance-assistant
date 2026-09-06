@@ -74,9 +74,6 @@ except Exception:  # pragma: no cover
 from config.constants import (  # noqa: E402
     OLLAMA_DEFAULT_BASE_URL,
     OLLAMA_CHAT_DEFAULT_TIMEOUT_SEC,
-    OLLAMA_DEFAULT_TEMPERATURE,
-    TEST_ZXSQ_OLLAMA_TIMEOUT_SEC as _DEFAULT_HARD_TIMEOUT,
-    TEST_ZXSQ_OLLAMA_TEMPERATURE as _DEFAULT_LOW_TEMP,
     TEST_ZXSQ_OLLAMA_CONTENT_COMPRESS_THRESHOLD as _DEFAULT_CONTENT_COMPRESS,
     TEST_ZXSQ_OLLAMA_ENTRY_TRUNCATE_CHARS as _DEFAULT_ENTRY_TRUNCATE,
     TEST_ZXSQ_CLI_TIMEOUT_SEC as _DEFAULT_CLI_TIMEOUT,
@@ -636,14 +633,18 @@ async def analyze_zsxq_hot_news_async(
 ) -> List[Dict[str, Any]]:
     """盘前小作文热度（异步）：输入资讯拼接文本，返回 list[dict(name, sentiment, count)]。"""
     system = (
-        "你是A股金融分析师。从财经资讯中提取【上市公司】股票名，判断利好或利空，"
+        "你是一名金融信息分析师，擅长汇总分析研报、新闻里提及的股票或概念板块的利好或利空，进行情绪定性。"
+        "从财经资讯中提取【上市公司】股票名，判断利好或利空，"
         "只提取上市公司，不要提取行业名或指数名。"
+        "政府机构/监管部门（如工信部、发改委、证监会）、产品或材料代号（如 D 纤）、"
+        "英文技术术语（如 Harness）均不是股票名，一律不要提取。"
         "利好=涨价/业绩增长/推荐/订单增长；利空=降价/下滑/风险提示/监管处罚。"
     )
     user = (
         f"从以下资讯中提取所有被提到的上市公司股票名，并判断利好或利空。\n"
         f"只提取上市公司（如贵州茅台、宁德时代、比亚迪、五粮液、古井贡酒、药明康德、迈瑞医疗等）。\n"
-        f"不要提取行业名（白酒、AI、半导体）、指数名（上证、恒生）。\n\n"
+        f"不要提取指数名（上证、恒生）"
+        f"政府机构或监管部门（工信部、发改委、证监会）、产品或材料代号（D 纤）、英文技术术语（Harness）。\n\n"
         f"资讯：\n{entries_text}"
     )
     res = await ollama_analyze_async(

@@ -78,9 +78,9 @@ class RouterDecision(BaseModel):
     branch: RouteBranch
     # 命中方式：'rule_based' = Python 正则/关键词/缓存命中直接判；'gemma4' = 本地 gemma4:e4b 推理；'cascade' = 级联兜底
     decided_by: str = "rule_based"
-    # 判定原因（中文，便于前端进度条展示）
+    # 判定原因（便于前端进度条展示）
     reason: str = ""
-    # 是否识别出个股 / 板块
+    # 是否识别出个股/板块
     has_stock_keywords: bool = False
     extracted_stock_names: List[str] = []
     extracted_stock_codes: List[str] = []

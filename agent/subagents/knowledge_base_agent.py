@@ -1,4 +1,4 @@
-from agent.prompts import sub_agents_content
+from agents.analyst.prompts_legacy import sub_agents_content
 from tools.ragflow_tools import search_knowledge_base
 
 knowledge_base_agent = {

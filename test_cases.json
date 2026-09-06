@@ -230,6 +230,59 @@
       "notes": "当 search_knowledge 前 max_content 条结果中包含 PDF/docx 时触发。历史版本只对 media_type=11（笔记）获取正文，PDF/docx 仅返回标题。",
       "first_run_at": "2026-08-09",
       "status": "historical_passed"
+    },
+    {
+      "case_id": 7,
+      "title": "盘前新闻按钮：analysis_workflow PRE_MARKET_NEWS 分支（缓存/双源并发/直连综答）",
+      "query": "盘前新闻",
+      "tags": ["zsxq", "tavily", "premarket", "workflow", "regression-20260906"],
+      "priority": "P1",
+      "expected": {
+        "subagents": ["网络搜索助手"],
+        "forbidden_error_patterns": [
+          "无结果或执行失败",
+          "盘前新闻搜索未返回内容"
+        ],
+        "final_answer_should_contain_keywords": ["风险"]
+      },
+      "coverage": {
+        "covers": [
+          "run_analysis_workflow 盘前新闻分支路由",
+          "Tavily+知识星球双源直连工具并发（无 agent 自主搜索循环）",
+          "直连 deepseek-v4-flash 综合作答 120s（弃用 run_deep_agent 空返回路径）",
+          "6h 盘前新闻缓存命中秒回"
+        ]
+      },
+      "notes": "2026-09-06 回归：旧版 agent 自主多查询搜索 >135s 超时返回空串（前端'无结果'）；综合作答改直连 ainvoke。复盘预测阶段2 亦复用本分支（bus=None 静默）。",
+      "first_run_at": "2026-09-06",
+      "status": "pending_manual"
+    },
+    {
+      "case_id": 8,
+      "title": "复盘预测按钮：阶段1小作文+阶段2新闻并行 → 阶段3 DeepSeek 指数预测",
+      "query": "帮我做今天的盘前预测（小作文热度+盘前新闻+大盘指数走势预测）",
+      "tags": ["review-prediction", "parallel", "deepseek", "regression-20260906"],
+      "priority": "P1",
+      "expected": {
+        "subagents": ["网络搜索助手"],
+        "forbidden_error_patterns": [
+          "盘前新闻结果为空",
+          "分析失败，请稍后重试",
+          "盘前小作文热度分析未返回结果"
+        ],
+        "final_answer_should_contain_keywords": ["预测", "风险"]
+      },
+      "coverage": {
+        "covers": [
+          "阶段1/2 asyncio.gather 并行（独立超时互不牵连）",
+          "阶段2 结果取 WorkflowResult.final_answer（str/对象双兼容）",
+          "阶段3 超时 150s（实测 120.5s），后台预算 REVIEW_PREDICTION_BG_TIMEOUT_SEC=450",
+          "阶段2→阶段3 prompt 插槽 {zsxq_result}/{news_result} 传参完整"
+        ]
+      },
+      "notes": "2026-09-06 回归：历史故障=阶段2 空串致 DeepSeek 称'盘前新闻结果为空'、阶段3 40s 必超时、WorkflowResult.strip() AttributeError。E2E 实测缓存命中场景全程 40s。",
+      "first_run_at": "2026-09-06",
+      "status": "pending_manual"
     }
   ]
 }

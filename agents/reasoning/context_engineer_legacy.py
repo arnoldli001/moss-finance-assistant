@@ -19,7 +19,6 @@ from __future__ import annotations
 import re
 import json
 import datetime
-import os
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Set
 
@@ -38,9 +37,7 @@ from config.constants import (
 )
 
 # ===== 股票匹配工具：统一从 data/stock_list.txt 查询代码与名称 =====
-from tools.stock_matcher import (
-    extract_stocks as _matcher_extract_stocks,
-    lookup_stock as _matcher_lookup_stock,
+from shared.utils.stock_matcher import (    extract_stocks as _matcher_extract_stocks,
     is_stock_code as _matcher_is_valid_code,
 )
 
@@ -198,7 +195,6 @@ class ContextEngineer:
     def _extract_stock_codes(self, text: str) -> List[str]:
         """
         抽取股票代码（只返回在 data/stock_list.txt 清单中存在的有效代码）。
-
         来源优先级：
           1) 先调用 StockMatcher.extract_from_text 抽取"名称+代码"复合识别，
              有效避免 6 位数字误识别为日期、编号。

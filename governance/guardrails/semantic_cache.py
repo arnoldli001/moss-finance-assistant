@@ -10,8 +10,7 @@
   5) 与降级链集成：主 LLM 失败 → 查语义缓存 → 命中则返回 → 否则降级到下一档
 
 典型用法：
-    from agent.semantic_cache import get_semantic_cache
-
+    from governance.guardrails.semantic_cache import get_semantic_cache
     cache = get_semantic_cache()
 
     # 查询前：先查缓存

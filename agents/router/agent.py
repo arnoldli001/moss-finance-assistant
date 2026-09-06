@@ -23,7 +23,7 @@ from __future__ import annotations
 import asyncio
 import json as _json
 import re
-from typing import List, Optional
+from typing import List
 
 from shared.models import RouteBranch, RouterDecision
 

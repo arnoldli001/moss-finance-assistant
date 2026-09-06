@@ -13,7 +13,6 @@ def test_shared_import_chain_and_alias_consistency():
     """shared.actors + shared.config + shared.data_sources 新路径 & compat 别名一致。"""
     # 新路径（Shared 层真实文件）
     from shared.actors.session_registry_actor import SessionRegistryActor  # noqa: F401
-    from shared.config.constants import OLLAMA_DEFAULT_BASE_URL  # 全局模型网关 URL，保证 config 常量可见
     # 新 shared.data_sources.zhishixingqiu 必须单例等价于 tools.zsxq_tool（ZSXQ 登录修复正确性锚点）
     import importlib
     s = importlib.import_module("shared.data_sources.zhishixingqiu")

@@ -6,14 +6,12 @@
 import asyncio
 import sys
 from pathlib import Path
-import pytest
 
 # 测试文件位于 tests/ 子目录，需要向上一级找到项目根目录
 project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(project_root))
 
-from agent.memory_manager import MemoryManager, get_memory_manager, WINDOW_KEEP_LAST_N, SUMMARY_TRIGGER_TURNS
-
+from agents.reasoning.memory_manager import MemoryManager, get_memory_manager, WINDOW_KEEP_LAST_N, SUMMARY_TRIGGER_TURNS
 
 def test_priority_classification():
     """验证优先级分类 + 关键决策识别"""

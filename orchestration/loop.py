@@ -89,17 +89,15 @@ def _classify_error(err: Exception) -> Tuple[str, bool]:
     """
     # 优先用 governance 错误分类器（若加载成功）
     try:
-        from governance.guardrails.error_classifier import classify_error  # type: ignore
-        from inspect import iscoroutinefunction as _icf
-        fn = classify_error
-        if _icf(fn):
-            # 本层是同步包装，简化：调用失败就本地规则
-            raise RuntimeError("async classifier not supported here")
-        res = fn(err)
-        if isinstance(res, tuple) and len(res) >= 2:
-            return str(res[0]), bool(res[1])
-        if isinstance(res, dict):
-            return str(res.get("quadrant", "UNCLASSIFIED")), bool(res.get("should_retry", False))
+        from governance.guardrails.error_classifier import get_error_classifier, ErrorQuadrant
+        cls_err = get_error_classifier().classify(err)
+        _Q_MAP = {
+            ErrorQuadrant.A_RETRYABLE_HARD: ("HARD_RETRY", True),
+            ErrorQuadrant.B_SOFT: ("SOFT_NO_RETRY", False),
+            ErrorQuadrant.C_PERMANENT: ("UNCLASSIFIED", False),
+            ErrorQuadrant.D_CONFIG: ("FATAL_NO_RETRY", False),
+        }
+        return _Q_MAP.get(cls_err.quadrant, ("UNCLASSIFIED", False))
     except Exception:
         pass
     # 本地兜底（四象限）

@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -20,10 +21,9 @@ import secrets
 import time
 import uuid as _uuid
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional, Tuple
 
-from fastapi import Depends, HTTPException, Request, WebSocket, status
+from fastapi import HTTPException, Request, WebSocket, status
 from pydantic import BaseModel
 
 # ------------------------------ 可选依赖探测 ------------------------------
@@ -48,7 +48,7 @@ JWT_ALGORITHM: str = os.getenv("JWT_ALGORITHM", "HS256")
 JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "120"))
 JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = int(os.getenv("JWT_REFRESH_TOKEN_EXPIRE_DAYS", "14"))
 
-PBKDF2_ITERATIONS: int = int(os.getenv("PBKDF2_ITERATIONS", "200_000"))
+PBKDF2_ITERATIONS: int = int(os.getenv("PBKDF2_ITERATIONS", "600_000"))  # OWASP 2023 推荐 600k；旧哈希登录时经 need_upgrade 自动升级
 PBKDF2_ALGO: str = "sha256"
 PBKDF2_SALT_BYTES: int = 16
 PBKDF2_HASH_BYTES: int = 32
@@ -59,12 +59,10 @@ PREFIX_BCRYPT = "2b"
 
 GUEST_USER_PREFIX = "guest_"
 
-
 # ------------------------------ 数据模型 ------------------------------
 @dataclass
 class CurrentUser:
     """登录后注入到每个业务端点的「当前用户上下文」。
-
     role 取值与 config/rbac_policy.json 对齐：owner / admin / user / guest。
     """
     user_id: str
@@ -81,7 +79,6 @@ class CurrentUser:
             "is_guest": self.is_guest,
         }
 
-
 class TokenResponse(BaseModel):
     access_token: str
     refresh_token: str
@@ -89,16 +86,13 @@ class TokenResponse(BaseModel):
     expires_in: int  # 秒
     user: Dict[str, Any]
 
-
 # ------------------------------ 密码哈希（双算法兼容 + 升级） ------------------------------
 def _b64e(b: bytes) -> str:
     return base64.b64encode(b).decode("ascii").rstrip("=")
 
-
 def _b64d(s: str) -> bytes:
     pad = "=" * (-len(s) % 4)
     return base64.b64decode(s + pad)
-
 
 def hash_password(password: str) -> str:
     """安全密码哈希。优先 bcrypt；否则 PBKDF2-HMAC-SHA256。
@@ -124,10 +118,8 @@ def hash_password(password: str) -> str:
         f"{_b64e(salt)}${_b64e(dk)}"
     )
 
-
 def verify_password(password: str, hashed: Optional[str]) -> Tuple[bool, bool]:
     """验证密码。返回 (是否通过, 是否需要升级哈希)。
-
     need_upgrade=True 表示用户登录成功但密码还是旧算法（或低迭代 PBKDF2），
     调用方应立刻用 hash_password() 重新生成覆盖到 DB。
     """
@@ -138,13 +130,9 @@ def verify_password(password: str, hashed: Optional[str]) -> Tuple[bool, bool]:
             # 用户密码是 bcrypt 但本环境没装 bcrypt → 无法校验，返回 False 不升级
             return False, False
         ok = _bcrypt.checkpw(password.encode("utf-8"), hashed.encode("utf-8"))
-        # 若 rounds 低于 12，建议升级
-        need = False
-        try:
-            rounds = int(hashed.split("$")[2])
-            need = rounds < 12
-        except Exception:
-            pass
+        # 若 rounds 低于 12，建议升级（显式格式校验：malformed hash -> 视为不升级）
+        parts = hashed.split("$")
+        need = len(parts) > 2 and parts[2].isdigit() and int(parts[2]) < 12
         return ok, need
     if hashed.startswith(f"${PREFIX_PBKDF2}$"):
         try:
@@ -171,10 +159,21 @@ def verify_password(password: str, hashed: Optional[str]) -> Tuple[bool, bool]:
     return False, False
 
 
+# -------- 异步包装：bcrypt(12 rounds)/PBKDF2(600k) 单次计算数百毫秒，属 CPU 密集；
+# FastAPI 异步路由直接调用会阻塞事件循环（所有并发请求排队），必须经线程池执行。 --------
+async def async_hash_password(password: str) -> str:
+    """异步版 hash_password：哈希在线程池执行，供异步路由 await。"""
+    return await asyncio.to_thread(hash_password, password)
+
+
+async def async_verify_password(password: str, hashed: Optional[str]) -> Tuple[bool, bool]:
+    """异步版 verify_password：返回 (是否通过, 是否需要升级哈希)，语义同同步版。"""
+    return await asyncio.to_thread(verify_password, password, hashed)
+
+
 # ------------------------------ JWT 签发 / 校验 ------------------------------
 def _now_ts() -> int:
     return int(time.time())
-
 
 def _create_jwt_payload(user_id: str, role: str, display_name: str,
                         is_guest: bool, minutes: int, type_: str) -> Dict[str, Any]:
@@ -301,7 +300,6 @@ def refresh_access_token(refresh_token: str) -> TokenResponse:
 
 def create_guest_token() -> Tuple[TokenResponse, str]:
     """生成游客账号 + JWT 对。返回 (token_pair, user_id)。
-
     游客 user_id = guest_<uuid8>，role=guest，display_name=游客<uuid6>。
     """
     u = _uuid.uuid4().hex
@@ -317,19 +315,17 @@ def _extract_bearer_from_header(authorization: Optional[str]) -> Optional[str]:
         return None
     if authorization.lower().startswith("bearer "):
         return authorization[7:].strip()
-    # 兼容裸 token
     return authorization.strip() or None
 
 
 async def get_current_user(request: Request) -> CurrentUser:
     """HTTP 业务端点默认依赖。从 Authorization: Bearer <jwt> 取 token。
-
     返回 CurrentUser；任何校验失败抛 HTTP 401。
     """
     auth = request.headers.get("Authorization", "")
     token = _extract_bearer_from_header(auth)
     if not token:
-        # 兼容 WebSocket 升级前握手场景：GET /ws?token=xxx（虽然 ws 端点用另一个依赖）
+        # 兼容 WebSocket 升级前握手场景：GET/ws?token=xxx（虽然 ws 端点用另一个依赖）
         token = request.query_params.get("token") or None
     p = _decode_jwt(token, type_required="access")
     return CurrentUser(
@@ -342,7 +338,6 @@ async def get_current_user(request: Request) -> CurrentUser:
 
 async def get_current_user_websocket(websocket: WebSocket) -> Optional[CurrentUser]:
     """WS 端点依赖：先拿 token（header 或 query）再校验。
-
     任何校验失败不抛 HTTPException（WS 协议需要 close(code=4401)），
     调用方接收 None 后自行决定 accept 还是 close。
     """
@@ -381,7 +376,6 @@ async def get_current_user_optional(request: Request) -> Optional[CurrentUser]:
         is_guest=bool(p.get("guest", False)),
         token_type="access",
     )
-
 
 def current_user_id_must_match(current: CurrentUser, target_user_id: Optional[str]) -> None:
     """垂直越权校验：owner/admin 角色可跳过（运营视角），普通 user/guest 必须 user_id 相等。

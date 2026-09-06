@@ -15,17 +15,15 @@ SLO 定义（与 SKILL.md 第 6.2 节对齐）：
 """
 from __future__ import annotations
 
-import asyncio
 import sqlite3
 import threading
 import time
 from collections import defaultdict, deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Deque, Dict, List, Optional
 
-from agent.circuit_breaker import get_circuit_registry
-
+from governance.guardrails.circuit_breaker import get_circuit_registry
 # ===== 全局常量集中引用（替代魔鬼数字，统一修改一处即全局生效）=====
 from config.constants import (
     SLO_AVAILABILITY_TARGET,

@@ -21,9 +21,8 @@ import hashlib
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, Optional, Set
+from typing import Any, Dict, Optional
 
-from config.constants import HTTP_CODE_UNAUTHORIZED
 
 
 # ======================================================================

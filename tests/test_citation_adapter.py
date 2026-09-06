@@ -43,7 +43,7 @@ def expect(name, cond, detail=""):
 # =================================================================
 def test_think_tag_splitter():
     print("\n== 场景 1: ThinkTagSplitter 跨 chunk ==")
-    from adapter.stream_adapters import ThinkTagSplitter, NormalizedChunk
+    from shared.llm_client.stream_adapters import ThinkTagSplitter, NormalizedChunk
     sp = ThinkTagSplitter()
     # 模拟 chunk 切分：'<th' + 'ink>思考1思考2</th' + 'ink>正文片段'
     chunks_in = ['<th', 'ink>第一步：识别意图\n第二步：选 Tavily\n</th', 'ink>正文根据[1]显示利多。']
@@ -75,8 +75,7 @@ def test_think_tag_splitter():
 # =================================================================
 def test_normalize_citations():
     print("\n== 场景 2: 引用归一 [N] / [citation:N] / [[N]] / (N) + MD 链接规避 ==")
-    from adapter.stream_adapters import normalize_citation_markers
-    # 三种写法 + 规避 Markdown 链接
+    from shared.llm_client.stream_adapters import normalize_citation_markers    # 三种写法 + 规避 Markdown 链接
     raw = (
         "这是正文引用[citation:3]，还有一些[[5]]以及(2)写法。"
         "注意 [茅台酒](https://example.com/moutai) 和 [研报](https://pdf) 不是角标！"
@@ -97,7 +96,7 @@ def test_normalize_citations():
 # =================================================================
 def test_build_citation_context():
     print("\n== 场景 3: build_citation_context [citation:N] Prompt ==")
-    from adapter.stream_adapters import build_citation_context
+    from shared.llm_client.stream_adapters import build_citation_context
     docs: List[Dict] = [
         {"doc_id": "t1", "title": "茅台上半年净利同比增20%", "url": "https://news.cn/1",
          "content": "贵州茅台发布半年报，净利同比增20%超预期。", "channel": "tavily",
@@ -122,8 +121,7 @@ def test_build_citation_context():
 # =================================================================
 def test_assign_citations_by_overlap():
     print("\n== 场景 4: assign_citations_by_overlap fallback 动态挂 [N] ==")
-    from adapter.stream_adapters import (
-        build_citation_context, assign_citations_by_overlap, CitationDocument
+    from shared.llm_client.stream_adapters import (        build_citation_context, assign_citations_by_overlap
     )
     # 构造 docs：关键词 茅台/净利/超预期 对应 doc1；白酒/PE/估值 对应 doc2；出货/大户 对应 doc3
     docs_dict = [
@@ -153,12 +151,10 @@ def test_assign_citations_by_overlap():
 # 场景 5: bus 三事件 publish → subscriber 收到（内存总线 smoke）
 # =================================================================
 async def _async_bus_smoke():
-    from api.stream_bus import StreamEventBus, new_event_id
+    from api.stream_bus import StreamEventBus
     from api.stream_protocol import (
-        StreamEventType, ReasoningPayload, RetrieveResultPayload,
-        RetrieveResultItem, CitationMetaPayload, CitationMetaItem,
+        CitationMetaItem,
     )
-    from dataclasses import asdict
 
     bus = StreamEventBus()
     thread_id = "t-smoke-001"

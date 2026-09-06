@@ -1,11 +1,7 @@
 #coding = utf-8
-
-import shared.compat_bootstrap
-
 import sys
 import os
 # 强制 stdout/stderr 行缓冲，确保 uvicorn --reload 模式下 print 日志实时输出
-# reconfigure 是 Python 3.7+ TextIOWrapper 的方法，但类型存根 TextIO 未声明，故用 type: ignore
 try:
     sys.stdout.reconfigure(line_buffering=True)
     sys.stderr.reconfigure(line_buffering=True)
@@ -36,7 +32,7 @@ class _WSDisconnectFilter(logging.Filter):
         for kw in self._KEYWORDS:
             if kw in msg:
                 return False
-        # 检查异常信息（traceback 中的异常类型和消息）
+        # 检查异常信息（traceback中的异常类型和消息）
         if record.exc_info:
             try:
                 exc_type_str = str(record.exc_info[0])
@@ -47,17 +43,17 @@ class _WSDisconnectFilter(logging.Filter):
             except Exception:
                 pass
         return True
-from starlette.responses import JSONResponse, Response
-from pydantic import BaseModel, Field#负责定义请求体（Request Body）的结构和响应（Response）的格式
+from starlette.responses import JSONResponse
+#数据验证库，分为核心层、模型定义层、数据校验层、序列化层和配置层
+from pydantic import BaseModel, Field
+# 负责定义请求体（Request Body）的结构和响应（Response）的格式
 from typing import Any, List, Optional, Dict, Tuple
-from collections import defaultdict, deque
-from datetime import datetime, timedelta
+from datetime import datetime
 
 # ====== 企业级鉴权 & 限流（P0 修复：API 全裸 → JWT+RBAC+4 级 QPM 限流）======
 from fastapi import Depends as _Depends  # 统一给所有业务端点 Depends() 使用
 from shared.utils.auth import (
     CurrentUser,
-    TokenResponse,
     create_token_pair,
     refresh_access_token,
     create_guest_token,
@@ -70,12 +66,8 @@ from shared.utils.rate_limiter import (
     RateLimiter,
     get_rate_limiter as _get_global_rl,
 )
-# 旧治理层 RBACPolicy（config/rbac_policy.json 中 4 档 QPM）已实现但未接线：
-# 本次中间件 AUTH_AND_RATE_MIDDLEWARE 会统一按「JWT role」执行 4 档 QPM 限流，
-# 并把 CurrentUser → 旧 RBACPolicy.UserContext 同步写 ContextVar，避免破坏旧治理层调用。
+# 中间件AUTH_AND_RATE_MIDDLEWARE统一按「JWT role」执行4档 QPM 限流。
 import governance.guardrails.rbac as _rbac_mod
-# 上面一行等效：from governance.guardrails import rbac as _rbac_mod
-# 后续用 _rbac_mod.RBACPolicy / _rbac_mod._current_user 访问。
 
 def _find_project_root(start: Path) -> Path:
     """向上查找项目根（锚点：AGENTS.md/.git/main.py/requirements.txt），
@@ -85,19 +77,16 @@ def _find_project_root(start: Path) -> Path:
     for p in [cur, *cur.parents]:
         if any((p / a).exists() for a in anchors):
             return p
-    # 兜底：本文件位于 <project>/interfaces/api/ → parents[2] = 项目根
     return cur.parents[2]
 
-
-# Add project root to sys.path
 current_dir = Path(__file__).resolve().parent
 project_root = _find_project_root(current_dir)
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-# ===== Actor Model 集成：导入 Actor 基类与具体 Actor =====
-from agent.actor_base import get_actor_system
-from agent.actors import (
+# ===== Actor Model 集成：导入Actor基类与具体 Actor =====
+from shared.actors.actor_base import get_actor_system
+from shared.actors import (
     SessionRegistryActor, SRMsg,
     CircuitBreakerActor, CBMsg,
     ConnectionManagerActor, ConnMsg,
@@ -122,6 +111,8 @@ from agent.request_context import (
 from config.constants import (
     DEFAULT_AGENT_TIMEOUT_SEC,
     DEFAULT_BACKGROUND_TIMEOUT_SEC,
+    REVIEW_PREDICTION_BG_TIMEOUT_SEC,
+    REVIEW_STAGE3_DEEPSEEK_TIMEOUT_SEC,
     SCHEDULER_STARTUP_WAIT_SEC,
     NGROK_CLEANUP_WAIT_SEC,
     NGROK_TUNNEL_MAX_POLL_ROUNDS,
@@ -131,26 +122,8 @@ from config.constants import (
     NGROK_LOCAL_API_PORT,
     SCHEDULER_CANCEL_WAIT_SEC,
     SUBPROCESS_WAIT_TIMEOUT_SEC,
-    RATE_LIMIT_PER_MINUTE,
-    RATE_LIMIT_WINDOW_SEC,
-    OLLAMA_DEFAULT_BASE_URL,
-    OLLAMA_PROBE_TIMEOUT_SEC,
-    OLLAMA_LAUNCH_POLL_INTERVAL_SEC,
-    OLLAMA_LAUNCH_POLL_MAX_ROUNDS,
-    OLLAMA_PULL_TIMEOUT_SEC,
-    OLLAMA_MODELS_LIST_TIMEOUT_SEC,
-    OLLAMA_PULL_LOG_TAIL_KEEP,
-    OLLAMA_PULL_PROGRESS_INTERVAL_SEC,
-    OLLAMA_PULL_PROGRESS_LINE_MAX_CHARS,
-    OLLAMA_PULL_HARD_TIMEOUT_SEC,
-    TEXT_SANITIZE_SHORT_TEXT_THRESHOLD_LEN,
     HTTP_CODE_TOO_MANY_REQUESTS,
     HTTP_CODE_NOT_FOUND,
-    SERVER_OUTPUT_MAX_STDOUT_TAIL_LINES,
-    SERVER_FINAL_RETURN_LINE_MIN_LEN,
-    SERVER_JSON_DEBUG_LINE_MIN_LEN,
-    SERVER_PROGRESS_SAFE_TRUNCATE_LEN,
-    ZSXQ_BROWSER_LOCK_WAIT_TIMEOUT_SEC,
     STREAM_DISCONNECT_POLL_INTERVAL_SEC,
     STREAM_RESUME_BODY_LAST_EVENT_ID_ALLOW,
     STREAM_RESUME_COLD_RESTART_SUGGESTION,
@@ -223,7 +196,7 @@ async def _run_with_ctx(
     try:
         # 快捷按钮：开启控制台静默模式，避免刷 Updated todo / 5000字结果
         if quiet:
-            from agent.main_agent import set_quiet_mode as _set_qm
+            from agents.analyst.agent import set_quiet_mode as _set_qm
             old_quiet = _set_qm(True)
         ctx = create_request_context(
             thread_id=thread_id,
@@ -244,7 +217,7 @@ async def _run_with_ctx(
     finally:
         if old_quiet is not None:
             try:
-                from agent.main_agent import set_quiet_mode as _set_qm_restore
+                from agents.analyst.agent import set_quiet_mode as _set_qm_restore
                 _set_qm_restore(old_quiet)
             except Exception:
                 pass
@@ -253,10 +226,10 @@ async def _run_with_ctx(
         if ctx is not None:
             ctx.dispose()
 
-from agent.main_agent import run_deep_agent, get_session_history
-from agent.prompts import format_prompt
+from agents.analyst.agent import run_deep_agent, get_session_history
+from agents.analyst.prompts_legacy import format_prompt
 from api.monitor import manager
-from api import storage
+from interfaces.api import storage
 
 output_dir = project_root / "output"
 output_dir.mkdir(exist_ok=True)
@@ -745,9 +718,9 @@ async def lifespan(app: FastAPI):
         _tb.print_exc()
         print(f"[StreamBus] 初始化失败（不致命，SSE 将降级为原 POST+WS）: {_stream_init_err}")
 
-    # 把熔断器 Actor 句柄注入到 main_agent 和 circuit_breaker 适配层
-    from agent import main_agent as _ma_mod
-    from agent import circuit_breaker as _cb_mod
+    # 把熔断器 Actor 句柄注入到主 Agent 和熔断器真源模块
+    from agents.analyst import agent as _ma_mod
+    from governance.guardrails import circuit_breaker as _cb_mod
     _cb_mod._set_cb_actor(_circuit_breaker_actor)
     _ma_mod._set_cb_actor(_circuit_breaker_actor)
     _ma_mod._set_slo_actor(_slo_monitor_actor)
@@ -756,7 +729,7 @@ async def lifespan(app: FastAPI):
 
     # ---------- Layer4: 启动定时调度器（盘前小作文9:13 / 盘前新闻9:15）----------
     try:
-        from agent.scheduler import get_scheduler, setup_preset_tasks
+        from orchestration.scheduler.scheduler import get_scheduler, setup_preset_tasks
         scheduler = get_scheduler()
 
         # 盘前小作文热度回调：调用 zsxq 分析
@@ -779,7 +752,7 @@ async def lifespan(app: FastAPI):
             )
 
         async def _run_news_scheduler_callback():
-            from agent.main_agent import run_deep_agent
+            from agents.analyst.agent import run_deep_agent
             await run_deep_agent(
                 "请搜索今日A股盘前新闻，包括重要公告、宏观政策、市场热点，按利好利空分类汇总",
                 "scheduler_news_auto",
@@ -796,7 +769,7 @@ async def lifespan(app: FastAPI):
                 STOCK_CACHE_ENABLED, STOCK_CACHE_WARMUP_HOURS,
                 STOCK_CACHE_WARMUP_MINUTE, STOCK_CACHE_WARMUP_WEEKDAY_ONLY,
             )
-            from cache.hot_stock_warmup import warmup
+            from orchestration.skills.hot_stock_warmup import warmup
             if STOCK_CACHE_ENABLED:
                 _registered_warmup = 0
                 for hour in STOCK_CACHE_WARMUP_HOURS:
@@ -920,7 +893,7 @@ async def lifespan(app: FastAPI):
                 await asyncio.wait_for(scheduler_task, timeout=SCHEDULER_CANCEL_WAIT_SEC)
             except (asyncio.CancelledError, asyncio.TimeoutError):
                 pass
-        from agent.scheduler import get_scheduler
+        from orchestration.scheduler.scheduler import get_scheduler
         await get_scheduler().stop()
         print("[Scheduler] 定时调度器已停止")
     except Exception:
@@ -1251,6 +1224,12 @@ async def auth_login(req: LoginRequest):
         code = "USER_NOT_FOUND" if user_row is None else "PASSWORD_MISMATCH"
         if user_row and not user_row.get("has_password"):
             code = "NO_PASSWORD_SET"
+            raise HTTPException(
+                status_code=_st.HTTP_401_UNAUTHORIZED,
+                detail={"code": code,
+                        "message": "该账号未设置过密码，请回到登录界面点击「注册」，输入同一账号名和你要设置的密码，设置成功后即可登录"},
+                headers={"WWW-Authenticate": "Bearer"},
+            )
         raise HTTPException(
             status_code=_st.HTTP_401_UNAUTHORIZED,
             detail={"code": code, "message": "用户名或密码错误"},
@@ -1358,7 +1337,7 @@ async def run_task(request: TaskRequest, current: CurrentUser = _Depends(get_cur
             print(f"[Premarket] prompt 已注入系统时间，剥除联网查询日期段 (thread={thread_id})")
     _cache_shorted = False
     try:
-        from cache.stock_cache import extract_stock_name, query_cache_by_stock_name
+        from orchestration.skills.stock_cache import extract_stock_name, query_cache_by_stock_name
         from config.constants import STOCK_CACHE_ENABLED
         if STOCK_CACHE_ENABLED:
             _stk = extract_stock_name(_effective_query)
@@ -1742,7 +1721,7 @@ async def run_task_stream(req: _StreamTaskRequest, request: Request,
         # ================================================================
         cache_hit_payload: Optional[Dict[str, Any]] = None
         try:
-            from cache.stock_cache import extract_stock_name, query_cache_by_stock_name, iter_cache_hit_chunks
+            from orchestration.skills.stock_cache import extract_stock_name, query_cache_by_stock_name, iter_cache_hit_chunks
             from config.constants import STOCK_CACHE_ENABLED
             if STOCK_CACHE_ENABLED:
                 _stock = extract_stock_name(effective_query)
@@ -2269,6 +2248,14 @@ async def _run_review_prediction(thread_id: str, user_id: Optional[str] = None, 
         3. 加载 skills/index-prediction/SKILL.md 规则
         4. 构建 prompt：skill + 两路结果 + 用户提及的个股 → DeepSeek 分析
         5. 推送最终预测结果到前端对话区（含推理逻辑）
+
+    超时保护：阶段1+2 并行（wait_for+gather，任一段超时只取消自己的任务）+ 阶段3 单独 wait_for。
+    - 阶段1 盘前小作文热度：150s 上限（含 120s Ollama 预检 + 抓取分析余量，
+      且 runner 自身 240s 总上限 + 150s readline 超时在此之前会更早失败）。
+    - 阶段2 盘前新闻：180s 上限（复用"盘前新闻"按钮工作流：6h缓存→双源并发→聚合→综合作答）。
+    - 阶段3 DeepSeek 综合分析：REVIEW_STAGE3_DEEPSEEK_TIMEOUT_SEC=150s（实测 120.5s）。
+    并行段 max(150,180)=180 + 阶段3 150 = 330s 最坏，后台 REVIEW_PREDICTION_BG_TIMEOUT_SEC=390s 兜底；
+    任一段超时/异常都以清晰信息返回，避免到顶后显示"超时 xxx s 无工具调用"。
     """
     from api.context import set_thread_context, reset_session_context
     from api.monitor import monitor
@@ -2283,39 +2270,90 @@ async def _run_review_prediction(thread_id: str, user_id: Optional[str] = None, 
             print(f"[ReviewPrediction] 加载 skill 失败: {e}")
             skill_content = ""
 
-        # ===== 阶段 1：盘前小作文热度分析 =====
-        monitor._emit("tool_start", "【复盘预测 阶段1/3】执行盘前小作文热度分析...")
-        zsxq_result = await _run_zsxq_analysis(thread_id, emit_to_frontend=False)
-        if not zsxq_result.strip():
+        # ===== 阶段 1+2 并行：盘前小作文热度 + 盘前新闻搜索 =====
+        # 用户要求：原串行（150+130s）改并行（max=150s），两路结果汇总后给阶段3。
+        # wait_for 只会取消各自任务，互不牵连；gather(return_exceptions=True)
+        # 把 TimeoutError/业务异常作为结果返回，逐段归类整理，保证两路都有兜底文案。
+        monitor._emit(
+            "tool_start",
+            "【复盘预测 阶段1/2】并行执行：盘前小作文热度分析 + 盘前新闻搜索...",
+        )
+        # 阶段2 复用"盘前新闻"按钮的完整工作流（analysis_workflow.PRE_MARKET_NEWS 分支）：
+        # 6h 缓存 → 双源并发（Tavily 直连 + 知识星球直连，无 agent 自主搜索循环）→
+        # 聚合去重 → 直连 deepseek-v4-flash 综合作答 → 写 6h 缓存。
+        # 原"agent 拿 pre_market_prompt 自主搜索"版实测 >135s 超时返回空串（前端"无结果"）；
+        # 且工作流内 agent 综合作答在 DeepSeek 拥堵下会自然结束返回空串（2026-09-06 实测），
+        # 已在工作流内改为直连综合作答。bus=None 时工作流进度推送全部静默不重复。
+        from orchestration.workflows.analysis_workflow import run_analysis_workflow
+
+        _zsxq_timeout_sec = 150.0
+        # 280s = 路由~5s + 双源并发 ≤120s(TWO_SOURCE_DAG_TIMEOUT_SEC) + 直连综合作答 ≤120s + 裕量
+        _news_timeout_sec = 280.0
+        _zsxq_res, _news_res = await asyncio.gather(
+            asyncio.wait_for(
+                _run_zsxq_analysis(thread_id, emit_to_frontend=False),
+                timeout=_zsxq_timeout_sec,
+            ),
+            asyncio.wait_for(
+                run_analysis_workflow(
+                    "盘前新闻", thread_id=thread_id, user_id=user_id, quiet=True, bus=None
+                ),
+                timeout=_news_timeout_sec,
+            ),
+            return_exceptions=True,
+        )
+
+        # --- 阶段1 结果整理：小作文热度 ---
+        _zsxq_ok = False
+        if isinstance(_zsxq_res, BaseException):
+            zsxq_result = ""
+            if isinstance(_zsxq_res, asyncio.TimeoutError):
+                monitor._emit(
+                    "tool_start",
+                    f"⏱【阶段1/2超时】盘前小作文热度分析超过 {_zsxq_timeout_sec:.0f}s 未完成。"
+                    " 常见原因：① 知识星球未登录；请先运行 `python tools/zsxq_tool.py login` 扫码；"
+                    "② Ollama qwen3:8b 未启动或冷启动过久。跳过此阶段，继续后续步骤。",
+                )
+            else:
+                print(f"[ReviewPrediction] 阶段1 异常: {_zsxq_res!r}")
+                monitor._emit("tool_start", "⚠️ 盘前小作文热度分析异常，跳过此阶段继续。")
+        else:
+            zsxq_result = _zsxq_res
+            _zsxq_ok = True
+        if _zsxq_ok and not zsxq_result.strip():
             zsxq_result = "（小作文热度分析无结果或执行失败）"
             monitor._emit("tool_start", "⚠️ 小作文热度分析未返回内容，继续执行后续步骤")
-        else:
+        elif _zsxq_ok:
             monitor._emit("tool_start", f"✅ 小作文热度分析完成，结果长度 {len(zsxq_result)} 字符")
 
-        # ===== 阶段 2：盘前新闻搜索（通过主 agent，内部会推送过程给前端）=====
-        monitor._emit("tool_start", "【复盘预测 阶段2/3】执行盘前新闻搜索...")
-        from agent.main_agent import run_deep_agent
-        # 注入当前北京时间 + 搜索范围提示，避免 agent 联网搜索"今天是周几"浪费 token
-        # 与盘前新闻快捷按钮 _rewrite_premarket_query_if_shortcut 复用同一套计算函数，
-        # 保证"前端按钮"和"复盘预测阶段2"两个入口的时间窗口完全一致。
-        _now_bj_pre = _beijing_now()
-        _weekday_cn_pre = _weekday_cn_of(_now_bj_pre)
-        _current_time_str_pre = _now_bj_pre.strftime("%Y年%m月%d日 %H:%M")
-        _search_range_hint = _format_time_range_hint(_now_bj_pre)
-        pre_market_prompt = format_prompt(
-            "server.pre_market_prompt",
-            current_time_str=_current_time_str_pre,
-            weekday_cn=_weekday_cn_pre,
-            search_range_hint=_search_range_hint,
-        )
-        news_result = await run_deep_agent(pre_market_prompt, thread_id, user_id)
-        if not news_result or not news_result.strip():
-            news_result = "（盘前新闻搜索无结果或执行失败）"
-            monitor._emit("tool_start", "⚠️ 盘前新闻搜索未返回内容，继续执行后续步骤")
+        # --- 阶段2 结果整理：盘前新闻 ---
+        _news_ok = False
+        if isinstance(_news_res, BaseException):
+            news_result = ""
+            if isinstance(_news_res, asyncio.TimeoutError):
+                monitor._emit(
+                    "tool_start",
+                    f"⏱【阶段2/2超时】盘前新闻搜索超过 {_news_timeout_sec:.0f}s 未完成。"
+                    " DeepSeek 或联网搜索可能拥堵，将以阶段1结果继续。",
+                )
+            else:
+                print(f"[ReviewPrediction] 阶段2 异常: {_news_res!r}")
+                monitor._emit("tool_start", "⚠️ 盘前新闻搜索异常，将以阶段1结果继续。")
         else:
-            monitor._emit("tool_start", f"✅ 盘前新闻搜索完成，结果长度 {len(news_result)} 字符")
+            # 兼容两种返回：str（旧版 run_deep_agent）与 WorkflowResult（工作流版）
+            news_result = (
+                _news_res if isinstance(_news_res, str)
+                else (getattr(_news_res, "final_answer", "") or "")
+            )
+            _news_ok = True
+        if _news_ok:
+            if not news_result or not news_result.strip():
+                news_result = "（盘前新闻搜索无结果或执行失败）"
+                monitor._emit("tool_start", "⚠️ 盘前新闻搜索未返回内容，继续执行后续步骤")
+            else:
+                monitor._emit("tool_start", f"✅ 盘前新闻搜索完成，结果长度 {len(news_result)} 字符")
 
-        # ===== 阶段 3：调用 DeepSeek 综合分析 + 指数预测 =====
+        # ===== 阶段 3：调用 DeepSeek 综合分析 + 指数预测（150s 上限） =====
         monitor._emit("tool_start", "【复盘预测 阶段3/3】调用 DeepSeek 综合分析并生成指数预测...")
         monitor.report_thinking("大盘指数预测")
 
@@ -2323,7 +2361,6 @@ async def _run_review_prediction(thread_id: str, user_id: Optional[str] = None, 
         if user_query and user_query.strip():
             user_stock_hint = f"\n\n【用户特别关注】用户在复盘预测中提及：{user_query.strip()}，请在个股应对策略部分重点分析。"
 
-        # 注入当前实际日期时间（北京时间），避免 DeepSeek 从搜索结果推断错误日期
         from datetime import timezone, timedelta as _td
         _tz_bj = timezone(_td(hours=8))
         _now_bj = datetime.now(_tz_bj)
@@ -2331,7 +2368,6 @@ async def _run_review_prediction(thread_id: str, user_id: Optional[str] = None, 
         _current_time_str = _now_bj.strftime("%Y年%m月%d日 %H:%M") + f"（{_weekday_cn}）"
         _market_phase = "盘后" if _now_bj.hour >= 15 else ("盘中" if 9 <= _now_bj.hour < 15 else "盘前")
 
-        # 分析提示词从 prompts.yml runtime_prompts 段加载模板，动态填入时间/skill/结果/个股提示
         analysis_prompt = format_prompt(
             "server.review_prediction.analysis_prompt",
             current_time_str=_current_time_str,
@@ -2342,15 +2378,50 @@ async def _run_review_prediction(thread_id: str, user_id: Optional[str] = None, 
             user_stock_hint=user_stock_hint,
         )
 
-        # 调用 DeepSeek（使用原始 _base_model，不走 PTD 包装，避免工具路由干扰）
-        from agent.llm import _base_model
+        from shared.llm_client.deepseek_client import _base_model
         from langchain_core.messages import HumanMessage
+        # 阶段3 实测延迟 120.5s（deepseek-v4-flash，6.4K prompt/2.2K 输出），40s/130s 均过紧
+        _ds_timeout_sec = REVIEW_STAGE3_DEEPSEEK_TIMEOUT_SEC
+        _ds_ok = False
+        analysis_result = ""
         try:
-            resp = await _base_model.ainvoke([HumanMessage(content=analysis_prompt)])
+            resp = await asyncio.wait_for(
+                _base_model.ainvoke([HumanMessage(content=analysis_prompt)]),
+                timeout=_ds_timeout_sec,
+            )
             analysis_result = resp.content if hasattr(resp, "content") else str(resp)
+            _ds_ok = True
+        except asyncio.TimeoutError:
+            analysis_result = (
+                f"⏱【阶段3/3超时】DeepSeek 综合分析超过 {_ds_timeout_sec:.0f}s 未返回。"
+                f" 以下为已完成阶段的原始结果，请根据自身判断操作。\n\n"
+                f"【盘前小作文热度】\n{zsxq_result[:3500]}\n\n【盘前新闻】\n{news_result[:3500]}"
+            )
         except Exception as e:
             print(f"[ReviewPrediction] DeepSeek 分析异常: {e}")
             analysis_result = f"⚠️ DeepSeek 综合分析调用失败: {e}\n\n【盘前小作文热度】\n{zsxq_result[:1500]}\n\n【盘前新闻】\n{news_result[:1500]}"
+
+        # 若阶段 2 盘前新闻和阶段 1 小作文都失败，给用户一个明确的"下一步动作"提示
+        if not _zsxq_ok or not _news_ok:
+            _failed_stage = []
+            if not _zsxq_ok:
+                _failed_stage.append("阶段1（盘前小作文热度：需登录/或 Ollama 未启动）")
+            if not _news_ok:
+                _failed_stage.append("阶段2（盘前新闻：DeepSeek 或联网搜索拥堵）")
+            hint = (
+                "\n\n---\n💡 自检建议（超时/失败处理）：\n"
+                + "  · "
+                + "；\n  · ".join(_failed_stage)
+                + "\n  · 若阶段1失败：终端运行 `python tools/zsxq_tool.py login` 扫码持久化；"
+                  "确认 `ollama list` 有 qwen3:8b；再点按钮。\n"
+                + "  · 若阶段2失败：请稍后重试，或改在非交易时段点击以避开 LLM/搜索并发高峰。"
+            )
+            analysis_result = (analysis_result or "") + hint
+        elif not _ds_ok:
+            analysis_result = (analysis_result or "") + (
+                "\n\n💡 自检建议：阶段3 DeepSeek 超时/失败。"
+                "可直接复用『盘前小作文热度』+『盘前新闻』两段原文做决策。"
+            )
 
         # ===== 推送最终结果到前端对话区 =====
         monitor.report_task_result(analysis_result)
@@ -2417,7 +2488,7 @@ async def run_review_prediction(req: ReviewPredictionRequest,
             thread_id,
             effective_user_id,
             None,
-            _DEFAULT_BG_TIMEOUT,
+            REVIEW_PREDICTION_BG_TIMEOUT_SEC,
             _run_review_prediction,
             thread_id,
             effective_user_id,
@@ -2522,18 +2593,18 @@ async def delete_session(session_id: str,
         # ===== 用户隔离检查：防止越权删除其他用户的会话 =====
         current_user_id_must_match(current, existing.get("user_id"))
         if not storage.verify_session_owner(session_id, current.user_id) and current.role not in ("owner", "admin"):
-            raise HTTPException(status_code=403, detail=f"无权删除会话 {session_id}")
+            raise HTTPException(status_code=403, detail="无权删除该会话")
     storage.delete_session(session_id)
     # 清理记忆管理：滑窗/摘要/关键决策（失败不影响主流程）
     try:
-        from agent.memory_manager import get_memory_manager
+        from agents.reasoning.memory_manager import get_memory_manager
         mm = get_memory_manager()
         await mm.clear_session(session_id)
     except Exception as mm_err:
         print(f"[MemoryManager] 删除会话 {session_id} 记忆失败（不致命）: {mm_err}")
     for mod_name, cleanup_fn in [
-        ("agent.trace", "get_trace_logger"),
-        ("agent.feedback_handler", "get_feedback_handler"),
+        ("governance.monitor.trace", "get_trace_logger"),
+        ("governance.feedback.feedback_handler", "get_feedback_handler"),
         ("agent.state_store", "get_state_store"),
     ]:
         try:
@@ -2544,7 +2615,7 @@ async def delete_session(session_id: str,
             pass
     # 清理 LangGraph checkpointer 中该 thread_id 的历史
     try:
-        from agent.main_agent import get_main_agent
+        from agents.analyst.agent import get_main_agent
         agent = await get_main_agent()
         config = {"configurable": {"thread_id": session_id}}
         await agent.aupdate_state(config, {"messages": []})  # type: ignore[attr-defined]
@@ -2572,7 +2643,7 @@ async def rename_session(session_id: str, req: RenameRequest,
     # ===== 用户隔离检查：P0 双保险 =====
     current_user_id_must_match(current, session.get("user_id"))
     if not storage.verify_session_owner(session_id, current.user_id) and current.role not in ("owner", "admin"):
-        raise HTTPException(status_code=403, detail=f"无权修改会话 {session_id}")
+        raise HTTPException(status_code=403, detail="无权修改该会话")
     if not storage.update_session_title(session_id, title):
         raise HTTPException(status_code=404, detail="会话不存在")
     return {"status": "ok", "session_id": session_id, "title": title}
@@ -2597,8 +2668,7 @@ async def _langraph_collect_remove_ids(
         from langchain_core.messages import (
             AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage,
         )
-        from agent.main_agent import get_main_agent
-
+        from agents.analyst.agent import get_main_agent
         agent = await get_main_agent()
         config = {"configurable": {"thread_id": session_id}}
         state = await agent.aget_state(config)  # type: ignore[attr-defined]
@@ -2665,10 +2735,9 @@ async def _langraph_apply_removal(
         return
     try:
         from langchain_core.messages import (
-            SystemMessage, RemoveMessage as _RM,
+            RemoveMessage as _RM,
         )
-        from agent.main_agent import get_main_agent
-
+        from agents.analyst.agent import get_main_agent
         agent = await get_main_agent()
         config = {"configurable": {"thread_id": session_id}}
 
@@ -2683,20 +2752,22 @@ async def _langraph_apply_removal(
             except Exception as lg_err:
                 print(f"[TurnDelete] LangGraph RemoveMessage 失败（降级 whole-update）: {lg_err}")
 
-        # 兜底：whole-update
-        if kept_positions:
+        # 兜底 whole-update：仅在确有 id 需要删除且 RemoveMessage 失败时执行。
+        # 必须按「消息 ID」在最新状态上过滤——位置索引在并发任务追加消息后会漂移，
+        # 按旧位置过滤会误删新消息（曾导致会话状态从 8 条 human 骤降到 4 条）。
+        if to_remove_ids:
             state = await agent.aget_state(config)  # type: ignore[attr-defined]
             msgs: list = (state.values or {}).get("messages", []) if state else []
-            system_msgs = [m for m in msgs if isinstance(m, SystemMessage)]
-            new_msgs = [m for i, m in enumerate(msgs) if i in set(kept_positions)]
-            if system_msgs:
-                # 系统消息已在 msgs 中，不需要再前置
-                pass
-            try:
-                await agent.aupdate_state(config, {"messages": new_msgs})
-                print(f"[TurnDelete] LangGraph whole-update：ms {len(msgs)}→{len(new_msgs)}")
-            except Exception as lg2_err:
-                print(f"[TurnDelete] LangGraph whole-update 也失败（不致命）: {lg2_err}")
+            remove_id_set = set(to_remove_ids)
+            new_msgs = [m for m in msgs if getattr(m, "id", None) not in remove_id_set]
+            if len(new_msgs) < len(msgs):
+                try:
+                    await agent.aupdate_state(config, {"messages": new_msgs})
+                    print(f"[TurnDelete] LangGraph whole-update（id 过滤）：ms {len(msgs)}→{len(new_msgs)}")
+                except Exception as lg2_err:
+                    print(f"[TurnDelete] LangGraph whole-update 也失败（不致命）: {lg2_err}")
+        elif kept_positions:
+            print("[TurnDelete] 无可删消息 id（位置未命中），跳过 whole-update 以防并发覆盖")
     except Exception as e:
         print(f"[TurnDelete] _langraph_apply_removal 异常（不致命）: {e}")
 
@@ -2723,7 +2794,7 @@ async def delete_session_turn(
     # ===== P0 双保险：JWT 登录态 match session owner（owner/admin 豁免）=====
     current_user_id_must_match(current, session.get("user_id"))
     if not storage.verify_session_owner(session_id, current.user_id) and current.role not in ("owner", "admin"):
-        raise HTTPException(status_code=403, detail=f"无权修改会话 {session_id}")
+        raise HTTPException(status_code=403, detail="无权修改该会话")
     if turn_index < 1:
         raise HTTPException(status_code=400, detail="turn_index 必须 >= 1")
 
@@ -2731,7 +2802,7 @@ async def delete_session_turn(
     if role_val not in ("user", "assistant", "all"):
         raise HTTPException(status_code=400, detail="role 必须是 user / assistant / all")
 
-    from agent.memory_manager import get_memory_manager
+    from agents.reasoning.memory_manager import get_memory_manager
     mm = get_memory_manager()
 
     # 1. memory 层删除
@@ -2782,7 +2853,7 @@ async def batch_delete_messages(session_id: str, req: BatchDeleteRequest,
     # ===== P0 双保险 =====
     current_user_id_must_match(current, session.get("user_id"))
     if not storage.verify_session_owner(session_id, current.user_id) and current.role not in ("owner", "admin"):
-        raise HTTPException(status_code=403, detail=f"无权修改会话 {session_id}")
+        raise HTTPException(status_code=403, detail="无权修改该会话")
     if not req.items:
         raise HTTPException(status_code=400, detail="items 不能为空")
 
@@ -2797,7 +2868,7 @@ async def batch_delete_messages(session_id: str, req: BatchDeleteRequest,
             raise HTTPException(status_code=400, detail=f"role 必须是 user/assistant/all，收到 {role}")
         cleaned_items.append({"turn_index": ti, "role": role})
 
-    from agent.memory_manager import get_memory_manager
+    from agents.reasoning.memory_manager import get_memory_manager
     mm = get_memory_manager()
 
     # 1. memory 批量删除（内部按 turn_index 降序处理）
@@ -2826,7 +2897,7 @@ async def scheduler_status(current: CurrentUser = _Depends(get_current_user)):
     """查看定时调度器状态和下次运行时间（P0：仅 owner/admin 可访问运维端点）。"""
     _require_role_admin_or_owner(current)
     try:
-        from agent.scheduler import get_scheduler
+        from orchestration.scheduler.scheduler import get_scheduler
         s = get_scheduler()
         return {
             "running": s._running,
@@ -2850,7 +2921,7 @@ async def get_traces(session_id: str, limit: int = 10,
         # 会话不存在时，运维角色允许直接走（不泄露）；普通 user = 404 语义上一致
         _require_role_admin_or_owner(current)
     try:
-        from agent.trace import get_trace_logger
+        from governance.monitor.trace import get_trace_logger
         tl = get_trace_logger()
         traces = await tl.get_recent_traces(session_id, limit)
         return {"session_id": session_id, "traces": traces}
@@ -2868,7 +2939,7 @@ async def get_latency_stats(session_id: str,
     else:
         _require_role_admin_or_owner(current)
     try:
-        from agent.trace import get_trace_logger
+        from governance.monitor.trace import get_trace_logger
         tl = get_trace_logger()
         stats = await tl.get_latency_stats(session_id)
         return {"session_id": session_id, "stats": stats}
@@ -2953,7 +3024,7 @@ async def websocket_endpoint(websocket: WebSocket, thread_id: str):
             current_user_id_must_match(cu, sess["user_id"])
         except HTTPException:
             try:
-                await websocket.close(code=4403, reason=f"Forbidden: 无权进入会话 {thread_id}")
+                await websocket.close(code=4403, reason="Forbidden: 无权进入该会话")
             except Exception:
                 pass
             return

@@ -272,25 +272,57 @@ window.addEventListener('load', async () => {
     }
   })();
 
-  // 首次打开自动生成随机用户 ID，用户无需手动输入
-  if (!currentUserId) {
-    const ts = Date.now().toString(36);
-    const rand = Math.random().toString(36).slice(2, 6);
-    currentUserId = 'guest_' + ts + rand;
-    localStorage.setItem('dsp_user_id', currentUserId);
-  }
-  $('user-id-input').value = currentUserId;
-  // 自动登录
-  await login();
-  // 登录后若无会话选中：优先选最后一个已有会话，无会话才新建
-  if (!currentSessionId) {
-    const sessions = await loadSessions();
-    if (sessions.length > 0) {
-      const last = sessions[sessions.length - 1];
-      switchSession(last.session_id, last.title);
-    } else {
-      await newSession();
+  // —— 登录态感知启动：AUTH 模式下（auth_bootstrap.js 提供 window.MossAuth），
+  //    currentUserId 必须来自 JWT.sub；未登录时登录遮罩挡在最上层（auth_bootstrap 负责），
+  //    此处【不跑】会话流程，等 moss:user-changed 事件（登录/注册/游客成功）再启动。
+  //    否则遮罩底下裸跑 newSession() → 401 → "Cannot read properties of undefined" 弹窗。
+  const _auth = window.MossAuth;
+  function _syncUidFromAuth() {
+    const u = _auth && _auth.currentUser && _auth.currentUser();
+    if (u && u.user_id) {
+      currentUserId = u.user_id;
+      localStorage.setItem('dsp_user_id', currentUserId);
     }
+    const inp = $('user-id-input');
+    if (inp) inp.value = currentUserId;
+  }
+  async function _startSessionFlow() {
+    _syncUidFromAuth();
+    // 无会话选中：优先选最后一个已有会话，无会话才新建
+    if (!currentSessionId) {
+      const sessions = await loadSessions();
+      if (sessions.length > 0) {
+        const last = sessions[sessions.length - 1];
+        switchSession(last.session_id, last.title);
+      } else {
+        await newSession();
+      }
+    }
+  }
+  if (_auth && _auth.enabled) {
+    if (_auth.isLoggedIn()) {
+      await _startSessionFlow();
+    } else {
+      // 未登录：等登录/注册/游客成功（auth_bootstrap 派发 moss:user-changed）后自动启动一次
+      window.addEventListener('moss:user-changed', (ev) => {
+        if (ev.detail && ev.detail.user_id) _startSessionFlow();
+      }, { once: true });
+    }
+    // 常驻监听：账号切换（登录/登出）时同步身份
+    window.addEventListener('moss:user-changed', (ev) => {
+      if (ev.detail && ev.detail.user_id) _syncUidFromAuth();
+      else if (!ev.detail) { currentSessionId = null; }
+    });
+  } else {
+    // 非 AUTH 模式（旧行为）：自造游客 ID + 旧明文登录
+    if (!currentUserId) {
+      const ts = Date.now().toString(36);
+      const rand = Math.random().toString(36).slice(2, 6);
+      currentUserId = 'guest_' + ts + rand;
+      localStorage.setItem('dsp_user_id', currentUserId);
+    }
+    $('user-id-input').value = currentUserId;
+    await _startSessionFlow();
   }
   $('login-btn').addEventListener('click', login);
   $('send-btn').addEventListener('click', sendMessage);
@@ -300,10 +332,24 @@ window.addEventListener('load', async () => {
   });
 });
 
-// ============ 用户登录 ============
+// ============ 用户登录（侧边栏输入框手动登录） ============
 async function login() {
   const uid = $('user-id-input').value.trim();
   if (!uid) { alert('请输入用户 ID'); return; }
+  const _auth = window.MossAuth;
+  if (_auth && _auth.enabled) {
+    // AUTH 模式：身份绑定 JWT，输入框仅供展示（hideLoginScreen 会设 readonly）
+    if (!_auth.isLoggedIn()) { _auth.showLoginScreen('请先登录后再操作'); return; }
+    const cur = _auth.currentUser();
+    if (cur && cur.user_id !== uid) {
+      showToast(`当前登录身份为 ${cur.user_id}，如需切换账号请点击右上角「退出」后重新登录/注册`);
+      $('user-id-input').value = cur.user_id;
+      return;
+    }
+    await loadSessions();
+    return;
+  }
+  // 非 AUTH 模式（旧行为）：旧明文建档端点
   currentUserId = uid;
   localStorage.setItem('dsp_user_id', uid);
   try {
@@ -483,17 +529,19 @@ async function loadSessions() {
 async function newSession() {
   if (!currentUserId) { alert('请先登录'); return; }
   _retrievalResetAll();
-  // 生成随机会话标题：session_时间_uuid片段，确保唯一不重复
+  // 生成随机会话标题：时间_uuid片段，确保唯一不重复
   const now = new Date();
   const ts = `${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}-${String(now.getHours()).padStart(2,'0')}${String(now.getMinutes()).padStart(2,'0')}`;
   const uuidFrag = (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2)).slice(0, 8);
-  const randomTitle = `session_${ts}_${uuidFrag}`;
+  const randomTitle = `${ts}_${uuidFrag}`;
   try {
     const r = await fetch(`/api/users/${currentUserId}/sessions`, {
       method: 'POST', headers: {'Content-Type':'application/json'},
       body: JSON.stringify({title: randomTitle})
     });
     const data = await r.json();
+    if (!r.ok) throw new Error((data.detail && (data.detail.message || JSON.stringify(data.detail))) || `HTTP ${r.status}`);
+    if (!data.session || !data.session.session_id) throw new Error('响应缺少 session 字段');
     await loadSessions();
     switchSession(data.session.session_id, data.session.title);
   } catch (e) { alert('新建会话失败: ' + e.message); }

@@ -1,4 +1,4 @@
-﻿"""tests/test_router_smoke.py — Router Agent 规则阶段冒烟（纯 decide()，不调本地 LLM，秒级）。
+"""tests/test_router_smoke.py — Router Agent 规则阶段冒烟（纯 decide()，不调本地 LLM，秒级）。
 运行：
     pytest tests/test_router_smoke.py -v
     python -m pytest tests/
@@ -14,8 +14,6 @@ import sys
 import pathlib
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
-
-import shared.compat_bootstrap  # noqa: F401  兼容层优先加载
 
 import pytest
 from agents.router.agent import decide

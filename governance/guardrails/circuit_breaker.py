@@ -24,7 +24,7 @@ import time
 import threading
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Deque, Dict, Optional, Tuple
+from typing import Deque, Dict, Optional
 
 # ===== 全局常量集中引用（替代魔鬼数字，统一修改一处即全局生效）=====
 from config.constants import (
@@ -381,7 +381,6 @@ def _bridged_snapshot(self: TimeWindowCircuitBreaker) -> Dict:
         return _original_snapshot(self)
     # 同步等待 Actor 快照（短平快）
     try:
-        import concurrent.futures as _cf
         fut = asyncio.run_coroutine_threadsafe(
             _cb_actor.ask(_CB_MSG_SNAPSHOT, {"name": self.name}),
             loop,
@@ -415,7 +414,6 @@ def _bridged_registry_snapshot_all(self: CircuitBreakerRegistry) -> Dict[str, Di
     if not loop.is_running():
         return _original_registry_snapshot_all(self)
     try:
-        import concurrent.futures as _cf
         fut = asyncio.run_coroutine_threadsafe(
             _cb_actor.ask(_CB_MSG_SNAPSHOT_ALL, {}),
             loop,

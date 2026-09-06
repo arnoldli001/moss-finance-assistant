@@ -9,8 +9,9 @@ RBAC 权限中间件 + 数据行级权限：限流的基础上，新增RBAC/数�
   4) require_permission: 装饰器/依赖，在 endpoint 上声明所需权限
 
 典型用法：
-    from api.middleware.rbac import RBACMiddleware, require_permission, get_current_user_context
-    app.add_middleware(RBACMiddleware)
+    from governance.guardrails.rbac import RBACMiddleware, require_permission, get_current_user_context
+app.add_middleware
+(RBACMiddleware)
     @app.post("/api/retail/{user_id}")
     @require_permission("retail_data:read:self")
     async def get_retail(user_id: str):
@@ -26,7 +27,6 @@ RBAC 权限中间件 + 数据行级权限：限流的基础上，新增RBAC/数�
 """
 from __future__ import annotations
 
-import asyncio
 import fnmatch
 import json
 import logging
@@ -38,7 +38,6 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
 
 from fastapi import HTTPException, Request, status
-from fastapi.security import APIKeyHeader
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 

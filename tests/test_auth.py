@@ -13,7 +13,6 @@
 """
 from __future__ import annotations
 
-import time
 import uuid
 
 
@@ -54,6 +53,25 @@ def test_login_wrong_password_401(unauth_client):
     assert r2.status_code == 401, f"login(pw_wrong)={r2.status_code} {r2.text}"
     code = ((r2.json() or {}).get("detail") or {}).get("code")
     assert code == "PASSWORD_MISMATCH", f"期望 PASSWORD_MISMATCH，实际={code}"
+
+
+# ======================================================================
+# S2b：已存在但无密码的账号可通过注册首次设置密码（2026-09-06 修复回归）
+# 历史 bug：storage 中存在但 password_hash 为空的账号，注册被静默忽略，
+# 登录时报"用户名或密码错误"且无法自救。
+# ======================================================================
+def test_register_sets_password_for_passwordless_account(unauth_client):
+    from interfaces.api import storage
+    uid = f"t_s2b_{uuid.uuid4().hex[:8]}"
+    # 存储层直接创建无密码账号（模拟历史游客/导入账号）
+    storage.get_or_create_user(uid, display_name="NoPw")
+    pw = f"pw_{uuid.uuid4().hex[:12]}"
+    r = unauth_client.post("/api/auth/register",
+                           json={"user_id": uid, "password": pw})
+    assert r.status_code == 200, f"无密码账号注册设密应 200: {r.status_code} {r.text}"
+    r2 = unauth_client.post("/api/auth/login",
+                            json={"user_id": uid, "password": pw})
+    assert r2.status_code == 200, f"设密后应可用该密码登录: {r2.status_code} {r2.text}"
 
 
 # ======================================================================
@@ -146,7 +164,6 @@ def _new_guest_client(moss_app, unauth_client):
 
 def test_ratelimit_guest_10qpm_11th_429_and_headers(moss_app, reset_rate_limiter,
                                                     unauth_client):
-    from fastapi.testclient import TestClient
 
     g_client, g_uid = _new_guest_client(moss_app, unauth_client)
 

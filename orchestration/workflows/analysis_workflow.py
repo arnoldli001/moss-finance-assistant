@@ -44,7 +44,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from shared.models import RouterDecision, RouteBranch, RetrievalItem, SourceReliability
 from shared.aggregator import Aggregator, get_aggregator
@@ -302,7 +302,7 @@ async def _run_local_sql(query: str, stock_names: List[str], stock_codes: List[s
     """MySQL K线（仅当命中股票，取对应表前 100 条）。"""
     items: List[Any] = []
     try:
-        from shared.data_sources.local_sql import list_sql_tables, get_table_data, execute_sql_query  # type: ignore
+        from shared.data_sources.local_sql import list_sql_tables, get_table_data  # type: ignore
         tables_raw = list_sql_tables()
         tables: List[str] = []
         if isinstance(tables_raw, list):
@@ -580,13 +580,31 @@ async def run_analysis_workflow(
             _wf_r(title="🧠 最终推理（DeepSeek-R1:7b）",
                   content=(
                       f"输入长度：{len(aggregated_prompt_context)} 字符\n"
-                      "任务：结合联网检索 + 知识星球聚合，按【利好 / 利空 / 散户情绪】分类汇总，"
+                      "任务：结合联网检索 + 知识星球聚合的搜索结果，按【利好 / 利空 / 散户情绪】分类汇总根据影响程度，利空利多大小级别，A股当前流动性和板块轮动特点，推理输出大盘、板块及个股接下来的走势预测，"
                       "输出结构化盘前新闻简报，并在结尾附风险声明。"
                   ), stage="model")
-            final_answer = await _final_analyst_answer(
-                query, thread_id, user_id, aggregated_prompt_context,
-                preferred_agent="reasoning", bus=bus, quiet=quiet,
-            )
+            # 最终推理：直连 deepseek-v4-flash 综合作答（120s）。
+            # 原走 _final_analyst_answer → run_deep_agent：2026-09-06 实测 agent 循环
+            # 在 DeepSeek 拥堵时会"自然结束却返回空串"（无异常/无取消日志，SLO success=False），
+            # 且聚合素材已在手，agent 循环只剩复读价值却引入空返回风险，故替换为直连调用。
+            try:
+                from shared.llm_client.deepseek_client import _base_model
+                from langchain_core.messages import HumanMessage as _HM
+                _fin_prompt = (
+                    "你是一名金融信息分析师。以下是一次综合网络搜索与知识星球聚合的搜索结果，"
+                    "请按【利好 / 利空 / 散户情绪】分类汇总，推理输出明日大盘走势预测及应对，个股或板块走势预测，输出结构化盘前新闻简报（1000 字以内，"
+                    "利好/利空各列个股或板块及一句话理由），结尾必须单独一行附风险声明：\n"
+                    "⚠️ 以上信息来自互联网公开资料，仅供参考，不构成投资建议。投资有风险，入市需谨慎，盈亏自负。\n\n"
+                    f"【素材】\n{str(aggregated_prompt_context)[:12000]}"
+                )
+                _fin_resp = await asyncio.wait_for(
+                    _base_model.ainvoke([_HM(content=_fin_prompt)]),
+                    timeout=120.0,
+                )
+                final_answer = (_fin_resp.content or "").strip() if hasattr(_fin_resp, "content") else str(_fin_resp)
+            except Exception as _fin_err:
+                print(f"[盘前新闻] 直连综合作答失败: {_fin_err!r}")
+                final_answer = ""
             _wf_p(stage="盘前新闻：写入 6h 本地缓存", percent=97,
                   detail="推理完成，结果归档到本地缓存，后续相同问题秒回 ...")
             # 保存到文件

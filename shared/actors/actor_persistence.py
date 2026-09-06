@@ -8,7 +8,7 @@ Actor 状态持久化与快照恢复：原Actor状态是内存态，单进程挂
   4) 用 asyncio.Lock 防止并发快照写入冲突
 
 典型用法：
-    from agent.actor_persistence import ActorSnapshotter, FileBackend
+    from shared.actors.actor_persistence import ActorSnapshotter, FileBackend
     backend = FileBackend(base_dir="data/actor_snapshots")
     snapshotter = ActorSnapshotter(
         actor=my_actor,
@@ -29,7 +29,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field, asdict
@@ -42,7 +41,6 @@ from config.constants import (
     ACTOR_SNAPSHOT_INTERVAL_MSGS,
     ACTOR_SNAPSHOT_FULL_INTERVAL_MSGS,
     ACTOR_SNAPSHOT_KEEP_VERSIONS,
-    ACTOR_SNAPSHOT_AUTO_RESTORE,
     ACTOR_SNAPSHOT_REDIS_URL,
     ACTOR_SNAPSHOT_REDIS_PREFIX,
 )

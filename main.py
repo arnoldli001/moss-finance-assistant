@@ -1,4 +1,4 @@
-"""main.py —— MOSS Finance Assistant 统一入口（重构.md 决策⑨：新建根目录 main.py）。
+"""main.py —— MOSS Finance Assistant 统一入口。
 
 封装两个用途：
   1. HTTP 服务启动（uvicorn FastAPI）
@@ -14,24 +14,22 @@
      $ python main.py task-reasoning "分析加息影响"    # 强制走 reasoning Agent
      $ python main.py cache-premarket                 # 预热生成盘前新闻缓存（手工预热）
      $ python main.py skills-scan                     # 扫描 orchestration/skills/ 输出技能清单
-     $ python main.py test-imports                    # 最小冒烟：所有架构层 import + 旧别名别名
+     $ python main.py test-imports                    # 最小冒烟：新架构真源路径逐层 import
      $ python main.py scheduler-next                  # 显示 APScheduler 下一次触发时间
 
 实现策略：
-  - 最开头先 `import shared.compat_bootstrap` 打旧路径别名补丁，保证后续 `from agent.xxx import` 兼容
-  - CLI 用 argparse（标准库，不引新依赖）
-  - server 启动使用 uvicorn.run，等价于 `uvicorn interfaces.api.server:app`
+  - CLI 用argparse（标准库，不引新依赖）
+  - server启动使用 uvicorn.run，等价于 `uvicorn interfaces.api.server:app`
 """
 from __future__ import annotations
 
-# ============================================================
-# 0. 兼容别名 Bootstrap（必须第一个 import；整个项目任何地方 import 都安全）
-# ============================================================
-# pyright: reportUnusedImport=false
-import shared.compat_bootstrap  # noqa: F401 — 副作用：sys.modules 旧别名注入，test-imports 依赖它
-# pyright: reportUnusedImport=information
-
 import argparse
+# 环境兼容：veighna_studio 自带魔改 argparse（3.13.8）删除了公共 parse_known_args，
+# 但标准库 _SubParsersAction.__call__ 子命令分发仍内部调用它 -> 补回（标准 argparse 有此方法，不受影响）
+if not hasattr(argparse.ArgumentParser, "parse_known_args"):
+    def _parse_known_args_compat(self, args=None, namespace=None):
+        return self._parse_known_args2(args, namespace, intermixed=False)
+    argparse.ArgumentParser.parse_known_args = _parse_known_args_compat
 import asyncio
 import json
 import os
@@ -41,10 +39,9 @@ from typing import List, Optional, Tuple
 
 
 # ============================================================
-# CLI: python main.py test-imports
+# CLI: python main.py test-imports 架构层最小冒烟：逐个 import 新架构真源路径，打印PASS/FAIL，失败退出码=1。
 # ============================================================
 def cmd_test_imports(_args) -> int:
-    """架构层最小冒烟：逐个 import 新路径 + 旧路径别名，打印 PASS/FAIL，任何失败退出码=1。"""
     failed: List[Tuple[str, str]] = []
     passed: List[str] = []
     cases: List[tuple] = [
@@ -62,23 +59,6 @@ def cmd_test_imports(_args) -> int:
         ("governance.monitor",        lambda: __import__("governance.monitor", fromlist=["*"])),
         ("governance.logger",         lambda: __import__("governance.logger", fromlist=["*"])),
         ("governance.feedback",       lambda: __import__("governance.feedback", fromlist=["*"])),
-        # 以下是旧路径别名（由 compat_bootstrap 注入）——若这些能 import，说明 server.py/main_agent.py 原代码就能跑
-        ("compat: config.constants",  lambda: __import__("config.constants", fromlist=["*"])),
-        ("compat: tools.stock_matcher", lambda: __import__("tools.stock_matcher", fromlist=["*"])),
-        ("compat: tools.tavily_tool", lambda: __import__("tools.tavily_tool", fromlist=["*"])),
-        ("compat: tools.zsxq_tool",   lambda: __import__("tools.zsxq_tool", fromlist=["*"])),
-        ("compat: tools.ragflow_tools", lambda: __import__("tools.ragflow_tools", fromlist=["*"])),
-        ("compat: tools.db_tools",    lambda: __import__("tools.db_tools", fromlist=["*"])),
-        ("compat: adapter.ollama_client", lambda: __import__("adapter.ollama_client", fromlist=["*"])),
-        ("compat: agent.actor_base",  lambda: __import__("agent.actor_base", fromlist=["*"])),
-        ("compat: agent.scheduler",   lambda: __import__("agent.scheduler", fromlist=["*"])),
-        ("compat: agent.circuit_breaker", lambda: __import__("agent.circuit_breaker", fromlist=["*"])),
-        ("compat: agent.model_router", lambda: __import__("agent.model_router", fromlist=["*"])),
-        ("compat: agent.main_agent",  lambda: __import__("agent.main_agent", fromlist=["*"])),
-        ("compat: cache.stock_cache", lambda: __import__("cache.stock_cache", fromlist=["*"])),
-        ("compat: api.middleware.audit_logger", lambda: __import__("api.middleware.audit_logger", fromlist=["*"])),
-        ("compat: api.middleware.rbac", lambda: __import__("api.middleware.rbac", fromlist=["*"])),
-        ("compat: api.middleware.prompt_sanitizer", lambda: __import__("api.middleware.prompt_sanitizer", fromlist=["*"])),
     ]
     for name, loader in cases:
         try:
@@ -88,7 +68,7 @@ def cmd_test_imports(_args) -> int:
         except Exception as e:
             failed.append((name, f"{type(e).__name__}: {e}"))
             print(f"  [FAIL] {name}  ->  {type(e).__name__}: {e}")
-            # GitHub Actions 注解：失败详情直接显示在 PR/Actions UI 与 annotations API
+            # GitHub Actions 失败详情直接显示在PR/Actions UI 与 annotations API
             print(f"::error::[import] {name} -> {type(e).__name__}: {str(e)[:180]}")
 
     print(f"\nImport test: {len(passed)} passed / {len(failed)} failed / total {len(cases)}")
@@ -133,6 +113,8 @@ def cmd_router(args) -> int:
 
 # ============================================================
 # CLI: python main.py task / task-stream / task-coder / task-reasoning
+# 指定“任务由哪个代理（Agent）处理”的路由映射表，编程/代码类任务，系统将强制覆盖默认路由
+# 深度推理/逻辑”类任务，系统会强制派发给擅长逻辑推导的 "reasoning" 代理。
 # ============================================================
 _OVERRIDE_AGENT_MAP = {
     "task": None,
@@ -140,7 +122,6 @@ _OVERRIDE_AGENT_MAP = {
     "task-coder": "coder",
     "task-reasoning": "reasoning",
 }
-
 
 def cmd_task(args) -> int:
     """完整 workflow 冒烟：非流式输出。"""
@@ -259,12 +240,12 @@ def _port_is_listening(host: str, port: int) -> Optional[dict]:
     说明：只看 LISTENING（有真实 PID 可处理），TIME_WAIT/CLOSE_WAIT 不影响新 bind，
     避免 Experience ID 504295 的失败模式："把 TIME_WAIT 误判为进程占用并全杀"。"""
     import socket
-    # Fast-path: 纯 socket connect 判断（跨平台）
+    # Fast-path: 纯socket connect 判断（跨平台）
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.settimeout(0.3)
             if s.connect_ex((host if host != "0.0.0.0" else "127.0.0.1", port)) == 0:
-                pass  # 有东西在监听，继续走详细诊断
+                pass
             else:
                 return None
     except OSError:
@@ -333,7 +314,7 @@ def _port_is_listening(host: str, port: int) -> Optional[dict]:
 
 
 def _find_free_port(host: str, start_port: int, max_attempts: int = 100) -> int:
-    """从 start_port 开始逐个 +1，返回第一个空闲端口（最多尝试 max_attempts 个）。"""
+    """从 start_port 开始逐个+1，返回第一个空闲端口（最多尝试 max_attempts 个）。"""
     import socket
     for p in range(start_port, start_port + max_attempts):
         try:
@@ -357,7 +338,7 @@ def cmd_server(args) -> int:
       ⑤ uvicorn 层注入 SO_REUSEADDR/SO_EXCLUSIVEADDRUSE（Windows）：
          解决"Ctrl+C 退出后立刻重启仍报 10048"的高频开发场景。
     """
-    # 启动前：确保 .env 被加载（dotenv 不强制）
+    # 启动前：确保.env 被加载（dotenv 不强制）
     try:
         from dotenv import load_dotenv  # type: ignore
         env_path = Path(__file__).resolve().parent / ".env"
@@ -382,8 +363,7 @@ def cmd_server(args) -> int:
         cmdline = info.get("cmdline") or "?"
         ours = bool(info.get("is_our_project"))
         print("=" * 72, file=sys.stderr)
-        print(f"⚠️  端口 {host}:{port} 已被占用（LISTENING），不能启动新的服务实例：",
-              file=sys.stderr)
+        print(f"⚠️  端口 {host}:{port} 已被占用（LISTENING），不能启动新的服务实例：", file=sys.stderr)
         print(f"   占用者 PID          : {pid}", file=sys.stderr)
         print(f"   占用者 进程名       : {pname}", file=sys.stderr)
         print(f"   占用者 命令行       : {cmdline}", file=sys.stderr)
@@ -450,13 +430,7 @@ def cmd_server(args) -> int:
             print(f"   5) 强制杀任何占用者 → python main.py server --kill-conflicts=always（⚠️危险）",
                   file=sys.stderr)
             sys.stderr.flush()
-            return 2  # 绑定失败专用 exit code：后续脚本可区分
-
-    # ---- ⑤ uvicorn Config 注入 SO_REUSEADDR ----
-    #    Windows 上 uvicorn 默认 TCPServer 使用 socket.SO_EXCLUSIVEADDRUSE，
-    #    导致 Ctrl+C 后立刻重启仍会报 10048；这里显式把 socket_options 改为
-    #    SO_REUSEADDR=1（Linux）/ Windows Server 2019+ 也已兼容 SO_REUSEADDR，
-    #    从而 3~5 秒内能重绑（参考 CPython socket 文档 + FastAPI discussions 8489）。
+            return 2  # 绑定失败专用 exit code
     import uvicorn
 
     # 构造并调用 Config.setup_socket() 之前注入 SO_REUSEADDR：
@@ -464,13 +438,10 @@ def cmd_server(args) -> int:
     try:
         import socket as _sk
         sock_opts = [(_sk.SOL_SOCKET, _sk.SO_REUSEADDR, 1)]
-        # 以下两个 kwargs 在较新的 uvicorn 中会被转发到 h11/httptools Server；
-        # 老版本自动忽略，用户无感知，不报错即生效。
-        # pyright: reportGeneralTypeIssues=false
-        # —— uvicorn stubs 未声明 kwargs 透传，老版本自动忽略；TypeError 兜底分支在下
+        # uvicorn stubs 未声明kwargs透传，老版本自动忽略；TypeError 兜底分支在下
         _extra_run_kwargs: dict = {
             "socket_options": sock_opts,
-            "reuse_port": (os.name != "nt"),  # Linux SO_REUSEPORT；Windows 不支持留 False
+            "reuse_port": (os.name != "nt"), 
         }
         uvicorn.run(
             "interfaces.api.server:app",
@@ -478,10 +449,9 @@ def cmd_server(args) -> int:
             port=port,
             reload=bool(args.reload),
             log_level=args.log_level,
-            **_extra_run_kwargs,  # type: ignore[arg-type]
+            **_extra_run_kwargs,
         )
     except TypeError:
-        # 老版本 uvicorn 不支持 socket_options 参数 → 走原逻辑（少一个自愈能力但不阻塞启动）
         print("ℹ️  当前 uvicorn 版本不支持 socket_options 参数，跳过 SO_REUSEADDR 注入。",
               file=sys.stderr)
         uvicorn.run(
@@ -557,7 +527,7 @@ def _build_parser() -> argparse.ArgumentParser:
     psn.set_defaults(func=cmd_scheduler_next)
 
     # 7) test-imports
-    pti = sub.add_parser("test-imports", help="架构层最小冒烟（import 新路径 + 旧路径兼容别名）")
+    pti = sub.add_parser("test-imports", help="架构层最小冒烟（import 真源路径）")
     pti.set_defaults(func=cmd_test_imports)
 
     return p

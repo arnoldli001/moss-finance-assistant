@@ -15,8 +15,7 @@ sys.path.insert(0, os.path.abspath("."))
 @pytest.mark.asyncio
 async def test_prompt_sanitizer():
     """测试 prompt 注入防护。"""
-    from api.middleware.prompt_sanitizer import sanitize_user_input, safe_input_for_llm
-
+    from governance.guardrails.prompt_sanitizer import sanitize_user_input
     # 干净输入
     r = sanitize_user_input("茅台最近有什么新闻？")
     assert r.is_clean, f"干净输入被误判: {r.violations}"
@@ -36,8 +35,7 @@ async def test_prompt_sanitizer():
 @pytest.mark.asyncio
 async def test_rbac():
     """测试 RBAC 权限。"""
-    from api.middleware.rbac import RBACPolicy, RBAC_DEFAULT_ROLE
-
+    from governance.guardrails.rbac import RBACPolicy, RBAC_DEFAULT_ROLE
     policy = RBACPolicy()
 
     # admin 用户
@@ -56,8 +54,7 @@ async def test_rbac():
 @pytest.mark.asyncio
 async def test_semantic_cache():
     """测试语义缓存。"""
-    from agent.semantic_cache import get_semantic_cache, should_cache_query
-
+    from governance.guardrails.semantic_cache import get_semantic_cache, should_cache_query
     # 智能过滤：带股票代码默认不缓存
     ok, _ = should_cache_query("600519 今天股价")
     assert not ok, "带股票代码+实时关键词的查询应被过滤"
@@ -83,8 +80,7 @@ async def test_semantic_cache():
 @pytest.mark.asyncio
 async def test_model_router():
     """测试多模型路由。"""
-    from agent.model_router import get_model_router, ComplexityClassifier
-
+    from shared.llm_client.model_router import get_model_router, ComplexityClassifier
     # 复杂度分类
     c, _ = ComplexityClassifier.classify("你好")
     assert c == "simple", f"'你好' 应判为 simple: {c}"
@@ -107,8 +103,7 @@ async def test_model_router():
 @pytest.mark.asyncio
 async def test_output_validator():
     """测试输出校验。"""
-    from agent.output_validator import get_output_validator, ValidationContext
-
+    from governance.guardrails.output_validator import get_output_validator, ValidationContext
     validator = await get_output_validator()
 
     # 干净输出
@@ -147,8 +142,7 @@ async def test_output_validator():
 @pytest.mark.asyncio
 async def test_actor_persistence():
     """测试 Actor 状态持久化。"""
-    from agent.actor_persistence import (
-        ActorSnapshotter, MemoryBackend, Snapshot, SnapshotMeta
+    from shared.actors.actor_persistence import (        ActorSnapshotter, MemoryBackend
     )
     from dataclasses import dataclass
 
@@ -176,8 +170,7 @@ async def test_actor_persistence():
 @pytest.mark.asyncio
 async def test_stream_resume():
     """测试流式续传。"""
-    from agent.stream_resume import get_stream_resume_store
-
+    from governance.monitor.stream_resume import get_stream_resume_store
     store = await get_stream_resume_store()
 
     # 开始流
@@ -205,8 +198,7 @@ async def test_stream_resume():
 @pytest.mark.asyncio
 async def test_observability():
     """测试 OTel 追踪（no-op 模式）。"""
-    from agent.observability import init_tracing, agent_span, llm_span, tool_span
-
+    from governance.monitor.tracing import init_tracing, agent_span, llm_span, tool_span
     init_tracing()  # 未安装 opentelemetry-sdk 时走 no-op
 
     with agent_span("test_agent", task_type="unit_test") as span:
@@ -241,8 +233,7 @@ async def test_eval_framework():
 @pytest.mark.asyncio
 async def test_enterprise_pipeline():
     """测试企业级流水线集成。"""
-    from agent.enterprise_hooks import (
-        enter_request_pipeline, exit_request_pipeline,
+    from agents.analyst.enterprise_hooks import (        enter_request_pipeline, exit_request_pipeline,
         init_enterprise_extensions, get_enterprise_health,
     )
 

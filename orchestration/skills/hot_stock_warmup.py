@@ -20,7 +20,6 @@ import asyncio
 import json
 import re
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 
@@ -36,7 +35,7 @@ def _warmup_cfg() -> Dict[str, Any]:
             RECENCY_TIMEZONE_OFFSET_HOURS as _TZH,
         )
     except Exception:
-        _K, _SRC, _RDS, _TZH = 10, ("韭研社区", "东方财富股吧", "同花顺股吧", "微信公众号"), (
+        _K, _SRC, _RDS, _TZH = 10, ("韭研社区", "东方财富股吧", "同花顺股吧", "微信公众号", "财联社"), (
             "⚠️ 以上信息来自互联网公开资料，仅供参考，不构成投资建议。投资有风险，入市需谨慎，盈亏自负。"), 8
     return dict(K=int(_K), SRC=tuple(_SRC), RDS=str(_RDS), TZH=int(_TZH))
 
@@ -116,8 +115,7 @@ async def _fetch_topn_hot_stocks(topk: int, sources: Tuple[str, ...]) -> List[Di
     query = _build_top10_query(topk, sources)
     sys_prompt = _TOP10_SYS_PROMPT.format(topk=topk)
     try:
-        from agent.llm import get_deepseek_llm  # type: ignore
-        llm = get_deepseek_llm()
+        from shared.llm_client.deepseek_client import model as llm  # type: ignore
         messages = [
             {"role": "system", "content": sys_prompt},
             {"role": "user", "content": query},
@@ -206,14 +204,13 @@ async def _analyze_single_stock(name: str, code: str, *, idx: int, total: int) -
         _log(f"    三通道无任何检索结果，跳过写缓存")
         return None
     # 2d. 构建 citation 上下文 + 时效性窗口（自动 30→90）
-    from adapter.stream_adapters import build_citation_context
+    from shared.llm_client.stream_adapters import build_citation_context
     norm_docs, ctx_block = build_citation_context(items)
     if not norm_docs:
         return None
     # 2e. DeepSeek 汇总
     try:
-        from agent.llm import get_deepseek_llm
-        llm = get_deepseek_llm()
+        from shared.llm_client.deepseek_client import model as llm
         from config.constants import RISK_DISCLAIMER_CACHE_GUARD as _rds_c
         messages = [
             {"role": "system", "content": _STOCK_ANALYSIS_SYS.format(rds=_rds_c)},
@@ -242,7 +239,7 @@ async def _analyze_single_stock(name: str, code: str, *, idx: int, total: int) -
 # 对外统一入口：warmup() 直接被 scheduler 当回调；返回成功写入文件数
 # ----------------------------------------------------------------------
 async def warmup() -> int:
-    from cache.stock_cache import write_stock_cache, _random_sleep_for_avoid_thundering_herd
+    from orchestration.skills.stock_cache import write_stock_cache, _random_sleep_for_avoid_thundering_herd
     _random_sleep_for_avoid_thundering_herd()
     cfg = _warmup_cfg()
     topk, sources = cfg["K"], cfg["SRC"]

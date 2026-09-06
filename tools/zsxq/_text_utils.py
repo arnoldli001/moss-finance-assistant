@@ -7,12 +7,10 @@
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 from datetime import datetime
-from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict
 
 # ---------------------------------------------------------------------------
 # 默认截断参数（与 config/constants.py 的 ZSXQ_EXTRACT_* 保持一致；
@@ -52,12 +50,10 @@ def clean_text(text: str) -> str:
 def extract_topic_info(
     topic: Dict,
     *,
-    group_id: str,
     title_truncate_chars: int = _DEFAULT_TITLE_TRUNCATE,
     author_name_truncate_chars: int = _DEFAULT_AUTHOR_TRUNCATE,
 ) -> Dict:
     """从知识星球 API 返回的原始 topic JSON 中提取标准化字段字典。纯函数。
-
     Args:
         topic: API 返回的原始 topic 对象（含 talk/owner/create_time/... 字段）
         group_id: 所属群组 ID（写回结果中的 group_id 字段）
@@ -99,6 +95,5 @@ def extract_topic_info(
         "like_count": int(topic.get("likes_count", 0) or 0),
         "comment_count": int(topic.get("comments_count", 0) or 0),
         "digested": bool(topic.get("digested", False)),
-        "group_id": group_id,
         "raw_json": json.dumps(topic, ensure_ascii=False),
     }

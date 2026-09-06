@@ -80,6 +80,11 @@ benchmarks/results/
 # ========================
 # zsxq 运行时数据与临时文件
 # ========================
+# zsxq_.py 为本地参考脚本（内含真实 access token，严禁入库）
+tools/zsxq_.py
+# Playwright storage_state 登录态（含 cookies，严禁入库）
+zsxq_state.json
+tools/zsxq_state.json
 # （B2 迁移完成：zsxq 抓取产物现统一在 output/zsxq_news/，由 .gitignore L25 的 "output/" 规则覆盖。
 #   因此根目录级 zsxq_news/ 不再需要单独 ignore；如果老目录残留则可手动清理。）
 *.zip

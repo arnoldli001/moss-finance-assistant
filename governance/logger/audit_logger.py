@@ -3,8 +3,7 @@
 安全审计日志：所有触发 warning/reject 的事件落盘 JSONL，避免无安全审计日志，prompt 注入攻击无追踪。
 
 用法：
-    from api.middleware.audit_logger import audit_log_security_event
-
+    from governance.logger.audit_logger import audit_log_security_event
     audit_log_security_event(
         event_type="prompt_injection_blocked",
         user_id="u123",

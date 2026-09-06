@@ -23,7 +23,7 @@ from __future__ import annotations
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Any, Deque, Dict, List, Optional, Tuple
+from typing import Any, Deque, Dict, Optional, Tuple
 
 from config.constants import (
     CB_DEEPSEEK_FAILURE_THRESHOLD, CB_DEEPSEEK_FAILURE_WINDOW_SEC, CB_DEEPSEEK_RECOVERY_COOLDOWN_SEC,
@@ -34,8 +34,7 @@ from config.constants import (
     CB_DEFAULT_FAILURE_THRESHOLD, CB_DEFAULT_FAILURE_WINDOW_SEC, CB_DEFAULT_RECOVERY_COOLDOWN_SEC,
     CB_DEFAULT_HALF_OPEN_SUCCESS_NEEDED,
 )
-from agent.actor_base import Actor, Envelope
-
+from shared.actors.actor_base import Actor, Envelope
 
 # ======================================================================
 # 消息类型常量

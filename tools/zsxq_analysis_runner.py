@@ -13,7 +13,6 @@ test_* 用例，纯属工具脚本，现按代码层级迁到 tools/ 下与 zsxq
 """
 import sys
 import json
-import re
 from pathlib import Path
 from datetime import datetime
 
@@ -55,11 +54,9 @@ if _PROJECT_ROOT not in sys.path:
 from tools.zsxq_tool import fetch_zsxq_group_topics
 
 from config.constants import (
-    TEST_ZXSQ_OLLAMA_ENTRY_TRUNCATE_CHARS,
     TEST_ZXSQ_OLLAMA_TIMEOUT_SEC,
     TEST_ZXSQ_OLLAMA_TEMPERATURE,
     TEST_ZXSQ_CLI_TIMEOUT_SEC,
-    TEST_ZXSQ_OLLAMA_CONTENT_COMPRESS_THRESHOLD,
     TEST_ZXSQ_DEBUG_LINE_JSON_LEN,
     TEST_ZXSQ_DEBUG_LINE_LONG_LEN,
     TEST_ZXSQ_FINAL_SUMMARY_PREVIEW_TRUNCATE,
@@ -74,7 +71,7 @@ def _log(msg: str = "", *, always: bool = False) -> None:
     """进度日志打印。quiet 模式下只打印 always=True 的关键行。"""
     if _QUIET and not always:
         return
-    print(msg)
+    print(msg, flush=True)
 
 
 # ---------------------------------------------------------------------------
@@ -85,7 +82,6 @@ def _log(msg: str = "", *, always: bool = False) -> None:
 from shared.utils.ollama_helper import probe_ollama  # noqa: E402
 from shared.utils.ollama_analyzer import (  # noqa: E402
     ollama_analyze,
-    parse_jsonish,
     parse_stock_sentiment_items,
     truncate_entries_for_prompt,
     analyze_zsxq_hot_news as _shared_analyze_hot,
@@ -153,7 +149,6 @@ def _call_ollama_chat(model: str, user_prompt: str, system_prompt: str = "",
 
 def _parse_analysis(raw: str) -> list[dict]:
     """解析 LLM 返回的盘前小作文热度输出 → list[dict(name, sentiment, count)]。
-
     旧函数：本文件内 300+ 行 4 重回退解析。现在 100% 委托
     shared.utils.ollama_analyzer.parse_stock_sentiment_items（共享 4 重回退链，
     单一实现，主 Agent/调度/脚本三方同逻辑）。"""
@@ -225,7 +220,6 @@ def _run_financial_analysis(news_json_path: Path) -> list[dict]:
 def _format_output_list(analysis_list: list[dict]) -> list[str]:
     return [f"{x['name']}:{x['sentiment']}{x['count']}" for x in analysis_list]
 
-
 def main() -> int:
     """子进程入口（runpy 也会走这里）。返回值 = sys.exit code。"""
     global _QUIET
@@ -243,15 +237,8 @@ def main() -> int:
     # =============== Quiet 模式：全局 stdout 过滤包装器 =================
     if _QUIET:
         import io as _io
-
-        _ALLOWED_PREFIXES_QUIET = (
-            "[分析]", "[抓取] 最终返回", "[抓取] 最终返回(截断)",
-            "[分析结果]", "知识星球抓取工具", "=" * 10,
-        )
-
         class _QuietStdoutWrapper(_io.TextIOWrapper):
             """拦截 write()：仅放行对 server.py 有意义的关键行。
-
             放行：[分析] 错误/进度、[分析结果] 排名表、标题/分隔线。
             丢弃：[ZSXQ]/[ZSXQ-Search] 调试行、JSON dump（大括号开头且
                    > TEST_ZXSQ_DEBUG_LINE_JSON_LEN 字符的行）、过长杂项输出。
@@ -342,20 +329,20 @@ def main() -> int:
         return 1
 
     # =================== Step 1: 抓取 ===================
-    _log("=" * 60, always=True)
     _log("知识星球抓取工具（Playwright 浏览器自动化版）", always=True)
-    _log("=" * 60, always=True)
-
     params = {
-        "max_topics": 200,
+        "max_topics": 100,
         "incremental": True,
         "save_to_db": False,
         "max_scrolls": 20,
     }
-    if hasattr(fetch_zsxq_group_topics, "invoke"):
+    try:
         result = fetch_zsxq_group_topics.invoke(params)
-    else:
-        result = fetch_zsxq_group_topics(**params)
+    except Exception:
+        _log("[抓取] ❌ 抓取失败，异常详情：", always=True)
+        import traceback
+        traceback.print_exc()
+        return 1
     # quiet 模式下截断 result 转储，避免巨大 JSON 被推到前端造成空白
     if _QUIET:
         result_preview = str(result)
@@ -364,9 +351,9 @@ def main() -> int:
                 result_preview[:TEST_ZXSQ_FINAL_SUMMARY_PREVIEW_TRUNCATE]
                 + f"...(共 {len(result_preview)} 字符已截断)"
             )
-        _log(f"\n[抓取] 最终返回(截断): {result_preview}")
+        _log(f"\n[抓取] 最终返回(截断): {result_preview}", always=True)
     else:
-        _log(f"\n[抓取] 最终返回: {result}")
+        _log(f"\n[抓取] 最终返回: {result}", always=True)
 
     # =================== Step 2: 金融分析 ===================
     news_path = _find_latest_news_json()
@@ -386,6 +373,16 @@ def main() -> int:
         import traceback
         traceback.print_exc()
         return 1
+
+    # 白名单过滤：提示词无法 100% 挡住机构/行业/产品名混入（实测"工信部""光纤市场"），
+    # 落盘前用股票匹配器兜底剔除，被滤名单打日志保持透明
+    from shared.utils.stock_matcher import is_stock_entity as _is_stock_entity
+    _dropped = [str(d.get("name", "")) for d in analysis
+                if not _is_stock_entity(str(d.get("name", "")), "")]
+    if _dropped:
+        _log(f"[分析] 已过滤非股票实体 {len(_dropped)} 项：{', '.join(_dropped[:8])}",
+             always=True)
+    analysis = [d for d in analysis if _is_stock_entity(str(d.get("name", "")), "")]
 
     formatted = _format_output_list(analysis)
 

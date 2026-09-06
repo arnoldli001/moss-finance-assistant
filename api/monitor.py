@@ -3,7 +3,7 @@ import asyncio
 import os as _os
 from pathlib import Path as _Path
 import re as _re
-from typing import Any, Dict, Optional, TYPE_CHECKING
+from typing import Any, Dict, Optional
 from fastapi import WebSocket
 from api.context import get_thread_context
 
@@ -21,6 +21,38 @@ _FS_ABS_PATH_RE = _re.compile(
     r"|(?<![A-Za-z0-9_:/])/[A-Za-z0-9_.\-@][^\s\"',`)\]】）]*"   # Unix 绝对路径（排除 :// 或 // 后的 /）
     r")"
 )
+
+# 会话目录/会话 ID 脱敏：session_<uuid> 形态的标识符统一打码为 session_****。
+# 背景：sanitize_abs_paths 只覆盖绝对路径；相对路径（output/session_<uuid>、./output/…）
+# 会穿透主正则，把完整 session ID 暴露给前端进度文案（隐私问题：截图/录屏泄漏会话标识）。
+# 前端自己持有 thread_id，进度文案无需复读。精确匹配三类形态，避免误伤普通英文词：
+#   1) 标准 UUID：session_3aad605f-39da-49e9-9c75-1b50c6e67bb6
+#   2) 前端会话标题格式：session_0905-2328_4d5bb6bc
+#   3) 裸长 hex（≥16 位）
+_SESSION_ID_RE = _re.compile(
+    r"session_(?:"
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+    r"|[0-9]{4}-[0-9]{4}_[0-9a-f]{6,}"
+    r"|[0-9a-f]{16,}"
+    r")"
+)
+
+
+_BARE_UUID_RE = _re.compile(
+    r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"
+)
+
+
+def _mask_session_ids(text: str) -> str:
+    """把文本中的 session_<uuid/hex> 会话标识统一打码为 session_****。
+
+    另覆盖裸 UUID（无 session_ 前缀，如 LLM 转述"会话 <uuid> 的上下文已加载"）：
+    标准 UUID 版式在本项目唯一用途是会话标识，统一打码为 "****"。
+    """
+    if not text:
+        return text
+    text = _SESSION_ID_RE.sub("session_****", text)
+    return _BARE_UUID_RE.sub("****", text)
 
 # 尝试导入全局运行时（用于脚本模式下的流式输出）
 try:
@@ -144,6 +176,9 @@ def sanitize_abs_paths(text: Optional[str], fallback: str = "工作目录") -> s
             return ""
     if not text:
         return text
+
+    # 先打码会话标识（相对路径形态的 session_<uuid> 不匹配下面的绝对路径正则）
+    text = _mask_session_ids(text)
 
     def _replace_one(m: _re.Match) -> str:
         raw = m.group(0)
@@ -289,8 +324,8 @@ class ToolMonitor:
             except Exception:
                 pass
 
-        # 4. 控制台保底输出
-        print(f"\n[Monitor:{event_type}] {message}")
+        # 4. 控制台保底输出（用脱敏后的 safe_message，避免日志/截图泄漏）
+        print(f"\n[Monitor:{event_type}] {safe_message}")
 
     def report_tool(self, tool_name: str, args: Optional[Dict[str, Any]] = None):
         """报告工具开始执行"""

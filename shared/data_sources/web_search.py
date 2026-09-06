@@ -16,7 +16,8 @@ from dotenv import load_dotenv, find_dotenv  # 加载 .env 文件中的环境变
 from pathlib import Path
 
 # 自定义模块：工具调用埋点监控（需确保 api 模块可导入）
-_PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
+# 文件位于 shared/data_sources/ 下，需上溯 3 层到项目根（shared→data_sources→本文件）
+_PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent)
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
@@ -26,7 +27,6 @@ from api.monitor import monitor
 def _try_publish_retrieve_result(channel: str, query: str, items_list):
     """尽力发布，跨线程/无事件循环时不阻塞（run_coroutine_threadsafe 安全兜底）。"""
     try:
-        import asyncio as _aio
         from api.stream_bus import get_stream_bus_sync
         from api.context import get_thread_context
         tid = get_thread_context()
@@ -118,7 +118,7 @@ def _raw_tavily_search_once(
                 "score": score, "published_at": pub,
             })
         try:
-            from adapter.stream_adapters import filter_items_by_recency
+            from shared.llm_client.stream_adapters import filter_items_by_recency
             items_list, _a, _b = filter_items_by_recency(
                 items_list, channel="tavily", auto_fallback=False
             )

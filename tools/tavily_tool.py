@@ -26,7 +26,6 @@ from api.monitor import monitor
 def _try_publish_retrieve_result(channel: str, query: str, items_list):
     """尽力发布，跨线程/无事件循环时不阻塞（run_coroutine_threadsafe 安全兜底）。"""
     try:
-        import asyncio as _aio
         from api.stream_bus import get_stream_bus_sync
         from api.context import get_thread_context
         tid = get_thread_context()
@@ -125,7 +124,7 @@ def _raw_tavily_search_once(
                 "score": score, "published_at": pub,
             })
         try:
-            from adapter.stream_adapters import filter_items_by_recency
+            from shared.llm_client.stream_adapters import filter_items_by_recency
             items_list, _a, _b = filter_items_by_recency(
                 items_list, channel="tavily", auto_fallback=False
             )

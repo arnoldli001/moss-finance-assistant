@@ -22,7 +22,7 @@ import inspect
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Dict, Generic, Optional, TypeVar
+from typing import Any, Dict, Generic, Optional, TypeVar
 
 from config.constants import ACTOR_MAILBOX_LIMIT_DEFAULT, ACTOR_ASK_DEFAULT_TIMEOUT_SEC
 

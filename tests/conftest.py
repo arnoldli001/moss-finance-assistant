@@ -142,7 +142,7 @@ _os.environ.setdefault("MOSS_TEST_SKIP_LIFESPAN", "1")
 @pytest.fixture(scope="session")
 def moss_app():
     """导入 FastAPI app 对象（仅一次，加速）。interfaces.api.server 导入会
-    自动触发 storage.init_db() + compat_bootstrap 薄壳注册。"""
+    自动触发 storage.init_db() 初始化。"""
     from interfaces.api.server import app  # noqa: F401  side-effect import
     yield app
 

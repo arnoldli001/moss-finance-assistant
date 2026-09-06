@@ -7,7 +7,7 @@ shared.data_sources.zhishixingqiu —— 知识星球抓取工具（compat stub�
   时的兼容入口：它直接把自身 sys.modules 条目替换为 tools.zsxq_tool 同一个模块对象，从而保证：
     1. 新、旧链路共享同一个 storage_state.json 路径（不出现"旧链路已登录，新链路判定未登录"）
     2. 浏览器互斥锁 _zsxq_browser_lock 全局唯一（不会各自一把锁导致并发冲突）
-    3. 不依赖 shared.compat_bootstrap 的 alias 方向（alias 对不上也没关系，自己能解析）
+    3. 自包含重导向：不依赖任何外部 alias 注册机制，独立 import 即可工作
 """
 from __future__ import annotations
 

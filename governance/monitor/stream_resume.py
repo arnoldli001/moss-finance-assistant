@@ -15,8 +15,7 @@
 
 典型用法：
     # 服务端：流式生成时同步写 store
-    from agent.stream_resume import get_stream_resume_store
-
+    from governance.monitor.stream_resume import get_stream_resume_store
     store = get_stream_resume_store()
     session = await store.begin(
         session_id="s1", msg_id="m1",
@@ -56,9 +55,7 @@ from config.constants import (
     STREAM_RESUME_BACKEND,
     STREAM_RESUME_MEMORY_MAX_SESSIONS,
     STREAM_RESUME_PARTIAL_MAX_CHARS,
-    STREAM_RESUME_TOKEN_BUFFER_MAX,
     STREAM_RESUME_TOKEN_TTL_SEC,
-    STREAM_RESUME_CONTINUE_MAX_TOKENS,
     STREAM_RESUME_REDIS_URL,
     STREAM_RESUME_REDIS_PREFIX,
 )

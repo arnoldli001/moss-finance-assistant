@@ -25,8 +25,8 @@ if str(_root) not in sys.path:
 
 import pytest
 
-from agent.actor_base import Actor, Envelope, ActorSystem, Msg
-from agent.actors import (
+from shared.actors.actor_base import Actor, Envelope, ActorSystem, Msg
+from shared.actors import (
     SessionRegistryActor, SRMsg,
     CircuitBreakerActor, CBMsg,
     SLOMonitorActor, SLOMsg,

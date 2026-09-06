@@ -14,15 +14,13 @@ Layer 3 - Harness Engineering: 模型幻觉防护（Hallucination Guard）。
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import re
 import time
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
-from agent.prompts import format_prompt
-
+from agents.analyst.prompts_legacy import format_prompt
 
 # ======================================================================
 # 正则：引用标记 / 关键实体提取

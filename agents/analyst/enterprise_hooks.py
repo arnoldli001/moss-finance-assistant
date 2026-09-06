@@ -16,8 +16,7 @@
   6) 在 finally 中调用 exit_request_pipeline(ctx)
 
 典型用法：
-    from agent.enterprise_hooks import (
-        init_enterprise_extensions,
+    from agents.analyst.enterprise_hooks import (        init_enterprise_extensions,
         shutdown_enterprise_extensions,
         enter_request_pipeline,
         exit_request_pipeline,
@@ -56,26 +55,24 @@
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
-from agent.observability import (
+from governance.monitor.tracing import (
     init_tracing,
     shutdown_tracing,
     agent_span,
-    llm_span,
     set_request_trace_context,
     clear_request_trace_context,
 )
-from agent.semantic_cache import get_semantic_cache, SemanticCache
-from agent.model_router import get_model_router, ModelRouter
-from agent.output_validator import get_output_validator, OutputValidator, ValidationContext
-from agent.stream_resume import get_stream_resume_store, StreamResumeStore
-from agent.actor_persistence import SnapshotCoordinator, ActorSnapshotter
-from api.middleware.prompt_sanitizer import sanitize_user_input_async, SanitizeResult
-from api.middleware.rbac import RBACPolicy, UserContext
+from governance.guardrails.semantic_cache import get_semantic_cache, SemanticCache
+from shared.llm_client.model_router import get_model_router, ModelRouter
+from governance.guardrails.output_validator import get_output_validator, OutputValidator, ValidationContext
+from governance.monitor.stream_resume import get_stream_resume_store, StreamResumeStore
+from shared.actors.actor_persistence import SnapshotCoordinator
+from governance.guardrails.prompt_sanitizer import sanitize_user_input_async, SanitizeResult
+from governance.guardrails.rbac import RBACPolicy, UserContext
 
 logger = logging.getLogger(__name__)
 

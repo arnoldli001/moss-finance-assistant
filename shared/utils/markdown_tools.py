@@ -1,4 +1,3 @@
-import logging
 import os as _os
 from pathlib import Path
 from typing import Optional

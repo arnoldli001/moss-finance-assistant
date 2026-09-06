@@ -362,7 +362,8 @@ async def ensure_ollama_ready(
             except (asyncio.TimeoutError, asyncio.CancelledError):
                 pass
 
-        rc = int(proc.returncode or -1)
+        # returncode==0 是成功，不能用 `or -1`（0 falsy 会被误判为拉取失败）
+        rc = proc.returncode if proc.returncode is not None else -1
         if timed_out or rc != 0:
             tail = "\n".join(last_lines[-10:])
             msg = (

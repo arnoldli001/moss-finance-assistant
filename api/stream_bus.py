@@ -47,18 +47,14 @@ from api.stream_protocol import (
     DeltaPayload,
     DonePayload,
     ErrorPayload,
-    GapPayload,
     OpenPayload,
     ProgressPayload,
     ReasoningPayload,
-    ReplayEndPayload,
-    ReplayStartPayload,
     RetrieveResultItem,
     RetrieveResultPayload,
     SSEFrame,
     SourceRefItem,
     SourceRefPayload,
-    StreamEventType,
     ToolCallPayload,
     ToolResultPayload,
     new_event_id,
@@ -93,7 +89,7 @@ def _build_snippet(
     if not raw:
         return ""
     try:
-        from adapter.stream_adapters import build_focused_snippet as _bf
+        from shared.llm_client.stream_adapters import build_focused_snippet as _bf
         return _bf(
             raw,
             focus_sentences=focus_sentences,
@@ -1161,7 +1157,10 @@ def _route_monitor_to_bus(
                      cancelled=False, recoverable=True)
         return
     if event_type == "session_created":
-        bus.ev_progress(thread_id, stage="初始化会话", percent=1, detail=message)
+        # 隐私：monitor.message 里含服务器工作目录路径（output/session_<uuid>），
+        # 前端自己持有 thread_id，进度文案无需复读 —— detail 用中性文案，
+        # 不透传上游 message（上游 _emit 已脱敏，这里再收口一层）。
+        bus.ev_progress(thread_id, stage="初始化会话", percent=1, detail="会话工作目录已就绪")
         return
     if event_type == "assistant_call":
         aname = data.get("assistant_name") or "子智能体"

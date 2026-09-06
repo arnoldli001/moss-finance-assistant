@@ -1,6 +1,5 @@
 """
 知识星球"最新小作文热度总结"抓取工具。
-
 定位：
   - 独立工具文件，供主 Agent（LangChain @tool）、调度协调 Agent、
     或 server.py 的 `_run_zsxq_analysis` 编排链路直接复用。
@@ -33,12 +32,11 @@
 """
 from __future__ import annotations
 
-import os
 import sys
 import asyncio
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Optional
 
 # ---------------------------------------------------------------------------
 # 项目根查找 + sys.path 注入（鲁棒：AGENTS.md 标志兜底）
@@ -83,6 +81,7 @@ except Exception:  # pragma: no cover
 # ---------------------------------------------------------------------------
 # 常量集中引用（避免魔鬼数字，与 server.py 同源）
 # ---------------------------------------------------------------------------
+from api.monitor import sanitize_abs_paths  # noqa: E402
 from config.constants import (  # noqa: E402
     OLLAMA_DEFAULT_BASE_URL,
     SERVER_OUTPUT_MAX_STDOUT_TAIL_LINES,
@@ -91,7 +90,6 @@ from config.constants import (  # noqa: E402
     SERVER_PROGRESS_SAFE_TRUNCATE_LEN,
 )
 from shared.utils.zsxq_paths import (  # noqa: E402
-    get_zsxq_news_dir as _get_zsxq_news_dir,
     ensure_zsxq_news_dir_ready as _ensure_zsxq_news_dir,
 )
 ensure_zsxq_news_dir_ready = _ensure_zsxq_news_dir  # re-export，便于外部调用方触发
@@ -107,8 +105,6 @@ ZSXQ_DEFAULT_MODEL: str = "qwen3:8b"
 from shared.utils.ollama_helper import (  # noqa: E402
     ProgressFn,
     find_ollama_exe,
-    probe_ollama,
-    ollama_models_list,
     ensure_ollama_ready as _shared_ensure_ollama_ready,
 )
 
@@ -118,18 +114,46 @@ def _default_progress(msg: str) -> None:
     sys.stderr.write(f"[ZSXQ-Crawler] {msg}\n")
     sys.stderr.flush()
 
+# runner 子进程 + Ollama 拉取的全局硬超时上限（秒）。
+# 复盘预测/盘前小作文按钮走后台任务 300s 上限，这里留出 60s 给后续阶段，
+# 避免整个链路被 Playwright 扫码等待 + Ollama 冷启动卡到顶，最终只报"超时 314.8s"
+# 而完全没有进度消息。
+_ZXSQ_RUNNER_TOTAL_TIMEOUT_SEC: float = 480.0
+# stdout 单条 readline 上限（秒）：若 runner阻塞 180s 不写 stdout，立即 kill。
+_ZXSQ_STDOUT_READLINE_TIMEOUT_SEC: float = 180.0
+# Ollama 分析推理期间无 stdout 输出（非流式调用），150s 扫码保护会误杀长推理
+#（实测 4506 字符文本 qwen3:8b 推理 >150s）→ 读到分析开始行后放宽到与总上限一致
+_ZXSQ_OLLAMA_ANALYSIS_READLINE_TIMEOUT_SEC: float = 240.0
+# Ollama 准备单独硬超时上限（秒）：超过立即返回失败，不拖到 240s。
+_ZXSQ_OLLAMA_READY_TIMEOUT_SEC: float = 120.0
+
 
 async def ensure_ollama_ready(
     model: str = ZSXQ_DEFAULT_MODEL,
     *,
     base_url: str = OLLAMA_DEFAULT_BASE_URL,
     emit_progress: ProgressFn = _default_progress,
+    timeout: Optional[float] = None,
 ) -> tuple[bool, str]:
     """zsxq 侧默认值包装：默认 qwen3:8b + [ZSXQ-Crawler] 进度前缀。
-    实际定位/探活/拉起服务/模型拉取的实现 100% 委托 shared.utils.ollama_helper。"""
-    return await _shared_ensure_ollama_ready(
-        model, base_url=base_url, emit_progress=emit_progress,
-    )
+    实际定位/探活/拉起服务/模型拉取的实现 100% 委托 shared.utils.ollama_helper。
+
+    新增：timeout 参数。超过该秒数仍未准备就绪，立即返回失败，
+    避免 Ollama 服务未启动或模型冷启动过久把整个 300s 后台任务上限耗完。
+    """
+    t = timeout if timeout is not None else _ZXSQ_OLLAMA_READY_TIMEOUT_SEC
+    try:
+        return await asyncio.wait_for(
+            _shared_ensure_ollama_ready(
+                model, base_url=base_url, emit_progress=emit_progress,
+            ),
+            timeout=t,
+        )
+    except asyncio.TimeoutError:
+        return (
+            False,
+            f"Ollama 准备超时（{t:.0f}s）：可能服务未启动、模型 qwen3:8b 未 pull、或冷启动过久。",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -186,8 +210,7 @@ async def fetch_zsxq_latest_summary_async(
     quiet: bool = False,
 ) -> str:
     """【函数 1 / 2（纯数据抓取）】知识星球盘前小作文热度最新总结。
-
-    两段执行（完全对应 server.py L2083-2084）：
+    两段执行（完全对应 server.py L2085-2086）：
         ① 当天已有 txt 总结 → 读取并直接返回，跳过抓取。
         ② 否则：
             a. Ollama 自动准备：定位 / 拉起服务 / 检查或 pull 模型（qwen3:8b）；
@@ -223,87 +246,143 @@ async def fetch_zsxq_latest_summary_async(
         except OSError as e:
             progress(f"⚠️  读取已有总结失败，将尝试重建：{e}")
 
-    # ---- ② 没有 → 跑 runner ----
     # 2a. Ollama 预检 + 自动启动 + 模型拉取（委托 shared/utils/ollama_helper）
     ok, err_msg = await ensure_ollama_ready(
         model, base_url=ollama_base_url, emit_progress=progress,
     )
     if not ok:
         print(f"[ZSXQ-Crawler] Ollama 准备失败: {err_msg}", file=sys.stderr)
+        progress(f"❌ {err_msg}")
         return ""
 
-    progress("📡 开始抓取知识星球 + 调用 Ollama 分析")
+    progress("📡 开始抓取知识星球 + 调用 Ollama分析")
+
+    # 记录本次运行起点：用于兜底判断 runner 是否"退出码非 0 但已产出新总结"
+    _run_started_ts = datetime.now().timestamp()
 
     if not _runner.exists():
         progress(f"❌ 找不到 runner 脚本：{_runner}")
         return ""
 
-    # 2b. 启动子进程 --quiet（抑制模型 stdout 里巨大 JSON 污染调用方管道）
-    try:
-        process = await asyncio.create_subprocess_exec(
+    # --- 2b/2c 用 wait_for 统一包一层：Playwright 扫码等待 + Ollama 分析都不允许超出 240s ---
+    async def _run_and_read() -> tuple[int, list[str]]:
+        proc = await asyncio.create_subprocess_exec(
             sys.executable, str(_runner), "--quiet",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             cwd=str(PROJECT_ROOT),
         )
-    except Exception as e:
-        progress(f"❌ 启动 runner 失败: {type(e).__name__}: {e}")
-        return ""
-
-    # 2c. 实时读取 stdout 并推里程碑/进度；大段 JSON / 分隔线跳过
-    stdout_lines: list[str] = []
-    if process.stdout is None:
-        progress("❌ runner 子进程 stdout 未就绪")
+        lines: list[str] = []
+        analysis_started = False  # 进入 Ollama 推理阶段后放宽 readline 超时
+        readline_timeout = _ZXSQ_STDOUT_READLINE_TIMEOUT_SEC
+        if proc.stdout is None:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            await proc.wait()
+            return int(proc.returncode or -1), lines
         try:
-            process.kill()
+            while True:
+                # 每条 readline 单独上限 150s：Playwright 扫码阻塞没 stdout 时立即 kill，
+                try:
+                    line = await asyncio.wait_for(
+                        proc.stdout.readline(),
+                        timeout=readline_timeout,
+                    )
+                except asyncio.TimeoutError:
+                    progress(
+                        f"⏱ runner 长时间无输出（>{_ZXSQ_STDOUT_READLINE_TIMEOUT_SEC:.0f}s），"
+                        "可能卡在未登录成功或爬取内容超时："
+                        "`python tools/zsxq_tool.py login`"
+                    )
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+                    break
+                if not line:
+                    break
+                text = line.decode("utf-8", errors="replace").rstrip()
+                lines.append(text)
+                stripped = text.strip()
+                if not stripped:
+                    continue
+
+                if not analysis_started and "Ollama 分析" in stripped:
+                    analysis_started = True
+                    readline_timeout = _ZXSQ_OLLAMA_ANALYSIS_READLINE_TIMEOUT_SEC
+                    progress(f"ℹ️ 已进入 Ollama 推理阶段，readline 超时放宽至 "
+                             f"{readline_timeout:.0f}s（推理期间无 stdout 输出属正常）")
+
+                milestone: Optional[str] = None
+                if "⚠ Ollama 调用失败" in stripped or "⚠ Ollama 预检异常" in stripped \
+                        or "⚠ 分析过程出错" in stripped:
+                    milestone = stripped
+                elif stripped.startswith("[分析结果]"):
+                    milestone = stripped
+                elif stripped.startswith("═══ 抓取完成") or \
+                        ("════════════" in stripped and "抓取完成" in stripped):
+                    milestone = stripped
+
+                # 跳过噪音：超大 最终返回 / JSON 调试转储
+                if "最终返回" in stripped and len(stripped) > SERVER_FINAL_RETURN_LINE_MIN_LEN:
+                    continue
+                if len(stripped) > SERVER_JSON_DEBUG_LINE_MIN_LEN and stripped.lstrip() \
+                        and stripped.lstrip()[0] in '{[':
+                    continue
+
+                safe = stripped if len(stripped) <= SERVER_PROGRESS_SAFE_TRUNCATE_LEN \
+                    else stripped[:SERVER_PROGRESS_SAFE_TRUNCATE_LEN] + "…"
+                # 隐私：runner stdout 原样转发给前端前统一脱敏（服务器路径 + session_<uuid>）
+                safe = sanitize_abs_paths(safe)
+
+                if milestone:
+                    progress(f"🏁 {safe}")
+                elif any(kw in stripped for kw in ("[抓取]", "[分析]", "[ZSXQ]", "分析结果", "总结已保存")):
+                    progress(f"⏳ 盘前小作文热度：{safe}")
+        except Exception as e:
+            print(f"[ZSXQ-Crawler] 读取 runner stdout 异常: {e}", file=sys.stderr)
+            lines.append(f"[READ_EXC] {type(e).__name__}: {e}")
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=10.0)
         except Exception:
-            pass
-        return ""
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            try:
+                await proc.wait()
+            except Exception:
+                pass
+        # 注意：returncode==0 是成功退出，不能用 `or -1`（0 是 falsy 会被误判为失败）
+        rc = proc.returncode if proc.returncode is not None else -1
+        return int(rc), lines
 
     try:
-        while True:
-            line = await process.stdout.readline()
-            if not line:
-                break
-            text = line.decode("utf-8", errors="replace").rstrip()
-            stdout_lines.append(text)
-            stripped = text.strip()
-            if not stripped:
-                continue
-
-            # ---- 里程碑：落成独立 progress 消息 ----
-            milestone: Optional[str] = None
-            if "⚠ Ollama 调用失败" in stripped or "⚠ Ollama 预检异常" in stripped \
-                    or "⚠ 分析过程出错" in stripped:
-                milestone = stripped
-            elif stripped.startswith("[分析结果]"):
-                milestone = stripped
-            elif stripped.startswith("═══ 抓取完成") or \
-                    ("════════════" in stripped and "抓取完成" in stripped):
-                milestone = stripped
-
-            # ---- 跳过噪音：超大 最终返回 / JSON 调试转储 ----
-            if "最终返回" in stripped and len(stripped) > SERVER_FINAL_RETURN_LINE_MIN_LEN:
-                continue
-            if len(stripped) > SERVER_JSON_DEBUG_LINE_MIN_LEN and stripped.lstrip() \
-                    and stripped.lstrip()[0] in '{[':
-                continue
-
-            # ---- 超长行截断为安全长度 ----
-            safe = stripped if len(stripped) <= SERVER_PROGRESS_SAFE_TRUNCATE_LEN \
-                else stripped[:SERVER_PROGRESS_SAFE_TRUNCATE_LEN] + "…"
-
-            if milestone:
-                progress(f"🏁 {safe}")
-            elif any(kw in stripped for kw in ("[抓取]", "[分析]", "[ZSXQ]", "分析结果", "总结已保存")):
-                # 中间进度：统一前缀，避免调用方以为是最终结果
-                progress(f"⏳ 盘前小作文热度：{safe}")
-    except Exception as e:
-        print(f"[ZSXQ-Crawler] 读取 runner stdout 异常: {e}", file=sys.stderr)
-
-    await process.wait()
-    rc = int(process.returncode or -1)
+        rc, stdout_lines = await asyncio.wait_for(
+            _run_and_read(),
+            timeout=_ZXSQ_RUNNER_TOTAL_TIMEOUT_SEC,
+        )
+    except asyncio.TimeoutError:
+        progress(
+            f"⏱ runner 总耗时超过 {_ZXSQ_RUNNER_TOTAL_TIMEOUT_SEC}s 上限；"
+            "常见原因：① Playwright 扫码未完成（请先运行 `python tools/zsxq_tool.py login`）；"
+            "② Ollama 模型 qwen3:8b 首次推理冷启动过久。"
+        )
+        return ""
     if rc != 0:
+        # 兜底：退出码非 0 不代表没产物——runner 曾在 Playwright 收尾阶段被超时 kill，
+        # 此时 txt 可能已落盘。若本次运行开始后有新总结生成，视为成功返回。
+        _fresh = find_latest_today_txt(_ndir, _prefix)
+        if _fresh and _fresh.stat().st_mtime >= _run_started_ts:
+            try:
+                content = _fresh.read_text(encoding="utf-8")
+            except OSError:
+                content = ""
+            if content.strip():
+                progress(f"⚠️ runner 退出码 {rc}，但总结已生成（{_fresh.name}），按成功处理")
+                return content
         tail = "\n".join(stdout_lines[-SERVER_OUTPUT_MAX_STDOUT_TAIL_LINES:])
         print(
             f"[ZSXQ-Crawler] runner 失败（exit={rc}）末尾输出：\n{tail}",
