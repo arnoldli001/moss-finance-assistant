@@ -32,6 +32,7 @@ from __future__ import annotations
 import os
 import sys
 import asyncio
+import subprocess
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -76,9 +77,15 @@ from config.constants import (  # noqa: E402
     OLLAMA_PULL_PROGRESS_INTERVAL_SEC,
     OLLAMA_PULL_PROGRESS_LINE_MAX_CHARS,
     OLLAMA_PULL_HARD_TIMEOUT_SEC,
+    OLLAMA_MODEL,
 )
+from shared.utils.proc_registry import track as _track_proc, untrack as _untrack_proc  # noqa: E402
 
-DEFAULT_MODEL: str = "qwen3:8b"  # 与盘前小作文、复盘预测链路保持一致
+# 本进程亲手拉起的 `ollama serve` 句柄（供关闭阶段判断：只有自己启动的才负责终止；
+# 用户手动启动的 Ollama 服务不归我们管，关停时不杀）
+_spawned_serve_popen: Optional["subprocess.Popen"] = None
+
+DEFAULT_MODEL: str = OLLAMA_MODEL  # 与盘前小作文/复盘预测链路同源（config.constants 唯一真源，默认 qwen3:8b）
 
 # ---------------------------------------------------------------------------
 # ProgressFn 类型别名 + 默认实现
@@ -179,17 +186,28 @@ async def ollama_models_list(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
+        _track_proc(proc, name="ollama list")
     except Exception as e:
         print(f"[Ollama] ollama list 调用失败: {e}", file=sys.stderr)
         return []
     try:
         stdout_bytes, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-    except asyncio.TimeoutError:
+    except asyncio.CancelledError:
+        # 关停取消（CancelledError 是 BaseException）也要杀子进程，防孤儿
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        raise
+    except Exception:
+        # 超时或通信异常：杀子进程并按"列表为空"处理（保持原语义）
         try:
             proc.kill()
         except Exception:
             pass
         return []
+    finally:
+        _untrack_proc(proc)
     if (proc.returncode or 0) != 0:
         return []
     names: list[str] = []
@@ -242,19 +260,21 @@ async def ensure_ollama_ready(
         return False, hint
 
     # ============== 阶段 2：Ollama 服务未启动 → 后台拉起 ==============
+    global _spawned_serve_popen
     if not await probe_ollama(base_url, timeout=OLLAMA_PROBE_TIMEOUT_SEC):
         emit_progress(f"🔧 Ollama 服务未运行，正在后台启动 `{ollama_exe} serve` …")
         print(f"[Ollama] 自动后台启动服务: {ollama_exe} serve", file=sys.stderr)
         try:
-            import subprocess as _sp
             kw: dict = {
-                "stdout": _sp.DEVNULL, "stderr": _sp.DEVNULL, "stdin": _sp.DEVNULL,
+                "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL, "stdin": subprocess.DEVNULL,
                 "close_fds": True,
             }
             if sys.platform.startswith("win"):
                 # CREATE_NO_WINDOW = 0x08000000；Windows 下避免 ollama serve 弹黑窗
                 kw["creationflags"] = 0x08000000
-            _sp.Popen([ollama_exe, "serve"], **kw)
+            _spawned_serve_popen = subprocess.Popen([ollama_exe, "serve"], **kw)
+            # 登记：服务关闭时统一清理（只清理自己拉起的）
+            _track_proc(_spawned_serve_popen, name="ollama serve")
         except Exception as e:
             msg = f"❌ 无法启动 Ollama 服务: {e}"
             emit_progress(msg)
@@ -305,6 +325,7 @@ async def ensure_ollama_ready(
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
             )
+            _track_proc(proc, name=f"ollama pull {model}")
         except Exception as e:
             msg = f"❌ 无法调用 ollama pull: {e}"
             emit_progress(msg)
@@ -354,6 +375,13 @@ async def ensure_ollama_ready(
                     proc.kill()
                 except Exception:
                     pass
+        except asyncio.CancelledError:
+            # 服务关停/调用方取消：pull 可能已跑 10-30 分钟，必须杀掉防孤儿
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            raise
         finally:
             if not reader_task.done():
                 reader_task.cancel()
@@ -361,6 +389,7 @@ async def ensure_ollama_ready(
                 await asyncio.wait_for(reader_task, timeout=3.0)
             except (asyncio.TimeoutError, asyncio.CancelledError):
                 pass
+            _untrack_proc(proc)
 
         # returncode==0 是成功，不能用 `or -1`（0 falsy 会被误判为拉取失败）
         rc = proc.returncode if proc.returncode is not None else -1
@@ -377,6 +406,48 @@ async def ensure_ollama_ready(
         emit_progress(f"✅ 模型 {model} 已安装")
 
     return True, "ok"
+
+
+# ---------------------------------------------------------------------------
+# 5. shutdown_ollama_if_spawned —— 关闭阶段：仅终止"本进程亲手拉起"的 ollama serve
+#    用户手动启动的 Ollama 服务不归我们管（保持运行，不杀）。
+# ---------------------------------------------------------------------------
+async def shutdown_ollama_if_spawned() -> bool:
+    """若 Ollama 服务是由本进程 ensure_ollama_ready 拉起的，则终止它。
+
+    返回 True 表示执行了终止动作。terminate（Windows 上为 TerminateProcess）
+    后限时等待退出，超时补 kill。用户手动启动的 Ollama 不受影响。
+    """
+    proc = _spawned_serve_popen
+    if proc is None:
+        return False
+    if proc.poll() is not None:
+        return False  # 已退出
+    try:
+        proc.terminate()
+    except Exception:
+        pass
+    exited = False
+    for _ in range(10):
+        if proc.poll() is not None:
+            exited = True
+            break
+        await asyncio.sleep(0.3)
+    if not exited:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        try:
+            await asyncio.wait_for(
+                asyncio.get_running_loop().run_in_executor(None, proc.wait, 5.0),
+                timeout=6.0,
+            )
+        except Exception:
+            pass
+    print("[Ollama] 本进程拉起的 Ollama 推理服务已关闭")
+    _untrack_proc(proc)
+    return True
 
 
 # ---------------------------------------------------------------------------

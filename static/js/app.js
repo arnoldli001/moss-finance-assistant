@@ -979,13 +979,13 @@ function maskAbsPaths(text) {
     if (!norm) return raw;
     var lastIdx = norm.lastIndexOf('/');
     var last = (lastIdx >= 0 ? norm.slice(lastIdx + 1) : norm);
-    if (!last) return '工作目录';
+    if (!last) return '';
     // 对 DIR\末级：最多保留末 2 段（sub/name）
     var secIdx = norm.lastIndexOf('/', lastIdx - 1);
     var short = last;
     if (secIdx >= 0) short = norm.slice(secIdx + 1);
     if (short.length > 64) short = last.slice(-48);
-    return '工作目录(./…/' + short + ')';
+    return short;
   });
 }
 
@@ -1532,7 +1532,7 @@ async function sendZsxqHotNews() {
   pendingTurnIndex += 1;
   appendMessage('user', '盘前小作文热度', { turnIndex: pendingTurnIndex });
   currentTaskType = 'zsxq';
-  setRunning(true);
+  setRunning(true, 'zsxq');
   try {
     const r = await fetch('/api/zsxq-analysis', {
       method: 'POST', headers: {'Content-Type':'application/json'},
@@ -1591,7 +1591,7 @@ async function sendReviewPrediction() {
   }
 }
 
-function setRunning(v) {
+function setRunning(v, taskType) {
   isRunning = v;
   $('send-btn').disabled = v;
   $('stop-btn').disabled = !v;
@@ -1601,7 +1601,14 @@ function setRunning(v) {
   if (hotBtn) hotBtn.disabled = v;
   const reviewBtn = $('review-prediction-btn');
   if (reviewBtn) reviewBtn.disabled = v;
-  // 超时保护：任务开始时启动计时器，5 分钟后自动解锁避免页面永久卡死
+  // 超时保护：任务开始时启动计时器，到点自动解锁避免页面永久卡死
+  // zsxq 盘前小作文热度实测全流程 286s，单独走 8 分钟超时（与后端 runner 内部 480s 上限对齐）
+  const timeoutMs = (taskType === 'zsxq' && APP_CONSTANTS.ZSXQ_RUNNING_TIMEOUT_MS)
+    ? APP_CONSTANTS.ZSXQ_RUNNING_TIMEOUT_MS
+    : RUNNING_TIMEOUT;
+  const timeoutLabel = (timeoutMs >= 60000)
+    ? `${Math.round(timeoutMs / 60000)} 分钟`
+    : `${Math.round(timeoutMs / 1000)} 秒`;
   if (runningTimeoutTimer) {
     clearTimeout(runningTimeoutTimer);
     runningTimeoutTimer = null;
@@ -1611,10 +1618,10 @@ function setRunning(v) {
     startProgressTimer();
     runningTimeoutTimer = setTimeout(() => {
       if (isRunning) {
-        appendMessage('error', '⚠️ 任务执行超时（5 分钟），已自动解锁。如需继续请重新发送。');
+        appendMessage('error', `⚠️ 任务执行超时（${timeoutLabel}），已自动解锁。如需继续请重新发送。`);
         setRunning(false);
       }
-    }, RUNNING_TIMEOUT);
+    }, timeoutMs);
   } else {
     // 任务结束，停止进度提示
     stopProgressTimer();
@@ -1826,6 +1833,56 @@ function stripHiddenInstructions(text) {
   return text.replace(HIDE_PROMPT_RE, '').trimEnd();
 }
 
+// ============ 盘前小作文结构化表格渲染 ============
+// 后端在 txt 总结末尾附加单行标记块：<<<ZSXQ_TABLE:{"rows":[{name,sentiment,count,sector,summary},...])>>>
+// 检测到标记 → 拆出正文文本 + 表格数据；未检测到 → 原样返回。
+function _splitZsxqTable(content) {
+  if (typeof content !== 'string') return { text: content, rows: null, meta: null };
+  const m = content.match(/<<<ZSXQ_TABLE:(\{[\s\S]*?\})>>>/);
+  if (!m) return { text: content, rows: null, meta: null };
+  try {
+    const payload = JSON.parse(m[1]);
+    const rows = Array.isArray(payload && payload.rows) ? payload.rows : null;
+    if (rows && rows.length) {
+      return {
+        text: content.replace(m[0], '').trimEnd(),
+        rows: rows,
+        meta: { total: (payload.total_stocks != null ? payload.total_stocks : rows.length), generated_at: payload.generated_at || '' },
+      };
+    }
+  } catch (e) { /* JSON 解析失败则按原样显示 */ }
+  return { text: content, rows: null, meta: null };
+}
+
+// 用 DOM API 构建表格（不拼 innerHTML，天然防 XSS）
+function _buildZsxqTable(rows) {
+  const table = document.createElement('table');
+  table.className = 'zsxq-table';
+  const thead = document.createElement('thead');
+  const headRow = document.createElement('tr');
+  ['#', '股票名', '情绪', '研报数量', '行业', '摘要（利好/利空原因）'].forEach((h) => {
+    const th = document.createElement('th');
+    th.textContent = h;
+    headRow.appendChild(th);
+  });
+  thead.appendChild(headRow);
+  table.appendChild(thead);
+  const tbody = document.createElement('tbody');
+  rows.forEach((r, i) => {
+    const tr = document.createElement('tr');
+    const cells = [String(i + 1), r.name || '', r.sentiment || '', String(r.count != null ? r.count : ''), r.sector || '', r.summary || ''];
+    cells.forEach((c, idx) => {
+      const td = document.createElement('td');
+      td.textContent = c;
+      if (idx === 2) td.classList.add(c === '利好' ? 'sentiment-bull' : c === '利空' ? 'sentiment-bear' : 'sentiment-neutral');
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+  return table;
+}
+
 function appendMessage(role, content, options) {
   options = options || {};
   // 前端防御：剥掉不应显示给用户的规则段落
@@ -1852,7 +1909,20 @@ function appendMessage(role, content, options) {
   // 消息主体
   const div = document.createElement('div');
   div.className = 'msg ' + role;
-  div.textContent = content;
+  // 盘前小作文结构化表格：检测 <<<ZSXQ_TABLE:{...}>>> 标记块 → 只渲染元信息行 + 真表格
+  // （txt 原文含对齐文本表格，与 HTML 表格重复，整体不显示）
+  const _zsxq = _splitZsxqTable(content);
+  if (_zsxq.rows) {
+    const meta = document.createElement('div');
+    meta.className = 'zsxq-table-meta';
+    meta.textContent = '📊 盘前研报热度：共 ' + _zsxq.meta.total + ' 只股票'
+      + (_zsxq.meta.generated_at ? '（生成于 ' + _zsxq.meta.generated_at + '）' : '');
+    div.appendChild(meta);
+    div.appendChild(_buildZsxqTable(_zsxq.rows));
+    div.classList.add('zsxq-table-msg');
+  } else {
+    div.textContent = content;
+  }
   if (turnIndex != null && !isNaN(turnIndex)) div.dataset.turnIndex = String(turnIndex);
 
   // 绑定长按 + 右键菜单事件（仅 user/assistant 消息）
@@ -2350,9 +2420,7 @@ async function generateLongImage(msgs) {
   const DPR = Math.min(window.devicePixelRatio || 1, 2);  // 限制 DPR 防止 canvas 超过浏览器尺寸上限
   const baseW = 750;  // 设计稿宽度（逻辑像素）
   const padding = 32;
-  const avatarW = 48;
-  const msgMaxW = baseW - padding * 2 - avatarW - 16;  // 气泡最大宽度
-  const headerH = 96;   // 顶部标题栏高度
+  const msgMaxW = baseW - padding * 2;  // 气泡最大宽度（无头像，占满内容区）
   const footerH = 72;   // 底部水印高度
   const bubblePadX = 18;
   const bubblePadY = 14;
@@ -2372,14 +2440,14 @@ async function generateLongImage(msgs) {
     const text = String(m.content || '').replace(/<[^>]+>/g, '');  // 去除 HTML 标签
     const lines = splitTextToLines(mctx, text, msgMaxW - bubblePadX * 2);
     const bubbleH = lines.length * lineH + bubblePadY * 2;
-    const rowH = Math.max(bubbleH, avatarW + 8) + gap;
+    const rowH = bubbleH + gap;
     layoutRows.push({ msg: { ...m, content: text }, lines, bubbleH, rowH });
     contentH += rowH;
   }
 
   // ---------- 设定 canvas 尺寸（限制最大高度防止浏览器溢出）----------
   const MAX_CANVAS_H = 16000;  // 浏览器 canvas 最大高度安全值
-  let totalH = headerH + contentH + footerH + gap;
+  let totalH = gap + contentH + footerH + gap;
   let scale = 1;
   const pixelH = totalH * DPR;
   if (pixelH > MAX_CANVAS_H) {
@@ -2404,52 +2472,14 @@ async function generateLongImage(msgs) {
   ctx.fillStyle = bg;
   ctx.fillRect(0, 0, baseW, totalH);
 
-  // ---------- 顶部标题栏 ----------
-  const headerBg = ctx.createLinearGradient(0, 0, baseW, 0);
-  headerBg.addColorStop(0, '#0a84ff');
-  headerBg.addColorStop(1, '#34c759');
-  ctx.fillStyle = headerBg;
-  ctx.fillRect(0, 0, baseW, headerH);
-  // 标题文字
-  ctx.fillStyle = '#fff';
-  ctx.font = `bold 24px -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif`;
-  ctx.textBaseline = 'middle';
-  ctx.fillText('无极 Agent 对话', padding + 8, headerH / 2 - 10);
-  // 副标题
-  ctx.font = `13px -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif`;
-  ctx.fillStyle = 'rgba(255,255,255,0.85)';
-  const nowStr = new Date().toLocaleString('zh-CN');
-  ctx.fillText('导出时间：' + nowStr, padding + 8, headerH / 2 + 18);
-
-  // ---------- 消息绘制 ----------
-  let y = headerH + gap;
+  // ---------- 消息绘制（仅内容气泡：无标题栏/副标题/头像） ----------
+  let y = gap;
   for (const row of layoutRows) {
     const isUser = row.msg.role === 'user';
-    const avatarX = isUser ? baseW - padding - avatarW : padding;
-    const bubbleX = isUser
-      ? baseW - padding - avatarW - 16 - (bubblePadX * 2 + measureLinesWidth(mctx, row.lines) + bubblePadX * 2)  // 右对齐会很复杂，改用固定左端
-      : padding + avatarW + 16;
 
-    // 为简化：用户消息靠右侧绘制，左边界 = baseW - padding - 最大气泡宽 - avatarW - 16
-    const bubbleLeft = isUser
-      ? baseW - padding - msgMaxW - avatarW - 16
-      : padding + avatarW + 16;
-
-    // 头像
-    drawRoundRect(ctx, avatarX, y + 4, avatarW, avatarW, 24);
-    ctx.fillStyle = isUser ? '#0a84ff' : '#fff';
-    ctx.fill();
-    // 头像文字
-    ctx.fillStyle = isUser ? '#fff' : '#0a84ff';
-    ctx.font = `bold 20px -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(isUser ? '我' : 'AI', avatarX + avatarW / 2, y + 4 + avatarW / 2);
-    ctx.textAlign = 'start';
-
-    // 气泡背景
+    // 气泡定位（无头像）：用户消息右对齐、AI 消息左对齐
     const bubbleW = Math.min(msgMaxW, bubblePadX * 2 + measureLinesWidth(mctx, row.lines));
-    const bx = isUser ? (baseW - padding - avatarW - 16 - bubbleW) : bubbleLeft;
+    const bx = isUser ? (baseW - padding - bubbleW) : padding;
     const by = y + 4;
 
     drawRoundRect(ctx, bx, by, bubbleW, row.bubbleH, 14);
@@ -2483,12 +2513,15 @@ async function generateLongImage(msgs) {
     y += row.rowH;
   }
 
-  // ---------- 底部水印 ----------
+  // ---------- 底部水印：无极Moss金融研报（不透明度 80%） ----------
+  ctx.save();
+  ctx.globalAlpha = 0.8;
   ctx.fillStyle = '#8e8e93';
-  ctx.font = `13px -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif`;
+  ctx.font = `bold 16px -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif`;
   ctx.textBaseline = 'middle';
-  ctx.fillText('—— 无极 Agent · 由 MOSS Finance Assistant 生成 ——', baseW / 2, y + (footerH / 2), baseW - padding * 2);
-  ctx.textAlign = 'start';
+  ctx.textAlign = 'center';
+  ctx.fillText('无极Moss金融研报', baseW / 2, y + (footerH / 2));
+  ctx.restore();
 
   // 使用 toBlob 替代 toDataURL（内存占用更低，移动端大 canvas 兼容性更好）
   return new Promise((resolve) => {

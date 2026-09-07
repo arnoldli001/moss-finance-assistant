@@ -44,6 +44,7 @@
 | SLO 监控 | 可用性/延迟/幻觉通过率 + 30 天错误预算 | ≥99% / P95≤30s / ≥95% |
 | OTel 追踪 | agent.run → llm.chat → tool.call 三层 span，跨协程传播 | console/OTLP 可配 |
 | Actor 模型 | 会话注册/WS 连接/SLO 写入邮箱队列串行化 + 快照持久化 | 消除取消竞态与并发写 |
+| 进程端到端清理 | Ctrl+C 优雅关停链：取消在飞会话任务 → 终止自拉起 Ollama → 树杀残留子进程（zsxq runner/Playwright/ollama pull） | 全局子进程注册表 `shared/utils/proc_registry.py` |
 
 ### 4. 企业级安全
 - **JWT 认证 + RBAC**：register/login/refresh/guest 四端点签发 token 对；按角色限流 owner 600 / admin 120 / user 60 / guest 10 QPM；API 层强制从 JWT 取 user_id，杜绝水平越权
@@ -274,6 +275,7 @@ python -m tests.eval.run_eval --mode direct --limit 3   # LLM 评估抽样
 | LLM 客户端/PTD/模型路由 | `shared/llm_client/*` | `agent/llm.py`、`agent/tool_router.py` 等 |
 | 治理层（熔断/降级/幻觉/校验/SLO/缓存/RBAC） | `governance/guardrails/*`、`governance/monitor/*` | `agent/circuit_breaker.py` 等 10+ 垫片 |
 | Actor 并发 | `shared/actors/*` | `agent/actors/*` |
+| 子进程生命周期 | `shared/utils/proc_registry.py`（全局登记 + 关停树杀）、`shared/utils/ollama_helper.py`（自拉起 Ollama 关停） | — |
 | 调度/工作流/Skills | `orchestration/{scheduler,workflows,skills}/` | `agent/scheduler.py` |
 | 数据源/工具 | `shared/data_sources/*`、`tools/*` | 少数 re-export |
 

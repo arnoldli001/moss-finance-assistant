@@ -37,6 +37,10 @@
     // 运行任务硬超时保护（毫秒）：5 分钟仍没结束就强制重置等待态
     const RUNNING_TIMEOUT_MS = 300000;
 
+    // zsxq 盘前小作文热度专用硬超时（毫秒）：实测 runner 全流程 286s，
+    // 加 Ollama 预检/调度开销会超 5 分钟，给到 8 分钟与后端 _ZXSQ_RUNNER_TOTAL_TIMEOUT_SEC 对齐
+    const ZSXQ_RUNNING_TIMEOUT_MS = 480000;
+
     // ======================================================================
     // 2. 前端监控/更新计时器
     // ======================================================================
@@ -149,6 +153,7 @@
         WS_WAIT_OPEN_TIMEOUT_MS,
         WS_WAIT_OPEN_POLL_STEP_MS,
         RUNNING_TIMEOUT_MS,
+        ZSXQ_RUNNING_TIMEOUT_MS,
         THINKING_TIMER_TICK_MS,
         PROGRESS_UPDATE_INTERVAL_MS,
         DELETE_CONFIRM_WINDOW_MS,

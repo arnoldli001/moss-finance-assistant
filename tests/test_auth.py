@@ -2,7 +2,7 @@
 
 场景对照（AGENTS.md & 审查报告 P0-1/P0-2 验收）：
   [S1] POST /api/auth/register → 200 + 返回 access_token / refresh_token / user.role
-  [S2] POST /api/auth/login 密码错误 → 401 + body.code == PASSWORD_MISMATCH
+  [S2] POST /api/auth/login 密码错误 → 401 + body.code == "401"（通用错误码，防账号枚举）
   [S3] 无 Authorization 头访问 POST /api/task → 401（middleware 层拦，不是 handler）
   [S4] 普通用户 userB 访问 userA 建的 GET /api/sessions/{sid}/history → 403 行级隔离
   [S5] 过期 JWT 访问任意鉴权端点 → 401 + body.code == EXPIRED_TOKEN
@@ -52,7 +52,7 @@ def test_login_wrong_password_401(unauth_client):
                             json={"user_id": uid, "password": "definitely-wrong"})
     assert r2.status_code == 401, f"login(pw_wrong)={r2.status_code} {r2.text}"
     code = ((r2.json() or {}).get("detail") or {}).get("code")
-    assert code == "PASSWORD_MISMATCH", f"期望 PASSWORD_MISMATCH，实际={code}"
+    assert code == "401", f"期望通用错误码 '401'（防账号枚举），实际={code}"
 
 
 # ======================================================================

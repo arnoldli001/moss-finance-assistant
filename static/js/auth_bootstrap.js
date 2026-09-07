@@ -174,11 +174,16 @@
     // 6. 登录/注册/游客：三个 auth 端点统一调用（success=hideLoginScreen，fail=填错误区）
     // ======================================================================
     async function _callAuth(endpoint, bodyObj) {
+        // 防御：确保 bodyObj 是合法对象，password 强制 string
+        const safeBody = {};
+        for (const k of Object.keys(bodyObj || {})) {
+            safeBody[k] = (k === 'password') ? String(bodyObj[k] || '') : bodyObj[k];
+        }
         try {
             const r = await _origFetch(endpoint, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(bodyObj || {})
+                body: JSON.stringify(safeBody)
             });
             let data = null;
             try { data = await r.json(); } catch (_) { data = null; }
@@ -208,19 +213,18 @@
 
     async function doLogin(_user, _pw) {
         const f = _getLoginForm();
-        const user_id = _user || f.user_id;
-        const password = _pw || f.password;
+        const user_id = (typeof _user === 'string' && _user) ? _user : f.user_id;
+        const password = (typeof _pw === 'string' && _pw) ? _pw : f.password;
         _setLoginError('');
         if (!user_id) { _setLoginError('请输入用户名 / User ID'); return false; }
-        if (!password) { _setLoginError('请输入密码'); return false; }
-        const r = await _callAuth(API.LOGIN, { user_id, password });
+        if (!password || String(password).length < 1) { _setLoginError('请输入密码（至少 1 位）'); return false; }
+        const r = await _callAuth(API.LOGIN, { user_id: String(user_id), password: String(password) });
         if (!r.ok) {
             const msg = r.data && r.data.detail ? (r.data.detail.message || '登录失败') : ('登录失败（HTTP ' + r.status + '）');
             const code = r.data && r.data.detail ? r.data.detail.code : '';
             // 细粒度提示
             const hint = (code === 'USER_NOT_FOUND') ? '用户不存在，请先注册' :
-                         (code === 'PASSWORD_MISMATCH') ? '密码错误' :
-                         (code === 'NO_PASSWORD_SET') ? '该账号未设置密码（旧游客账号），请登录后修改密码或重新注册' : '';
+                         (code === 'PASSWORD_MISMATCH') ? '账号或密码错误' : '';
             _setLoginError(hint ? `${msg}：${hint}` : msg, code);
             return false;
         }
@@ -531,9 +535,9 @@
         const btnLogin = document.getElementById('login-submit');
         const btnReg = document.getElementById('register-submit');
         const btnGuest = document.getElementById('guest-submit');
-        if (btnLogin) btnLogin.addEventListener('click', doLogin);
-        if (btnReg) btnReg.addEventListener('click', doRegister);
-        if (btnGuest) btnGuest.addEventListener('click', doGuest);
+        if (btnLogin) btnLogin.addEventListener('click', () => doLogin());
+        if (btnReg) btnReg.addEventListener('click', () => doRegister());
+        if (btnGuest) btnGuest.addEventListener('click', () => doGuest());
         // 回车 → 登录
         const pwEl = document.getElementById('login-password');
         if (pwEl) pwEl.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); doLogin(); } });

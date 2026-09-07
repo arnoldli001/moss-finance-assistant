@@ -122,6 +122,7 @@ from config.constants import (
     NGROK_LOCAL_API_PORT,
     SCHEDULER_CANCEL_WAIT_SEC,
     SUBPROCESS_WAIT_TIMEOUT_SEC,
+    SHUTDOWN_SESSION_TASKS_WAIT_SEC,
     HTTP_CODE_TOO_MANY_REQUESTS,
     HTTP_CODE_NOT_FOUND,
     STREAM_DISCONNECT_POLL_INTERVAL_SEC,
@@ -158,7 +159,7 @@ def _ensure_zsxq_router_installed_once() -> None:
     app.include_router(zsxq_router)
     _ZSXQ_ROUTER_INSTALLED = True
 
-# 默认超时：Agent 主流程 180s，后台分析 300s（知识星球抓取+分析较耗时）
+# 默认超时：Agent 主流程 180s，后台分析 360s（知识星球抓取+分析较耗时）
 _DEFAULT_AGENT_TIMEOUT: float = DEFAULT_AGENT_TIMEOUT_SEC
 _DEFAULT_BG_TIMEOUT: float = DEFAULT_BACKGROUND_TIMEOUT_SEC
 
@@ -631,7 +632,6 @@ async def _run_coro_with_workflow_priority(
             f"[方案一 Router+Workflow 非流式] 异常 → fallback 旧 run_deep_agent: {_wf_err}",
             flush=True,
         )
-    # --- 兼容兜底：旧 run_deep_agent 原逻辑 100% 保留 ---
     await run_deep_agent(query, thread_id, user_id, quiet=quiet)
 
 
@@ -898,6 +898,42 @@ async def lifespan(app: FastAPI):
         print("[Scheduler] 定时调度器已停止")
     except Exception:
         pass
+    # ===== 端到端进程清理（先于 stop_all）：取消在飞任务 → 关自拉起 Ollama → 树杀残留子进程 =====
+    # 背景：stop_all() 只停 Actor 邮箱循环；注册表里挂着的聊天/后台任务若不取消，
+    # 其派生的子进程（zsxq runner / ollama pull / Playwright）会随事件循环关闭变孤儿。
+    try:
+        if _session_actor is not None:
+            _cancel_res = await _session_actor.ask(
+                SRMsg.CANCEL_ALL_TASKS, {}, timeout=SHUTDOWN_SESSION_TASKS_WAIT_SEC
+            )
+            _cancelled_tasks = (_cancel_res or {}).get("cancelled", []) \
+                if isinstance(_cancel_res, dict) else []
+            if _cancelled_tasks:
+                try:
+                    await asyncio.wait_for(
+                        asyncio.gather(*_cancelled_tasks, return_exceptions=True),
+                        timeout=SHUTDOWN_SESSION_TASKS_WAIT_SEC,
+                    )
+                except (asyncio.TimeoutError, asyncio.CancelledError):
+                    pass
+            print(f"[Shutdown] 已取消 {len(_cancelled_tasks)} 个在飞会话任务")
+    except Exception as _cancel_all_err:
+        print(f"[Shutdown] 取消在飞会话任务异常（不致命）: {_cancel_all_err}")
+    # 关停"本进程亲手拉起"的 ollama serve（用户手动启动的不动）
+    try:
+        from shared.utils.ollama_helper import shutdown_ollama_if_spawned
+        if await shutdown_ollama_if_spawned():
+            print("[Shutdown] 自拉起的 Ollama 推理服务已关闭")
+    except Exception:
+        pass
+    # 最后防线：树杀注册表中仍存活的残留子进程（zsxq runner / pull 等）
+    try:
+        from shared.utils.proc_registry import kill_all_tracked
+        _killed_pids = await kill_all_tracked()
+        if _killed_pids:
+            print(f"[Shutdown] 已清理 {len(_killed_pids)} 个残留子进程: {_killed_pids}")
+    except Exception:
+        pass
     # ===== Actor Model: 优雅停止所有 Actor =====
     try:
         await get_actor_system().stop_all()
@@ -1009,9 +1045,13 @@ class AuthAndRateLimitMiddleware(BaseHTTPMiddleware):
         is_ws = self._is_websocket_path(path)
 
         if is_public and not is_ws:
-            # 仅以 IP 为 key 限流（匿名访问保护），配额 guest=10 QPM
+            # 仅以 IP 为 key 限流（匿名访问保护）
+            # auth 端点（/api/auth/*）放宽至 30 QPM：登录/注册按钮重试不应被 10 QPM 拦截
             ip = self._get_client_ip(request)
-            ok, retry = self._limiter.hit(f"pub:{ip}", "guest")
+            if path.startswith("/api/auth/"):
+                ok, retry = self._limiter.hit(f"auth:{ip}", "user")
+            else:
+                ok, retry = self._limiter.hit(f"pub:{ip}", "guest")
             if not ok:
                 return JSONResponse(
                     status_code=HTTP_CODE_TOO_MANY_REQUESTS,
@@ -1219,22 +1259,12 @@ async def auth_login(req: LoginRequest):
     from fastapi import status as _st
     ok, need_upgrade, role = storage.verify_user_password(req.user_id, req.password)
     if not ok:
-        # 注意：区分"用户不存在/密码错"统一 401，但 code 细分有利于前端提示
-        user_row = storage.get_user(req.user_id)
-        code = "USER_NOT_FOUND" if user_row is None else "PASSWORD_MISMATCH"
-        if user_row and not user_row.get("has_password"):
-            code = "NO_PASSWORD_SET"
-            raise HTTPException(
-                status_code=_st.HTTP_401_UNAUTHORIZED,
-                detail={"code": code,
-                        "message": "该账号未设置过密码，请回到登录界面点击「注册」，输入同一账号名和你要设置的密码，设置成功后即可登录"},
-                headers={"WWW-Authenticate": "Bearer"},
-            )
         raise HTTPException(
             status_code=_st.HTTP_401_UNAUTHORIZED,
-            detail={"code": code, "message": "用户名或密码错误"},
+            detail={"code": "401", "message": "账号或密码错误"},
             headers={"WWW-Authenticate": "Bearer"},
         )
+
     role = role or "user"
     if need_upgrade:
         # 登录成功后把旧算法哈希升级为当前最强算法（pbkdf2 → bcrypt 或低 iters → 高 iters）

@@ -87,6 +87,21 @@
   .msg.event { background: #fff8e1; border-left: 3px solid #ffb300; font-size: 12px; color: #6b6b6b; max-width: 90%; }
   .msg.error { background: #ffeaea; border-left: 3px solid #ff3b30; font-size: 12px; color: #c00; }
   .msg.system { background: #e8f5e9; border-left: 3px solid #34c759; font-size: 12px; color: #2e7d32; }
+  /* 盘前小作文结构化表格 */
+  .msg.zsxq-table-msg { white-space: normal; max-width: 92%; }
+  .zsxq-table-meta { font-weight: 600; margin-bottom: 6px; }
+  .zsxq-table { border-collapse: collapse; width: 100%; margin-top: 8px; font-size: 12px; }
+  .zsxq-table th, .zsxq-table td { border: 1px solid #e0e0e0; padding: 5px 8px; text-align: left; vertical-align: top; }
+  .zsxq-table th { background: #f5f6f8; font-weight: 600; white-space: nowrap; }
+  .zsxq-table td:first-child, .zsxq-table td:nth-child(4) { text-align: right; white-space: nowrap; }
+  .zsxq-table td:nth-child(2) { white-space: nowrap; font-weight: 600; }
+  .zsxq-table .sentiment-bull { color: #e02020; font-weight: 700; }
+  .zsxq-table .sentiment-bear { color: #0a9c46; font-weight: 700; }
+  .zsxq-table .sentiment-neutral { color: #8e8e93; }
+  /* user 气泡为蓝底白字，表格内强制浅底深字保证可读性 */
+  .msg.user .zsxq-table { background: #fff; color: #1d1d1f; border-radius: 6px; }
+  .msg.user .zsxq-table th { background: #eef1f5; color: #1d1d1f; }
+  .msg.user .zsxq-table td { border-color: #d8dde3; }
   /* 消息操作栏（hover显示复制） */
   .msg-actions { display: flex; flex-direction: column; gap: 4px; opacity: 0; transition: opacity 0.2s; padding-top: 6px; flex-shrink: 0; }
   .msg-wrap:hover .msg-actions { opacity: 1; }
@@ -435,7 +450,7 @@
       </div>
       <div id="quick-actions">
         <button id="pre-market-btn" onclick="sendPreMarketNews()">📰 盘前新闻</button>
-        <button id="zsxq-hot-btn" onclick="sendZsxqHotNews()">🔥 盘前小作文热度</button>
+        <button id="zsxq-hot-btn" onclick="sendZsxqHotNews()">🔥 盘前研报热度</button>
         <button id="review-prediction-btn" onclick="sendReviewPrediction()">🔮 复盘预测</button>
       </div>
     </div>
@@ -486,7 +501,7 @@
 <!-- 前端集中常量：所有魔鬼数字统一在 static/js/constants.js 定义，这里先加载供下方使用 -->
 <script src="/static/js/constants.js"></script>
 <!-- A5 登录鉴权入口：必须先于 stream_client.js 与主代码加载（monkey patch fetch+WebSocket） -->
-<script src="/static/js/auth_bootstrap.js"></script>
+<script src="/static/js/auth_bootstrap.js?v=2"></script>
 <!-- SSE 流式消费引擎（EventSourceBuffer）—— 新增 /api/task/stream 专用 -->
 <script src="/static/js/stream_client.js"></script>
 <script>
@@ -790,9 +805,7 @@ window.addEventListener('load', async () => {
       if (sessions.length > 0) {
         const last = sessions[sessions.length - 1];
         switchSession(last.session_id, last.title);
-      } else {
-        try { await newSession(); } catch (_) {}
-      }
+      } 
     }
   }
 
@@ -1522,13 +1535,13 @@ function maskAbsPaths(text) {
     if (!norm) return raw;
     var lastIdx = norm.lastIndexOf('/');
     var last = (lastIdx >= 0 ? norm.slice(lastIdx + 1) : norm);
-    if (!last) return '工作目录';
+    if (!last) return '';
     // 对 DIR\末级：最多保留末 2 段（sub/name）
     var secIdx = norm.lastIndexOf('/', lastIdx - 1);
     var short = last;
     if (secIdx >= 0) short = norm.slice(secIdx + 1);
     if (short.length > 64) short = last.slice(-48);
-    return '工作目录(./…/' + short + ')';
+    return short;
   });
 }
 
@@ -2074,7 +2087,7 @@ async function sendZsxqHotNews() {
   pendingTurnIndex += 1;
   appendMessage('user', '盘前小作文热度', { turnIndex: pendingTurnIndex });
   currentTaskType = 'zsxq';
-  setRunning(true);
+  setRunning(true, 'zsxq');
   try {
     const r = await fetch('/api/zsxq-analysis', {
       method: 'POST', headers: {'Content-Type':'application/json'},
@@ -2133,7 +2146,7 @@ async function sendReviewPrediction() {
   }
 }
 
-function setRunning(v) {
+function setRunning(v, taskType) {
   isRunning = v;
   $('send-btn').disabled = v;
   $('stop-btn').disabled = !v;
@@ -2143,7 +2156,14 @@ function setRunning(v) {
   if (hotBtn) hotBtn.disabled = v;
   const reviewBtn = $('review-prediction-btn');
   if (reviewBtn) reviewBtn.disabled = v;
-  // 超时保护：任务开始时启动计时器，5 分钟后自动解锁避免页面永久卡死
+  // 超时保护：任务开始时启动计时器，到点自动解锁避免页面永久卡死
+  // zsxq 盘前小作文热度实测全流程 286s，单独走 8 分钟超时（与后端 runner 内部 480s 上限对齐）
+  const timeoutMs = (taskType === 'zsxq' && APP_CONSTANTS.ZSXQ_RUNNING_TIMEOUT_MS)
+    ? APP_CONSTANTS.ZSXQ_RUNNING_TIMEOUT_MS
+    : RUNNING_TIMEOUT;
+  const timeoutLabel = (timeoutMs >= 60000)
+    ? `${Math.round(timeoutMs / 60000)} 分钟`
+    : `${Math.round(timeoutMs / 1000)} 秒`;
   if (runningTimeoutTimer) {
     clearTimeout(runningTimeoutTimer);
     runningTimeoutTimer = null;
@@ -2153,10 +2173,10 @@ function setRunning(v) {
     startProgressTimer();
     runningTimeoutTimer = setTimeout(() => {
       if (isRunning) {
-        appendMessage('error', '⚠️ 任务执行超时（5 分钟），已自动解锁。如需继续请重新发送。');
+        appendMessage('error', `⚠️ 任务执行超时（${timeoutLabel}），已自动解锁。如需继续请重新发送。`);
         setRunning(false);
       }
-    }, RUNNING_TIMEOUT);
+    }, timeoutMs);
   } else {
     // 任务结束，停止进度提示
     stopProgressTimer();
@@ -2369,6 +2389,56 @@ function stripHiddenInstructions(text) {
   return text.replace(HIDE_PROMPT_RE, '').trimEnd();
 }
 
+// ============ 盘前小作文结构化表格渲染 ============
+// 后端在 txt 总结末尾附加单行标记块：<<<ZSXQ_TABLE:{"rows":[{name,sentiment,count,sector,summary},...]}>>>
+// 检测到标记 → 拆出正文文本 + 表格数据；未检测到 → 原样返回。
+function _splitZsxqTable(content) {
+  if (typeof content !== 'string') return { text: content, rows: null, meta: null };
+  const m = content.match(/<<<ZSXQ_TABLE:(\{[\s\S]*?\})>>>/);
+  if (!m) return { text: content, rows: null, meta: null };
+  try {
+    const payload = JSON.parse(m[1]);
+    const rows = Array.isArray(payload && payload.rows) ? payload.rows : null;
+    if (rows && rows.length) {
+      return {
+        text: content.replace(m[0], '').trimEnd(),
+        rows: rows,
+        meta: { total: (payload.total_stocks != null ? payload.total_stocks : rows.length), generated_at: payload.generated_at || '' },
+      };
+    }
+  } catch (e) { /* JSON 解析失败则按原样显示 */ }
+  return { text: content, rows: null, meta: null };
+}
+
+// 用 DOM API 构建表格（不拼 innerHTML，天然防 XSS）
+function _buildZsxqTable(rows) {
+  const table = document.createElement('table');
+  table.className = 'zsxq-table';
+  const thead = document.createElement('thead');
+  const headRow = document.createElement('tr');
+  ['#', '股票名', '情绪', '研报数量', '行业', '摘要（利好/利空原因）'].forEach((h) => {
+    const th = document.createElement('th');
+    th.textContent = h;
+    headRow.appendChild(th);
+  });
+  thead.appendChild(headRow);
+  table.appendChild(thead);
+  const tbody = document.createElement('tbody');
+  rows.forEach((r, i) => {
+    const tr = document.createElement('tr');
+    const cells = [String(i + 1), r.name || '', r.sentiment || '', String(r.count != null ? r.count : ''), r.sector || '', r.summary || ''];
+    cells.forEach((c, idx) => {
+      const td = document.createElement('td');
+      td.textContent = c;
+      if (idx === 2) td.classList.add(c === '利好' ? 'sentiment-bull' : c === '利空' ? 'sentiment-bear' : 'sentiment-neutral');
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+  return table;
+}
+
 function appendMessage(role, content, options) {
   options = options || {};
   // 前端防御：剥掉不应显示给用户的规则段落
@@ -2395,7 +2465,20 @@ function appendMessage(role, content, options) {
   // 消息主体
   const div = document.createElement('div');
   div.className = 'msg ' + role;
-  div.textContent = content;
+  // 盘前小作文结构化表格：检测 <<<ZSXQ_TABLE:{...}>>> 标记块 → 只渲染元信息行 + 真表格
+  // （txt 原文含对齐文本表格，与 HTML 表格重复，整体不显示）
+  const _zsxq = _splitZsxqTable(content);
+  if (_zsxq.rows) {
+    const meta = document.createElement('div');
+    meta.className = 'zsxq-table-meta';
+    meta.textContent = '📊 盘前研报热度：共 ' + _zsxq.meta.total + ' 只股票'
+      + (_zsxq.meta.generated_at ? '（生成于 ' + _zsxq.meta.generated_at + '）' : '');
+    div.appendChild(meta);
+    div.appendChild(_buildZsxqTable(_zsxq.rows));
+    div.classList.add('zsxq-table-msg');
+  } else {
+    div.textContent = content;
+  }
   if (turnIndex != null && !isNaN(turnIndex)) div.dataset.turnIndex = String(turnIndex);
 
   // 绑定长按 + 右键菜单事件（仅 user/assistant 消息）
@@ -2893,9 +2976,7 @@ async function generateLongImage(msgs) {
   const DPR = Math.min(window.devicePixelRatio || 1, 2);  // 限制 DPR 防止 canvas 超过浏览器尺寸上限
   const baseW = 750;  // 设计稿宽度（逻辑像素）
   const padding = 32;
-  const avatarW = 48;
-  const msgMaxW = baseW - padding * 2 - avatarW - 16;  // 气泡最大宽度
-  const headerH = 96;   // 顶部标题栏高度
+  const msgMaxW = baseW - padding * 2;  // 气泡最大宽度（无头像，占满内容区）
   const footerH = 72;   // 底部水印高度
   const bubblePadX = 18;
   const bubblePadY = 14;
@@ -2913,17 +2994,28 @@ async function generateLongImage(msgs) {
   let contentH = 0;
 
   for (const m of msgs) {
-    const text = String(m.content || '').replace(/<[^>]+>/g, '');  // 去除 HTML 标签
+    const raw = String(m.content || '');
+    // 盘前研报表格消息：按元信息行 + 表格布局（Canvas 真表格绘制）
+    const zs = (typeof _splitZsxqTable === 'function') ? _splitZsxqTable(raw) : { rows: null };
+    if (zs.rows) {
+      const tl = layoutZsxqShareTable(mctx, zs.rows, msgMaxW - bubblePadX * 2);
+      const bubbleH = bubblePadY * 2 + 30 + tl.tableH;  // 30 = meta 行高
+      const rowH = bubbleH + gap;
+      layoutRows.push({ msg: { role: m.role, content: '' }, lines: [], zsxq: { meta: zs.meta, layout: tl }, bubbleH, rowH });
+      contentH += rowH;
+      continue;
+    }
+    const text = raw.replace(/<[^>]+>/g, '');  // 去除 HTML 标签
     const lines = splitTextToLines(mctx, text, msgMaxW - bubblePadX * 2);
     const bubbleH = lines.length * lineH + bubblePadY * 2;
-    const rowH = Math.max(bubbleH, avatarW + 8) + gap;
+    const rowH = bubbleH + gap;
     layoutRows.push({ msg: { ...m, content: text }, lines, bubbleH, rowH });
     contentH += rowH;
   }
 
   // ---------- 设定 canvas 尺寸（限制最大高度防止浏览器溢出）----------
   const MAX_CANVAS_H = 16000;  // 浏览器 canvas 最大高度安全值
-  let totalH = headerH + contentH + footerH + gap;
+  let totalH = gap + contentH + footerH + gap;
   let scale = 1;
   const pixelH = totalH * DPR;
   if (pixelH > MAX_CANVAS_H) {
@@ -2948,69 +3040,42 @@ async function generateLongImage(msgs) {
   ctx.fillStyle = bg;
   ctx.fillRect(0, 0, baseW, totalH);
 
-  // ---------- 顶部标题栏 ----------
-  const headerBg = ctx.createLinearGradient(0, 0, baseW, 0);
-  headerBg.addColorStop(0, '#0a84ff');
-  headerBg.addColorStop(1, '#34c759');
-  ctx.fillStyle = headerBg;
-  ctx.fillRect(0, 0, baseW, headerH);
-  // 标题文字
-  ctx.fillStyle = '#fff';
-  ctx.font = `bold 24px -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif`;
-  ctx.textBaseline = 'middle';
-  ctx.fillText('无极 Agent 对话', padding + 8, headerH / 2 - 10);
-  // 副标题
-  ctx.font = `13px -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif`;
-  ctx.fillStyle = 'rgba(255,255,255,0.85)';
-  const nowStr = new Date().toLocaleString('zh-CN');
-  ctx.fillText('导出时间：' + nowStr, padding + 8, headerH / 2 + 18);
-
-  // ---------- 消息绘制 ----------
-  let y = headerH + gap;
+  // ---------- 消息绘制（仅内容气泡：无标题栏/副标题/头像） ----------
+  let y = gap;
   for (const row of layoutRows) {
     const isUser = row.msg.role === 'user';
-    const avatarX = isUser ? baseW - padding - avatarW : padding;
-    const bubbleX = isUser
-      ? baseW - padding - avatarW - 16 - (bubblePadX * 2 + measureLinesWidth(mctx, row.lines) + bubblePadX * 2)  // 右对齐会很复杂，改用固定左端
-      : padding + avatarW + 16;
 
-    // 为简化：用户消息靠右侧绘制，左边界 = baseW - padding - 最大气泡宽 - avatarW - 16
-    const bubbleLeft = isUser
-      ? baseW - padding - msgMaxW - avatarW - 16
-      : padding + avatarW + 16;
-
-    // 头像
-    drawRoundRect(ctx, avatarX, y + 4, avatarW, avatarW, 24);
-    ctx.fillStyle = isUser ? '#0a84ff' : '#fff';
-    ctx.fill();
-    // 头像文字
-    ctx.fillStyle = isUser ? '#fff' : '#0a84ff';
-    ctx.font = `bold 20px -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(isUser ? '我' : 'AI', avatarX + avatarW / 2, y + 4 + avatarW / 2);
-    ctx.textAlign = 'start';
-
-    // 气泡背景
-    const bubbleW = Math.min(msgMaxW, bubblePadX * 2 + measureLinesWidth(mctx, row.lines));
-    const bx = isUser ? (baseW - padding - avatarW - 16 - bubbleW) : bubbleLeft;
+    // 气泡定位（无头像）：用户消息右对齐、AI 消息左对齐
+    const bubbleW = row.zsxq ? msgMaxW : Math.min(msgMaxW, bubblePadX * 2 + measureLinesWidth(mctx, row.lines));
+    const bx = isUser ? (baseW - padding - bubbleW) : padding;
     const by = y + 4;
 
     drawRoundRect(ctx, bx, by, bubbleW, row.bubbleH, 14);
-    if (isUser) {
+    if (row.zsxq) {
+      ctx.fillStyle = '#ffffff';
+      ctx.fill();
+      ctx.strokeStyle = '#e3e6eb';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    } else if (isUser) {
       const g = ctx.createLinearGradient(bx, by, bx + bubbleW, by);
       g.addColorStop(0, '#0a84ff');
       g.addColorStop(1, '#34a3ff');
       ctx.fillStyle = g;
+      ctx.fill();
     } else {
       ctx.fillStyle = '#ffffff';
-    }
-    ctx.fill();
-    // 气泡阴影
-    if (!isUser) {
+      ctx.fill();
       ctx.strokeStyle = '#e3e6eb';
       ctx.lineWidth = 1;
       ctx.stroke();
+    }
+
+    // 盘前研报表格：绘制元信息行 + 真表格
+    if (row.zsxq) {
+      drawZsxqShareTable(ctx, row.zsxq.layout, bx + bubblePadX, by + bubblePadY, row.zsxq.meta);
+      y += row.rowH;
+      continue;
     }
 
     // 气泡文字
@@ -3027,12 +3092,15 @@ async function generateLongImage(msgs) {
     y += row.rowH;
   }
 
-  // ---------- 底部水印 ----------
+  // ---------- 底部水印：无极Moss金融研报（不透明度 80%） ----------
+  ctx.save();
+  ctx.globalAlpha = 0.8;
   ctx.fillStyle = '#8e8e93';
-  ctx.font = `13px -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif`;
+  ctx.font = `bold 16px -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif`;
   ctx.textBaseline = 'middle';
-  ctx.fillText('—— 无极 Agent · 由 MOSS Finance Assistant 生成 ——', baseW / 2, y + (footerH / 2), baseW - padding * 2);
-  ctx.textAlign = 'start';
+  ctx.textAlign = 'center';
+  ctx.fillText('无极Moss金融研报', baseW / 2, y + (footerH / 2));
+  ctx.restore();
 
   // 使用 toBlob 替代 toDataURL（内存占用更低，移动端大 canvas 兼容性更好）
   return new Promise((resolve) => {
@@ -3045,6 +3113,101 @@ async function generateLongImage(msgs) {
       }
     }, 'image/png', 0.92);
   });
+}
+
+// 辅助：盘前研报表格（Canvas 分享图）布局——列宽固定、摘要/行业/股票名自动折行
+const ZSXQ_SHARE_FONT = '13px -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif';
+function layoutZsxqShareTable(mctx, rows, innerW) {
+  const prevFont = mctx.font;
+  mctx.font = ZSXQ_SHARE_FONT;
+  const cellPadX = 8, cellPadY = 6, rowLineH = 19;
+  const colDefs = [
+    { key: 'idx', w: 34, align: 'right' },
+    { key: 'name', w: 84, align: 'left' },
+    { key: 'sentiment', w: 54, align: 'center' },
+    { key: 'count', w: 46, align: 'right' },
+    { key: 'sector', w: 84, align: 'left' },
+    { key: 'summary', w: 0, align: 'left' },
+  ];
+  colDefs[5].w = Math.max(160, innerW - colDefs.slice(0, 5).reduce((s, c) => s + c.w, 0));
+  const colXs = []; let cx = 0;
+  for (const c of colDefs) { colXs.push(cx); cx += c.w; }
+  const tableW = cx;
+  const headerH = 28;
+  const dataRows = [];
+  let tableH = headerH;
+  rows.forEach((r, i) => {
+    const cells = {
+      idx: { lines: [String(i + 1)] },
+      name: { lines: splitTextToLines(mctx, r.name || '', colDefs[1].w - cellPadX * 2) },
+      sentiment: { lines: [r.sentiment || ''] },
+      count: { lines: [String(r.count != null ? r.count : '')] },
+      sector: { lines: splitTextToLines(mctx, r.sector || '', colDefs[4].w - cellPadX * 2) },
+      summary: { lines: splitTextToLines(mctx, r.summary || '', colDefs[5].w - cellPadX * 2) },
+    };
+    let maxLines = 1;
+    for (const k in cells) maxLines = Math.max(maxLines, cells[k].lines.length);
+    const rowH = maxLines * rowLineH + cellPadY * 2;
+    dataRows.push({ cells, rowH });
+    tableH += rowH;
+  });
+  mctx.font = prevFont;
+  return { colDefs, colXs, tableW, headerH, dataRows, tableH, cellPadX, cellPadY, rowLineH };
+}
+
+// 辅助：盘前研报表格（Canvas 分享图）绘制——meta 行 + 表头 + 数据行 + 网格线，返回无
+function drawZsxqShareTable(ctx, L, tx, ty, meta) {
+  const prevFont = ctx.font;
+  const textColor = '#1d1d1f';
+  // 元信息行
+  ctx.fillStyle = textColor;
+  ctx.font = 'bold 15px -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif';
+  ctx.textBaseline = 'top';
+  ctx.textAlign = 'left';
+  ctx.fillText('📊 盘前研报热度：共 ' + (meta && meta.total ? meta.total : L.dataRows.length) + ' 只股票'
+    + (meta && meta.generated_at ? '（生成于 ' + meta.generated_at + '）' : ''), tx, ty);
+  const tableTop = ty + 30;
+  ctx.font = ZSXQ_SHARE_FONT;
+  // 表头
+  ctx.fillStyle = '#eef1f5';
+  ctx.fillRect(tx, tableTop, L.tableW, L.headerH);
+  ctx.fillStyle = '#5a5f66';
+  const headers = ['#', '股票名', '情绪', '研报数量', '行业', '摘要（利好/利空原因）'];
+  L.colDefs.forEach((c, i) => {
+    const cx = tx + L.colXs[i] + (c.align === 'right' ? c.w - L.cellPadX : c.align === 'center' ? c.w / 2 : L.cellPadX);
+    ctx.textAlign = c.align;
+    ctx.fillText(headers[i], cx, tableTop + L.cellPadY + 2);
+  });
+  // 数据行
+  const sentColor = (s) => (s === '利好' ? '#e02020' : s === '利空' ? '#0a9c46' : '#8e8e93');
+  let ry = tableTop + L.headerH;
+  for (const dr of L.dataRows) {
+    L.colDefs.forEach((c, i) => {
+      const lines = dr.cells[c.key].lines;
+      const cx = tx + L.colXs[i] + (c.align === 'right' ? c.w - L.cellPadX : c.align === 'center' ? c.w / 2 : L.cellPadX);
+      ctx.textAlign = c.align;
+      ctx.fillStyle = c.key === 'sentiment' ? sentColor(lines[0]) : textColor;
+      lines.forEach((ln, li) => ctx.fillText(ln, cx, ry + L.cellPadY + li * L.rowLineH));
+    });
+    ry += dr.rowH;
+  }
+  // 网格线
+  ctx.strokeStyle = '#d8dde3';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(tx, tableTop, L.tableW, L.tableH);
+  let gy = tableTop + L.headerH;
+  ctx.beginPath(); ctx.moveTo(tx, gy); ctx.lineTo(tx + L.tableW, gy); ctx.stroke();
+  for (const dr of L.dataRows) {
+    gy += dr.rowH;
+    if (gy < tableTop + L.tableH) { ctx.beginPath(); ctx.moveTo(tx, gy); ctx.lineTo(tx + L.tableW, gy); ctx.stroke(); }
+  }
+  let gx = tx;
+  for (const c of L.colDefs) {
+    gx += c.w;
+    if (gx < tx + L.tableW) { ctx.beginPath(); ctx.moveTo(gx, tableTop); ctx.lineTo(gx, tableTop + L.tableH); ctx.stroke(); }
+  }
+  ctx.textAlign = 'start';
+  ctx.font = prevFont;
 }
 
 // 辅助：将文字拆成多行（按宽度 + 换行符）

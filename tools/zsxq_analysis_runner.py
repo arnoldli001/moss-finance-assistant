@@ -54,12 +54,13 @@ if _PROJECT_ROOT not in sys.path:
 from tools.zsxq_tool import fetch_zsxq_group_topics
 
 from config.constants import (
-    TEST_ZXSQ_OLLAMA_TIMEOUT_SEC,
-    TEST_ZXSQ_OLLAMA_TEMPERATURE,
-    TEST_ZXSQ_CLI_TIMEOUT_SEC,
-    TEST_ZXSQ_DEBUG_LINE_JSON_LEN,
-    TEST_ZXSQ_DEBUG_LINE_LONG_LEN,
-    TEST_ZXSQ_FINAL_SUMMARY_PREVIEW_TRUNCATE,
+    OLLAMA_MODEL,
+    OLLAMA_TIMEOUT_SEC,
+    OLLAMA_TEMPERATURE,
+    TEST_ZSXQ_CLI_TIMEOUT_SEC,
+    TEST_ZSXQ_DEBUG_LINE_JSON_LEN,
+    TEST_ZSXQ_DEBUG_LINE_LONG_LEN,
+    TEST_ZSXQ_FINAL_SUMMARY_PREVIEW_TRUNCATE_CHARS as TEST_ZSXQ_FINAL_SUMMARY_PREVIEW_TRUNCATE,
 )
 
 # 运行时静默标志（由 --quiet CLI 参数设置），True 时抑制原始模型输出、
@@ -93,7 +94,6 @@ from shared.utils.zsxq_paths import (  # noqa: E402
 ensure_zsxq_news_dir_ready(Path(_PROJECT_ROOT))  # 幂等、首次自动迁移
 _ZSXQ_OUTPUT_DIR = get_zsxq_news_dir(Path(_PROJECT_ROOT))
 
-
 def _check_ollama_available(base_url: str = "http://localhost:11434") -> None:
     """预检 Ollama 服务是否在线。调用 ollama_helper.probe_ollama（单一实现）。
     失败抛 RuntimeError（与原函数语义一致）。"""
@@ -104,7 +104,7 @@ def _check_ollama_available(base_url: str = "http://localhost:11434") -> None:
         raise RuntimeError(f"Ollama 预检异常: {e}")
     if not ok:
         raise RuntimeError(
-            f"Ollama 服务未启动（{base_url}），请运行 `ollama serve` 并拉取 qwen3:8b 模型。"
+            f"Ollama 服务未启动（{base_url}），请运行 `ollama serve` 并拉取 {OLLAMA_MODEL} 模型。"
         )
 
 
@@ -121,16 +121,13 @@ def _find_latest_news_json() -> Path | None:
         return None
     return max(files, key=lambda f: f.stat().st_mtime)
 
-
 def _call_ollama_chat(model: str, user_prompt: str, system_prompt: str = "",
                       base_url: str = "http://localhost:11434",
-                      timeout: int = TEST_ZXSQ_OLLAMA_TIMEOUT_SEC,
-                      temperature: float = TEST_ZXSQ_OLLAMA_TEMPERATURE,
+                      timeout: int = OLLAMA_TIMEOUT_SEC,
+                      temperature: float = OLLAMA_TEMPERATURE,
                       force_json: bool = False,
                       json_schema: dict | None = None) -> str:
-    """兼容包装：老签名 → 新 ollama_analyze。
-
-    与原函数 100% 等价：成功返回模型 content 字符串；
+    """
     HTTP 失败 / 返回异常 → raise RuntimeError（老调用方 try/except 分支不破）。
     """
     res = ollama_analyze(
@@ -147,17 +144,8 @@ def _call_ollama_chat(model: str, user_prompt: str, system_prompt: str = "",
     return res.final_text
 
 
-def _parse_analysis(raw: str) -> list[dict]:
-    """解析 LLM 返回的盘前小作文热度输出 → list[dict(name, sentiment, count)]。
-    旧函数：本文件内 300+ 行 4 重回退解析。现在 100% 委托
-    shared.utils.ollama_analyzer.parse_stock_sentiment_items（共享 4 重回退链，
-    单一实现，主 Agent/调度/脚本三方同逻辑）。"""
-    return parse_stock_sentiment_items(raw)
-
-
 def _run_financial_analysis(news_json_path: Path) -> list[dict]:
     """对 JSON 内容做金融分析师分析，返回按出现次数从高到低排序的 list。
-
     现在实现优先走 shared.utils.ollama_analyzer.analyze_zsxq_hot_news（封装好的
     盘前小作文热度模板，system prompt / schema / parse 回退链都已统一），
     之后再做"真实文本计数重算 + 去重 + 排序"，与旧输出排序 100% 等价。
@@ -168,7 +156,7 @@ def _run_financial_analysis(news_json_path: Path) -> list[dict]:
     content_text, _ = truncate_entries_for_prompt(data)
 
     _log("\n" + "=" * 60)
-    _log("[分析] 调用本地 Ollama Qwen3-8B 进行金融分析...", always=True)
+    _log(f"[分析] 调用本地 Ollama {OLLAMA_MODEL} 进行金融分析...", always=True)
     _log(f"[分析] 资讯条数: {len(data)}，文本长度: {len(content_text)} 字符")
 
     def _progress(msg: str) -> None:
@@ -180,8 +168,8 @@ def _run_financial_analysis(news_json_path: Path) -> list[dict]:
 
     # 走统一模板（schema/低温度/回退解析链 4 层都在内）
     parsed = _shared_analyze_hot(
-        content_text, model="qwen3:8b",
-        timeout=TEST_ZXSQ_CLI_TIMEOUT_SEC, progress_cb=_progress,
+        content_text, model=OLLAMA_MODEL,
+        timeout=TEST_ZSXQ_CLI_TIMEOUT_SEC, progress_cb=_progress,
     )
 
     # 诊断：最终结果的第一条完整 JSON（与旧 [分析] 模型原始输出 打印格式对齐）
@@ -204,21 +192,33 @@ def _run_financial_analysis(news_json_path: Path) -> list[dict]:
         name = item.get("name") or ""
         actual_count = full_text.count(name) if len(name) >= 2 else 0
         item["count"] = max(int(item.get("count") or 0), actual_count, 1)
-    merged: dict[tuple, int] = {}
+    merged: dict[tuple, dict] = {}
     for item in parsed:
         name = item.get("name") or ""
         sentiment = item.get("sentiment") or ""
-        if not name or sentiment not in ("利好", "利空"):
+        if not name or sentiment not in ("利好", "利空", "中性"):
             continue
         key = (name, sentiment)
-        merged[key] = merged.get(key, 0) + int(item.get("count") or 1)
-    final = [{"name": k[0], "sentiment": k[1], "count": v} for k, v in merged.items()]
+        if key in merged:
+            merged[key]["count"] += int(item.get("count") or 1)
+            # 合并摘要（去重拼接，限 100 字）
+            old_sum = str(merged[key].get("summary") or "")
+            new_sum = str(item.get("summary") or "")
+            if new_sum and new_sum not in old_sum:
+                merged[key]["summary"] = (f"{old_sum}；{new_sum}" if old_sum else new_sum)[:100]
+            if not merged[key].get("sector") and item.get("sector"):
+                merged[key]["sector"] = item.get("sector")
+        else:
+            merged[key] = {
+                "name": name,
+                "sentiment": sentiment,
+                "count": int(item.get("count") or 1),
+                "summary": str(item.get("summary") or ""),
+                "sector": str(item.get("sector") or ""),
+            }
+    final = list(merged.values())
     final.sort(key=lambda x: x["count"], reverse=True)
     return final
-
-
-def _format_output_list(analysis_list: list[dict]) -> list[str]:
-    return [f"{x['name']}:{x['sentiment']}{x['count']}" for x in analysis_list]
 
 def main() -> int:
     """子进程入口（runpy 也会走这里）。返回值 = sys.exit code。"""
@@ -241,7 +241,7 @@ def main() -> int:
             """拦截 write()：仅放行对 server.py 有意义的关键行。
             放行：[分析] 错误/进度、[分析结果] 排名表、标题/分隔线。
             丢弃：[ZSXQ]/[ZSXQ-Search] 调试行、JSON dump（大括号开头且
-                   > TEST_ZXSQ_DEBUG_LINE_JSON_LEN 字符的行）、过长杂项输出。
+                   > TEST_ZSXQ_DEBUG_LINE_JSON_LEN 字符的行）、过长杂项输出。
             """
             __slots__ = ("_underlying", "_buffer")
 
@@ -290,13 +290,13 @@ def main() -> int:
                     return
 
                 # 巨大 JSON dump：丢弃
-                if (len(stripped) > TEST_ZXSQ_DEBUG_LINE_JSON_LEN
+                if (len(stripped) > TEST_ZSXQ_DEBUG_LINE_JSON_LEN
                         and (stripped[0] in '{['
                              or (stripped[0].isdigit() and '{' in stripped))):
                     return
 
                 # 超长杂项：丢弃
-                if len(stripped) > TEST_ZXSQ_DEBUG_LINE_LONG_LEN:
+                if len(stripped) > TEST_ZSXQ_DEBUG_LINE_LONG_LEN:
                     return
 
             def flush(self):
@@ -346,9 +346,9 @@ def main() -> int:
     # quiet 模式下截断 result 转储，避免巨大 JSON 被推到前端造成空白
     if _QUIET:
         result_preview = str(result)
-        if len(result_preview) > TEST_ZXSQ_FINAL_SUMMARY_PREVIEW_TRUNCATE:
+        if len(result_preview) > TEST_ZSXQ_FINAL_SUMMARY_PREVIEW_TRUNCATE:
             result_preview = (
-                result_preview[:TEST_ZXSQ_FINAL_SUMMARY_PREVIEW_TRUNCATE]
+                result_preview[:TEST_ZSXQ_FINAL_SUMMARY_PREVIEW_TRUNCATE]
                 + f"...(共 {len(result_preview)} 字符已截断)"
             )
         _log(f"\n[抓取] 最终返回(截断): {result_preview}", always=True)
@@ -384,14 +384,14 @@ def main() -> int:
              always=True)
     analysis = [d for d in analysis if _is_stock_entity(str(d.get("name", "")), "")]
 
-    formatted = _format_output_list(analysis)
-
     # =================== Step 3: 打印 & 保存 ===================
     _log("\n" + "=" * 60, always=True)
     _log("[分析结果] 股票热度 & 多空判断（按出现次数降序）", always=True)
     _log("=" * 60, always=True)
-    for i, line in enumerate(formatted, 1):
-        _log(f"{i:>3}. {line}", always=True)
+    for i, d in enumerate(analysis, 1):
+        summary = str(d.get("summary") or "").replace("\n", " ")
+        _log(f"{i:>3}. {d.get('name', '')}:{d.get('sentiment', '')}{d.get('count', 0)}"
+             f"  [{d.get('sector', '')}] {summary}", always=True)
 
     # 统一时间戳，确保 json 与 txt 文件名一致（精确到秒）
     now_ts = datetime.now().strftime('%Y%m%d%H%M%S')
@@ -400,7 +400,6 @@ def main() -> int:
         "generated_at": now_display,
         "source_news": news_path.name,
         "total_stocks": len(analysis),
-        "sorted_list": formatted,
         "details": analysis,
     }
     analysis_file = (
@@ -415,15 +414,17 @@ def main() -> int:
 
     # =================== Step 4: 写入以日期命名的 txt 总结 ===================
     txt_lines = [
-        f"知识星球财经资讯分析总结",
-        f"生成时间：{now_display}",
-        f"数据来源：{news_path.name}",
-        f"涉及股票数：{len(analysis)}",
-        "",
-        "【股票热度 & 多空判断（按出现次数降序）】",
+        f"时间：{now_display}",
+        f"{'序':<4}{'股票名':<12}{'情绪':<6}{'次数':<6}{'行业':<10}摘要（利好/利空原因）",
+        "-" * 80,
     ]
-    for i, line in enumerate(formatted, 1):
-        txt_lines.append(f"{i:>3}. {line}")
+    for i, d in enumerate(analysis, 1):
+        summary = str(d.get("summary") or "").replace("\n", " ")
+        sector = str(d.get("sector") or "")
+        txt_lines.append(
+            f"{i:<4}{d.get('name', ''):<12}{d.get('sentiment', ''):<6}"
+            f"{d.get('count', 0):<6}{sector:<10}{summary}"
+        )
     txt_content = "\n".join(txt_lines) + "\n"
 
     txt_file = (

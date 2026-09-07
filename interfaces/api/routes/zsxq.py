@@ -75,6 +75,9 @@ class ZsxqAnalysisRequest(BaseModel):
 _SERVER_RUN_WITH_CTX = None
 _SERVER_REGISTER_BG_TASK = None
 _SERVER_DEFAULT_BG_TIMEOUT: float = 300.0  # 兜底与 DEFAULT_BACKGROUND_TIMEOUT_SEC 一致
+# zsxq-analysis 路由专用：分批分析（每批一次 Ollama 调用）+ 完整研报不截断后，
+# runner 全流程可达 ~600s，放宽到 900s 与 _ZSXQ_RUNNER_TOTAL_TIMEOUT_SEC 对齐。
+_SERVER_ZSXQ_BG_TIMEOUT: float = 900.0
 
 
 def install_server_helpers(*, run_with_ctx, register_background_task, default_bg_timeout: float):
@@ -517,14 +520,16 @@ async def run_zsxq_analysis(req: ZsxqAnalysisRequest):
             "请在 server.py startup 阶段调用 interfaces.api.routes.zsxq.install_server_helpers(...)。"
         )
     thread_id = req.thread_id
-    # 后台异步执行，不阻塞响应；附带 CancellationToken（300s 超时 + STOP/DISCONNECT 级联取消）
-    # 小作文热度是快捷按钮 → quiet=True 避免控制台刷 verbose print
+    # 后台异步执行，不阻塞响应；附带 CancellationToken（480s 超时 + STOP/DISCONNECT 级联取消）
+    # 实测 runner 全流程 ~286s（抓取 259s + Ollama 分析 27s），加 Ollama 预检/调度开销
+    # 会逼近原 300s 上限，故单独放宽到 480s 与 _ZSXQ_RUNNER_TOTAL_TIMEOUT_SEC 对齐；
+    # 前端 ZSXQ_RUNNING_TIMEOUT_MS 同步设为 480s，普通聊天仍 300s。
     task = asyncio.create_task(
         _SERVER_RUN_WITH_CTX(
             thread_id,
             None,
             None,
-            _SERVER_DEFAULT_BG_TIMEOUT,
+            _SERVER_ZSXQ_BG_TIMEOUT,
             _run_zsxq_analysis,
             thread_id,
             quiet=True,

@@ -33,6 +33,7 @@ class SRMsg:
     REGISTER_BG_TASK = "register_bg_task"                 # 注册后台任务
     UNREGISTER_IF_SELF = "unregister_if_self"             # 任务完成时，若仍是自己则清掉（来自 done_callback）
     STOP_AND_REMOVE_TASK = "stop_and_remove_task"         # 用户点停止按钮
+    CANCEL_ALL_TASKS = "cancel_all_tasks"                 # 服务关停：取消所有在飞任务
     # ---- 读操作 ----
     GET_TASK_INFO = "get_task_info"                       # 查询某会话当前任务情况
     LIST_ALL = "list_all"                                 # 列出所有活跃任务（监控）
@@ -239,7 +240,30 @@ class SessionRegistryActor(Actor[_RegistryState]):
             return new_state, {"stopped": stopped_any}
 
         # ==============================================================
-        # 5. GET_TASK_INFO —— 只读查询
+        # 5. CANCEL_ALL_TASKS —— 服务关停：取消所有在飞任务
+        #    背景：ActorSystem.stop_all() 只停邮箱循环；注册表里挂着的
+        #    聊天/后台任务若不 cancel，其派生的子进程（zsxq runner、
+        #    Ollama 推理、Playwright 等）会随事件循环关闭变成孤儿进程。
+        #    这里只 cancel 不等待（等待由调用方 lifespan 对返回的 task
+        #    列表统一 gather，避免 Actor 单消息处理被长任务拖死）。
+        # ==============================================================
+        if msg == SRMsg.CANCEL_ALL_TASKS:
+            cancelled: list = []
+            for t in list(state.active_agent_tasks.values()) + \
+                    list(state.active_background_tasks.values()):
+                if t is not None and not t.done():
+                    t.cancel("server_shutdown: cancel all in-flight session tasks")
+                    cancelled.append(t)
+            # 清空注册表（任务对象由 lifespan 侧 gather 持有）
+            new_state = _RegistryState(
+                active_agent_tasks={},
+                active_background_tasks={},
+                gc_guard=set(),
+            )
+            return new_state, {"cancelled": cancelled}
+
+        # ==============================================================
+        # 6. GET_TASK_INFO —— 只读查询
         # ==============================================================
         if msg == SRMsg.GET_TASK_INFO:
             thread_id = p["thread_id"]
@@ -255,7 +279,7 @@ class SessionRegistryActor(Actor[_RegistryState]):
             return state, info  # 状态不变
 
         # ==============================================================
-        # 6. LIST_ALL —— 监控面板
+        # 7. LIST_ALL —— 监控面板
         # ==============================================================
         if msg == SRMsg.LIST_ALL:
             summary = {

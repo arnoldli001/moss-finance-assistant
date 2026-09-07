@@ -74,11 +74,15 @@ except Exception:  # pragma: no cover
 from config.constants import (  # noqa: E402
     OLLAMA_DEFAULT_BASE_URL,
     OLLAMA_CHAT_DEFAULT_TIMEOUT_SEC,
-    TEST_ZXSQ_OLLAMA_CONTENT_COMPRESS_THRESHOLD as _DEFAULT_CONTENT_COMPRESS,
-    TEST_ZXSQ_OLLAMA_ENTRY_TRUNCATE_CHARS as _DEFAULT_ENTRY_TRUNCATE,
-    TEST_ZXSQ_CLI_TIMEOUT_SEC as _DEFAULT_CLI_TIMEOUT,
+    TEST_ZSXQ_OLLAMA_CONTENT_COMPRESS_THRESHOLD as _DEFAULT_CONTENT_COMPRESS,
+    TEST_ZSXQ_OLLAMA_ENTRY_TRUNCATE_CHARS as _DEFAULT_ENTRY_TRUNCATE,
+    TEST_ZSXQ_CLI_TIMEOUT_SEC as _DEFAULT_CLI_TIMEOUT,
+    OLLAMA_TIMEOUT_SEC as _DEFAULT_TIMEOUT_SEC,
+    OLLAMA_MODEL as _ZSXQ_DEFAULT_MODEL,
+    OLLAMA_TEMPERATURE as _ZSXQ_DEFAULT_TEMPERATURE,
+    OLLAMA_NUM_PREDICT as _ZSXQ_DEFAULT_NUM_PREDICT,
 )
-DEFAULT_MODEL: str = os.environ.get("OLLAMA_ANALYZER_MODEL") or "qwen3:8b"
+DEFAULT_MODEL: str = os.environ.get("OLLAMA_ANALYZER_MODEL") or _ZSXQ_DEFAULT_MODEL
 
 ProgressCb = Callable[[str], None]  # 与 ollama_helper.ProgressFn 同形，避免循环 import
 
@@ -254,8 +258,8 @@ def parse_stock_sentiment_items(raw: str) -> List[Dict[str, Any]]:
             or item.get("类型") or item.get("方向") or ""
         ).strip()
         count_raw = (
-            item.get("count") or item.get("次数") or item.get("出现次数")
-            or item.get("提及次数") or item.get("热度") or 0
+            item.get("count") or item.get("mention_count")or item.get("次数") or item.get("研报数量")
+            or item.get("出现次数") or item.get("提及次数") or item.get("热度") or 0
         )
         try:
             count = int(count_raw)
@@ -268,9 +272,23 @@ def parse_stock_sentiment_items(raw: str) -> List[Dict[str, Any]]:
             sentiment = "利空"
         elif "利好" in sentiment:
             sentiment = "利好"
+        elif "中性" in sentiment or "中立" in sentiment:
+            sentiment = "中性"
         else:
             return None
-        return {"name": name, "sentiment": sentiment, "count": max(count, 1)}
+        summary = str(
+            item.get("summary") or item.get("摘要") or item.get("核心事件")
+            or item.get("总结") or ""
+        ).strip()
+        sector = str(
+            item.get("sector") or item.get("行业") or item.get("板块") or ""
+        ).strip()
+        out = {"name": name, "sentiment": sentiment, "count": max(count, 1)}
+        if summary:
+            out["summary"] = summary
+        if sector:
+            out["sector"] = sector
+        return out
 
     # 1) parse_jsonish + 递归收集含 name 字段的 dict
     obj = parse_jsonish(raw)
@@ -297,7 +315,7 @@ def parse_stock_sentiment_items(raw: str) -> List[Dict[str, Any]]:
     # 2) 强模板逐行： "名 : 利好（次数）"
     pattern = re.compile(
         r'[【"\'\s]*([^\s：:{}【】"\'<>·][^：:{}【】"\'<>·]{0,20}?)[】"\'\s]*[：:]\s*'
-        r'[【"\'\s]*([利好利空]{2})[】"\'\s]*[（\(\s]*(\d+)[\)\）\s]*')
+        r'[【"\'\s]*(利好|利空|中性)[】"\'\s]*[（\(\s]*(\d+)[\)\）\s]*')
     for m in pattern.finditer(raw):
         name = _strip_zh_name(m.group(1))
         sentiment = m.group(2).strip()
@@ -305,7 +323,7 @@ def parse_stock_sentiment_items(raw: str) -> List[Dict[str, Any]]:
             count = int(m.group(3))
         except (TypeError, ValueError):
             count = 1
-        if len(name) >= 2 and sentiment in ("利好", "利空"):
+        if len(name) >= 2 and sentiment in ("利好", "利空", "中性"):
             results.append({"name": name, "sentiment": sentiment, "count": count})
     if results:
         return results
@@ -315,9 +333,9 @@ def parse_stock_sentiment_items(raw: str) -> List[Dict[str, Any]]:
         sl = line.strip().lstrip('-*•\t ')
         if not sl:
             continue
-        m = re.search(r'(.{1,20}?)\s*[：:]\s*.*?(利好|利空).*?(\d+)', sl)
+        m = re.search(r'(.{1,20}?)\s*[：:]\s*.*?(利好|利空|中性).*?(\d+)', sl)
         if not m:
-            m = re.search(r'(.{1,20}?)\s*[：:]\s*(利好|利空)\D*(\d+)', sl)
+            m = re.search(r'(.{1,20}?)\s*[：:]\s*(利好|利空|中性)\D*(\d+)', sl)
         if m:
             name = _strip_zh_name(m.group(1))
             sentiment = m.group(2)
@@ -325,7 +343,7 @@ def parse_stock_sentiment_items(raw: str) -> List[Dict[str, Any]]:
                 count = int(m.group(3))
             except (TypeError, ValueError):
                 count = 1
-            if len(name) >= 2 and sentiment in ("利好", "利空"):
+            if len(name) >= 2 and sentiment in ("利好", "利空", "中性"):
                 results.append({"name": name, "sentiment": sentiment, "count": count})
     return results
 
@@ -416,6 +434,8 @@ async def ollama_analyze_async(
         temperature=temperature,
         extra_options=extra_options,
     )
+    print(f"请求 payload: {payload}")
+    print("=" * 60)
     status, body = await _async_http_post_chat(base_url, payload, timeout=float(timeout))
     latency_ms = int((_t.monotonic() - t0) * 1000)
 
@@ -601,8 +621,34 @@ async def ollama_analyze_stream_async(
 # 这些模板的输出就是"对各类输出结果的分析汇总"能力的体现，
 # 调度协程 / 主 Agent / 后台任务可以直接用，也可以组合。
 # ======================================================================
+def _repair_truncated_json(raw: str) -> Optional[str]:
+    """尝试修复被截断的 JSON 字符串（模型输出被 num_predict 截断时）。
+
+    策略：找到最后一个完整闭合的 } 并补全缺失的 ] 和 }。
+    """
+    text = raw.strip()
+    if not text:
+        return None
+    # 找到最后一个 } 的位置
+    last_brace = text.rfind("}")
+    if last_brace < 0:
+        return None
+    # 截取到最后一个 } 并补全括号
+    truncated = text[:last_brace + 1]
+    # 统计缺失的括号
+    open_arr = truncated.count("[") - truncated.count("]")
+    open_obj = truncated.count("{") - truncated.count("}")
+    # 补全
+    repaired = truncated + ("]" * max(open_arr, 0)) + ("}" * max(open_obj, 0))
+    return repaired
+
+
 def _zsxq_stock_schema() -> Dict[str, Any]:
-    """盘前小作文热度分析：共享 JSON Schema（与原 zsxq_analysis_runner 保持一致）。"""
+    """盘前小作文热度分析：JSON Schema（Ollama format 参数用）。
+
+    Ollama 的 format 不支持顶层 type=array，需包装为 object。
+    字段：stocks[stock / sector / mention_count / summary / sentiment]
+    """
     return {
         "type": "object",
         "properties": {
@@ -611,16 +657,35 @@ def _zsxq_stock_schema() -> Dict[str, Any]:
                 "items": {
                     "type": "object",
                     "properties": {
-                        "name": {"type": "string", "description": "上市公司股票名称（如贵州茅台）"},
-                        "sentiment": {"type": "string", "enum": ["利好", "利空"], "description": "利好或利空判断"},
-                        "count": {"type": "integer", "description": "当日提及次数或热度计数，≥1"},
+                        "stock": {"type": "string", "description": "上市公司股票名称（如茅台、英伟达）"},
+                        "sector": {"type": "string", "description": "所属行业（如白酒、半导体、AI算力）"},
+                        "mention_count": {"type": "integer", "description": "被提及的总次数（每条研报中无论提及几次只计1次）"},
+                        "summary": {"type": "string", "description": "核心事件摘要（一句话，不超过30字）"},
+                        "sentiment": {"type": "string", "enum": ["利好", "利空", "中性"], "description": "整体情绪标签"},
                     },
-                    "required": ["name", "sentiment"],
+                    "required": ["stock", "sector", "mention_count", "summary", "sentiment"],
                 },
-            }
+            },
         },
         "required": ["stocks"],
     }
+
+
+_ZSXQ_SYSTEM_PROMPT = """你是一位专业的股票投顾分析师。请逐一阅读下面的每一条研报，提取所有被推荐或分析的上市公司股票。
+
+重要规则：
+1. 必须逐条阅读所有研报，不要只看前几条就停止！
+2. 提取的是研报中推荐或分析的具体上市公司股票名称，例如"致欧科技""海底捞""泡泡玛特""中国铀业""腾讯""亨通光电""长光华芯""汇通能源"等。
+3. 绝对不要提取券商名称或团队名！券商是发布研报的机构，不是股票。例如以下都是券商名，必须跳过：天风电子、华福电新、中信电子、国金AI金属、中泰汽车、东吴计算机、东北商业航天、招商机械、信达消费。
+4. 不要提取分析师姓名、政府机构、行业概念、产品代号。
+5. 每只股票只输出一次，合并重复条目。
+6. sentiment 情绪判断规则：
+   - 利好：研报对该股票持正面看法，如"推荐""增长""超预期""上修""买入""强call""需求旺盛"
+   - 利空：研报对该股票持负面看法，如"下滑""低于预期""下调""下滑""承压"
+   - 中性：多空交织或无明显方向
+
+输出格式：
+{"stocks": [{"stock": "致欧科技", "sector": "跨境电商", "mention_count": 1, "summary": "终端销售增30%+，基本面良好", "sentiment": "利好"}, {"stock": "海底捞", "sector": "餐饮", "mention_count": 1, "summary": "8月同店同比为正，利润可期", "sentiment": "利好"}]}"""
 
 
 async def analyze_zsxq_hot_news_async(
@@ -631,39 +696,135 @@ async def analyze_zsxq_hot_news_async(
     timeout: float = _DEFAULT_CLI_TIMEOUT,
     progress_cb: Optional[ProgressCb] = None,
 ) -> List[Dict[str, Any]]:
-    """盘前小作文热度（异步）：输入资讯拼接文本，返回 list[dict(name, sentiment, count)]。"""
-    system = (
-        "你是一名金融信息分析师，擅长汇总分析研报、新闻里提及的股票或概念板块的利好或利空，进行情绪定性。"
-        "从财经资讯中提取【上市公司】股票名，判断利好或利空，"
-        "只提取上市公司，不要提取行业名或指数名。"
-        "政府机构/监管部门（如工信部、发改委、证监会）、产品或材料代号（如 D 纤）、"
-        "英文技术术语（如 Harness）均不是股票名，一律不要提取。"
-        "利好=涨价/业绩增长/推荐/订单增长；利空=降价/下滑/风险提示/监管处罚。"
-    )
-    user = (
-        f"从以下资讯中提取所有被提到的上市公司股票名，并判断利好或利空。\n"
-        f"只提取上市公司（如贵州茅台、宁德时代、比亚迪、五粮液、古井贡酒、药明康德、迈瑞医疗等）。\n"
-        f"不要提取指数名（上证、恒生）"
-        f"政府机构或监管部门（工信部、发改委、证监会）、产品或材料代号（D 纤）、英文技术术语（Harness）。\n\n"
-        f"资讯：\n{entries_text}"
-    )
-    res = await ollama_analyze_async(
-        system=system, user=user, model=model, base_url=base_url,
-        timeout=timeout, temperature=0.1, schema=_zsxq_stock_schema(),
-        parse_json=True, progress_cb=progress_cb,
-    )
-    # 解析层：先尝试 parsed；否则走正则回退链（保证 JSON 字段细微不合规也能救回）
-    parsed = res.parsed
-    items: List[Dict[str, Any]] = parse_stock_sentiment_items(res.final_text)
-    if items:
-        return items
-    # 兜底：若 parsed 为 dict 但没有合法 items，尝试把 parsed 原样喂给 parse_jsonish/正则
-    if isinstance(parsed, (list, dict)):
-        raw2 = json.dumps(parsed, ensure_ascii=False)
-        items2 = parse_stock_sentiment_items(raw2)
-        if items2:
-            return items2
-    return []
+    """盘前小作文热度（异步）：输入资讯拼接文本，返回 list[dict(name, sentiment, count)]。
+    2026-09-07：改用 /api/chat 端点 + 分批处理（每批 15 条），解决 qwen3:8b 只处理前 10 条的问题。
+    """
+    import time as _t
+    import requests as _requests
+
+    # 分批处理：qwen3:8b 一次只能有效处理 ~15 条研报
+    # 按条目编号分行，每 batch_size 条为一批
+    lines = entries_text.strip().split("\n")
+    # 按条目边界分批：以 "数字. " 开头的行为新条目
+    entries: List[List[str]] = []
+    current_entry: List[str] = []
+    for line in lines:
+        if line and line[0:1].isdigit() and ". " in line[:5]:
+            if current_entry:
+                entries.append(current_entry)
+            current_entry = [line]
+        else:
+            current_entry.append(line)
+    if current_entry:
+        entries.append(current_entry)
+
+    batch_size = 20  # 每批 20 个条目（基准实测：10条/批 240s 提 62 只，20条/批 112s 提 41 只，单次全量仅 22 只且漏 2/3）
+    batches = [entries[i:i + batch_size] for i in range(0, len(entries), batch_size)]
+    total_batches = len(batches)
+    print(f"[Ollama] 总条目 {len(lines)} 行，分 {total_batches} 批处理（每批 {batch_size} 行）")
+    if progress_cb:
+        progress_cb(f"🧠 Ollama 分析：{len(lines)} 行分 {total_batches} 批处理")
+
+    url = base_url.rstrip("/") + "/api/chat"
+    loop = asyncio.get_running_loop()
+
+    all_items: List[Dict[str, Any]] = []
+    total_latency_ms = 0
+
+    for batch_idx, batch_entries in enumerate(batches):
+        batch_text = "\n".join("\n".join(entry_lines) for entry_lines in batch_entries)
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": _ZSXQ_SYSTEM_PROMPT},
+                {"role": "user", "content": f"研报内容如下：\n{batch_text}\n\n请逐条阅读所有研报，提取所有被推荐的上市公司股票，按 JSON 格式输出。"},
+            ],
+            "stream": False,
+            "options": {
+                "temperature": _ZSXQ_DEFAULT_TEMPERATURE,
+                "num_predict": _ZSXQ_DEFAULT_NUM_PREDICT,
+            },
+            "format": "json",
+        }
+
+        t0 = _t.monotonic()
+
+        def _sync_request(p: dict = payload) -> Tuple[int, str]:
+            try:
+                r = _requests.post(url, json=p, timeout=timeout)
+                return r.status_code, r.text
+            except Exception as e:
+                return 0, f"{type(e).__name__}: {e}"
+
+        status, body = await loop.run_in_executor(None, _sync_request)
+        latency_ms = int((_t.monotonic() - t0) * 1000)
+        total_latency_ms += latency_ms
+
+        if status < 200 or status >= 300:
+            print(f"[Ollama] 批次 {batch_idx + 1} HTTP {status}: {body[:300]}")
+            if progress_cb:
+                progress_cb(f"❌ 批次 {batch_idx + 1}/{total_batches} HTTP {status}")
+            continue
+
+        try:
+            data = json.loads(body)
+        except Exception as e:
+            print(f"[Ollama] 批次 {batch_idx + 1} JSON 解析失败: {e}")
+            continue
+
+        # /api/chat 返回 message.content
+        msg = data.get("message") or {}
+        final_text = str(msg.get("content") or data.get("response") or "")
+
+        print(f"[Ollama] 批次 {batch_idx + 1}/{total_batches} 完成：{len(final_text)} 字符，{latency_ms}ms")
+        print(f"[Ollama] 原始输出（前 1000 字符）：\n{final_text[:1000]}")
+        print("-" * 60)
+
+        # 解析本批结果
+        obj = parse_jsonish(final_text)
+        if obj is None and final_text.strip():
+            repaired = _repair_truncated_json(final_text)
+            if repaired:
+                obj = parse_jsonish(repaired)
+
+        batch_items: List[Dict[str, Any]] = []
+        if isinstance(obj, dict) and "stocks" in obj:
+            stocks_raw = obj["stocks"]
+            if isinstance(stocks_raw, list):
+                batch_items = parse_stock_sentiment_items(json.dumps(stocks_raw, ensure_ascii=False))
+        elif isinstance(obj, list):
+            batch_items = parse_stock_sentiment_items(json.dumps(obj, ensure_ascii=False))
+        else:
+            batch_items = parse_stock_sentiment_items(final_text)
+
+        all_items.extend(batch_items)
+        if progress_cb:
+            progress_cb(f"✅ 批次 {batch_idx + 1}/{total_batches}：{len(batch_items)} 只股票（{latency_ms}ms）")
+
+    print(f"[Ollama] 全部 {total_batches} 批完成，共 {len(all_items)} 条，总耗时 {total_latency_ms}ms")
+    if progress_cb:
+        progress_cb(f"✅ Ollama 全部分析完成：{len(all_items)} 条，总耗时 {total_latency_ms}ms")
+
+    # 合并去重：同名同情绪的条目合并 count 与 summary
+    seen: Dict[str, Dict[str, Any]] = {}
+    for it in all_items:
+        key = f"{it.get('name', '')}|{it.get('sentiment', '')}"
+        if key in seen:
+            seen[key]["count"] += it.get("count", 1)
+            # 合并摘要：不同摘要用 "；" 拼接（去重），保留最长 100 字
+            old_sum = str(seen[key].get("summary") or "")
+            new_sum = str(it.get("summary") or "")
+            if new_sum and new_sum not in old_sum:
+                merged = f"{old_sum}；{new_sum}" if old_sum else new_sum
+                seen[key]["summary"] = merged[:100]
+            if not seen[key].get("sector") and it.get("sector"):
+                seen[key]["sector"] = it.get("sector")
+        else:
+            seen[key] = dict(it)
+
+    result = list(seen.values())
+    print(f"[Ollama] 去重后 {len(result)} 条")
+    return result
 
 
 def analyze_zsxq_hot_news(

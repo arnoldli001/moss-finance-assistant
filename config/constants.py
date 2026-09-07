@@ -38,7 +38,7 @@ import os
 DEFAULT_AGENT_TIMEOUT_SEC: float = 180.0
 
 # 后台任务默认超时（知识星球抓取+分析、盘前自动化等更耗时的任务）
-DEFAULT_BACKGROUND_TIMEOUT_SEC: float = 300.0
+DEFAULT_BACKGROUND_TIMEOUT_SEC: float = 360.0
 
 # 复盘/盘前预测按钮专用：阶段1+2 并行（小作文150/新闻280 → max=280s）+ 阶段3 DeepSeek 150，
 # 最坏 430s，故后台上限须高于 DEFAULT_BACKGROUND_TIMEOUT_SEC，否则最坏情况会在
@@ -60,6 +60,12 @@ SUBPROCESS_WAIT_TIMEOUT_SEC: float = 180.0
 
 # 调度器关闭阶段等待 scheduler 后台协程结束的超时
 SCHEDULER_CANCEL_WAIT_SEC: float = 1.5
+
+# 关闭阶段：等待已取消的会话任务（聊天/后台）真正结束的超时
+SHUTDOWN_SESSION_TASKS_WAIT_SEC: float = 8.0
+
+# 关闭阶段：逐个树杀残留子进程的等待超时（单进程）
+SHUTDOWN_PROC_KILL_WAIT_SEC: float = 5.0
 
 # 启动调度器后等待初始化日志打完的短等待
 SCHEDULER_STARTUP_WAIT_SEC: float = 0.3
@@ -526,7 +532,7 @@ ZSXQ_EXTRACT_TITLE_TRUNCATE_CHARS: int = 255
 ZSXQ_EXTRACT_AUTHOR_NAME_TRUNCATE_CHARS: int = 128
 
 # fetch_zsxq_group_topics 工具默认 max_topics 值
-ZSXQ_TOOL_FETCH_MAX_TOPICS_DEFAULT: int = 100
+ZSXQ_TOOL_FETCH_MAX_TOPICS_DEFAULT: int = 20
 
 # search_zsxq_by_stock 工具默认 max_topics 值
 ZSXQ_TOOL_SEARCH_STOCK_MAX_TOPICS: int = 5
@@ -535,7 +541,7 @@ ZSXQ_TOOL_SEARCH_STOCK_MAX_TOPICS: int = 5
 ZSXQ_RESULT_RAW_PREVIEW_TRUNCATE_CHARS: int = 300
 
 # _fetch_topics_via_browser 默认抓取主题数上限（与 ZSXQ_DEFAULT_MAX_TOPICS 保持一致，用于明确语义）
-ZSXQ_DEFAULT_FETCH_MAX_TOPICS: int = 100
+ZSXQ_DEFAULT_FETCH_MAX_TOPICS: int = 60
 
 
 # ======================================================================
@@ -786,35 +792,42 @@ SCHEDULER_AFTER_MARKET_DEFAULT_MINUTE: int = 15
 # 18. TEST_ZSXQ — 知识星球分析 Runner 专用常量（tools/zsxq_analysis_runner.py 调用）
 # ======================================================================
 
-# zsxq_analysis_runner.py 调用 Ollama 分析：单条内容截断字符（防 prompt 过长）
-TEST_ZXSQ_OLLAMA_ENTRY_TRUNCATE_CHARS: int = 300
+# zsxq_analysis_runner.py 调用 Ollama 分析：单条内容截断字符（0=不截断，保留完整研报）
+TEST_ZSXQ_OLLAMA_ENTRY_TRUNCATE_CHARS: int = 20000
+
+# zsxq_analysis_runner.py 调用 Ollama 分析：模型名
+# 2026-09-07：llama3.2:3b 提取能力不足（循环重复、情绪全中性），换回 qwen3:8b
+OLLAMA_MODEL: str = os.environ.get("ZSXQ_OLLAMA_MODEL", "qwen3:8b")
 
 # zsxq_analysis_runner.py 调用 Ollama 分析：请求超时（秒）
-TEST_ZXSQ_OLLAMA_TIMEOUT_SEC: int = 300
+OLLAMA_TIMEOUT_SEC: int = 300
 
 # zsxq_analysis_runner.py 调用 Ollama 分析：temperature
-TEST_ZXSQ_OLLAMA_TEMPERATURE: float = 0.2
+OLLAMA_TEMPERATURE: float = 0.15
+
+# zsxq_analysis_runner.py 调用 Ollama /api/generate：num_predict（最大输出 token 数）
+OLLAMA_NUM_PREDICT: int = 12288
 
 # zsxq_analysis_runner.py 调用 zsxq-cli 子进程：超时（秒）
-TEST_ZXSQ_CLI_TIMEOUT_SEC: int = 600
+TEST_ZSXQ_CLI_TIMEOUT_SEC: int = 600
 
 # 控制台预览：单条 value 预览截断字符（避免刷终端）
-TEST_ZXSQ_PREVIEW_VALUE_TRUNCATE_CHARS: int = 300
+TEST_ZSXQ_PREVIEW_VALUE_TRUNCATE_CHARS: int = 1000
 
 # Ollama 分析前：把拼好的 content_text 长度超过该值时压缩（防止超 GPU 显存）
-TEST_ZXSQ_OLLAMA_CONTENT_COMPRESS_THRESHOLD: int = 15000
+TEST_ZSXQ_OLLAMA_CONTENT_COMPRESS_THRESHOLD: int = 500000
 
 # 调试行判定阈值：含 JSON dump 的单行长度超过该字符且以 { / [ 开头视为调试行
-TEST_ZXSQ_DEBUG_LINE_JSON_LEN: int = 200
+TEST_ZSXQ_DEBUG_LINE_JSON_LEN: int = 1000
 
 # 调试行判定阈值：普通长调试行超过该字符也过滤
-TEST_ZXSQ_DEBUG_LINE_LONG_LEN: int = 300
+TEST_ZSXQ_DEBUG_LINE_LONG_LEN: int = 1000
 
 # 最终摘要结果预览：超过该字符截断展示给进度条提示
-TEST_ZXSQ_FINAL_SUMMARY_PREVIEW_TRUNCATE: int = 200
+TEST_ZSXQ_FINAL_SUMMARY_PREVIEW_TRUNCATE_CHARS: int = 300
 
 # 幻觉防护：未验证数字最多展示几条
-TEST_ZXSQ_UNVERIFIED_NUMS_MAX_DISPLAY: int = 5
+TEST_ZSXQ_UNVERIFIED_NUMS_MAX_DISPLAY: int = 5
 
 
 # ======================================================================

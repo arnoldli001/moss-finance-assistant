@@ -162,7 +162,7 @@ def sanitize_abs_paths(text: Optional[str], fallback: str = "工作目录") -> s
     """把用户可见文本里的绝对文件路径脱敏：
 
     1) 位于项目根目录内的 → 转成相对路径（保留最末一级语义）；
-    2) 项目根目录外的 → 统一替换成 fallback（默认「工作目录」）。
+    2) 项目根目录外的 → 统一替换成 fallback（默认空串）。
 
     所有 monitor 出口、SSE 事件、前端显示都必须在"展示给用户"之前调用。
     接受 None/非 str，都稳定返回 str。
