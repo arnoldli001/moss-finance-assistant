@@ -81,6 +81,9 @@ from config.constants import (  # noqa: E402
     OLLAMA_MODEL as _ZSXQ_DEFAULT_MODEL,
     OLLAMA_TEMPERATURE as _ZSXQ_DEFAULT_TEMPERATURE,
     OLLAMA_NUM_PREDICT as _ZSXQ_DEFAULT_NUM_PREDICT,
+    OLLAMA_ZSXQ_BATCH_TARGET_CHARS as _BATCH_TARGET_CHARS,
+    OLLAMA_ZSXQ_BATCH_MAX_ITEMS as _BATCH_MAX_ITEMS,
+    OLLAMA_ZSXQ_BATCH_HARD_CHARS as _BATCH_HARD_CHARS,
 )
 DEFAULT_MODEL: str = os.environ.get("OLLAMA_ANALYZER_MODEL") or _ZSXQ_DEFAULT_MODEL
 
@@ -697,15 +700,18 @@ async def analyze_zsxq_hot_news_async(
     progress_cb: Optional[ProgressCb] = None,
 ) -> List[Dict[str, Any]]:
     """盘前小作文热度（异步）：输入资讯拼接文本，返回 list[dict(name, sentiment, count)]。
-    2026-09-07：改用 /api/chat 端点 + 分批处理（每批 15 条），解决 qwen3:8b 只处理前 10 条的问题。
+    2026-09-08：动态智能分批（按研报字符预算贪心打包，替代固定 20 条/批，见 config 中 OLLAMA_ZSXQ_BATCH_*）。
+    2026-09-07：改用 /api/chat 端点 + 分批处理，解决 qwen3:8b 只处理前 10 条的问题。
     """
     import time as _t
     import requests as _requests
 
-    # 分批处理：qwen3:8b 一次只能有效处理 ~15 条研报
-    # 按条目编号分行，每 batch_size 条为一批
+    # 动态智能分批（字符预算法）：推理时间主要取决于研报总 token 数而非条数。
+    # 按字符预算贪心打包——短研报(<500字)一批可拼到 30 条，长研报(>1000字)自然降到 ~10 条，
+    # 各批负载均衡，避免固定条数下长研报扎堆导致输出截断。
+    # 2026-09-08 基准实测（105 条真实研报）：6 批 7.7k-9.0k 字符均衡，162s 全量，6/6 JSON OK，40 只股票。
     lines = entries_text.strip().split("\n")
-    # 按条目边界分批：以 "数字. " 开头的行为新条目
+    # 按条目边界切分：以 "数字. " 开头的行为新条目
     entries: List[List[str]] = []
     current_entry: List[str] = []
     for line in lines:
@@ -718,12 +724,30 @@ async def analyze_zsxq_hot_news_async(
     if current_entry:
         entries.append(current_entry)
 
-    batch_size = 20  # 每批 20 个条目（基准实测：10条/批 240s 提 62 只，20条/批 112s 提 41 只，单次全量仅 22 只且漏 2/3）
-    batches = [entries[i:i + batch_size] for i in range(0, len(entries), batch_size)]
+    # 贪心打包：达到字符软目标 / 条数封顶 / 字符硬上限任一条件即切批
+    batches: List[List[List[str]]] = []
+    current_batch: List[List[str]] = []
+    current_chars = 0
+    for entry in entries:
+        entry_chars = sum(len(ln) for ln in entry) + 1
+        if current_batch and (
+            current_chars + entry_chars > _BATCH_TARGET_CHARS
+            or len(current_batch) >= _BATCH_MAX_ITEMS
+            or current_chars + entry_chars > _BATCH_HARD_CHARS
+        ):
+            batches.append(current_batch)
+            current_batch, current_chars = [], 0
+        current_batch.append(entry)
+        current_chars += entry_chars
+    if current_batch:
+        batches.append(current_batch)
+
     total_batches = len(batches)
-    print(f"[Ollama] 总条目 {len(lines)} 行，分 {total_batches} 批处理（每批 {batch_size} 行）")
+    batch_sizes = "/".join(str(len(b)) for b in batches)
+    print(f"[Ollama] 总条目 {len(entries)} 条，动态分 {total_batches} 批"
+          f"（各批条数 {batch_sizes}，字符预算 {_BATCH_TARGET_CHARS}）")
     if progress_cb:
-        progress_cb(f"🧠 Ollama 分析：{len(lines)} 行分 {total_batches} 批处理")
+        progress_cb(f"🧠 Ollama 分析：{len(entries)} 条研报动态分 {total_batches} 批处理")
 
     url = base_url.rstrip("/") + "/api/chat"
     loop = asyncio.get_running_loop()

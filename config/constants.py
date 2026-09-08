@@ -806,7 +806,14 @@ OLLAMA_TIMEOUT_SEC: int = 300
 OLLAMA_TEMPERATURE: float = 0.15
 
 # zsxq_analysis_runner.py 调用 Ollama /api/generate：num_predict（最大输出 token 数）
-OLLAMA_NUM_PREDICT: int = 12288
+OLLAMA_NUM_PREDICT: int = 1280
+
+# zsxq Ollama 盘前分析：动态智能分批参数（按研报字符预算贪心打包）
+# 推理时间主要取决于总 token 数而非条数：短研报(<500字)一批拼到 30 条，长研报(>1000字)自然降到 ~10 条。
+# 2026-09-08 基准实测（105 条真实研报）：6 批 7.7k-9.0k 字符均衡负载，162s 全量，6/6 JSON OK，40 只股票。
+OLLAMA_ZSXQ_BATCH_TARGET_CHARS: int = 9000   # 每批研报总字符软目标（中文约 1 token/字）
+OLLAMA_ZSXQ_BATCH_MAX_ITEMS: int = 30        # 单批最多条数（短研报封顶）
+OLLAMA_ZSXQ_BATCH_HARD_CHARS: int = 14000    # 字符硬上限（超过立即切批，防撑爆上下文）
 
 # zsxq_analysis_runner.py 调用 zsxq-cli 子进程：超时（秒）
 TEST_ZSXQ_CLI_TIMEOUT_SEC: int = 600
@@ -1014,11 +1021,11 @@ STREAM_RESUME_MEMORY_MAX_SESSIONS: int = 100
 # 单会话 partial output 最大保留字符（防止内存爆）
 STREAM_RESUME_PARTIAL_MAX_CHARS: int = 50000
 # 单会话 token 缓冲区（用于断点续推给 LLM）
-STREAM_RESUME_TOKEN_BUFFER_MAX: int = 4096
+STREAM_RESUME_TOKEN_BUFFER_MAX: int = 12288
 # 续传 token 默认 TTL（秒）：30 分钟内可续传
 STREAM_RESUME_TOKEN_TTL_SEC: int = 1800
 # 续传后 LLM 续推的最大 token 数
-STREAM_RESUME_CONTINUE_MAX_TOKENS: int = 1024
+STREAM_RESUME_CONTINUE_MAX_TOKENS: int = 12288
 # Redis 后端连接 URL
 STREAM_RESUME_REDIS_URL: str = "redis://localhost:6379/2"
 # Redis key 前缀
