@@ -91,7 +91,7 @@ TAVILY_DEFAULT_MAX_RESULTS: int = 5
 ZSXQ_DEFAULT_MAX_SCROLLS: int = 15
 
 # 知识星球群组抓取：单轮最多抓取的主题条数
-ZSXQ_DEFAULT_MAX_TOPICS: int = 200
+ZSXQ_DEFAULT_MAX_TOPICS: int = 70
 
 # 知识星球 API 请求调试时最多打印到控制台的 URL 数量
 ZSXQ_DEBUG_API_URL_MAX_PRINT: int = 10
