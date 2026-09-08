@@ -26,17 +26,11 @@
 
 ## 🖼️ 功能演示
 
-### 登录与游客体验
-![登录界面](screenshots/login.png)
+### 盘前小作文热度分析 — 操作演示（知识星球 Playwright 抓取 + Ollama qwen3:8b 本地动态分批抽取）
+![盘前研报热度操作演示](screenshots/demo_pre_market_news.gif)
 
-### 盘前小作文热度分析（知识星球 Playwright 抓取 + Ollama qwen3:8b 本地动态分批抽取）
-![盘前研报热度表](screenshots/zsxq_hot_table.png)
-
-### 盘前研报热度分析（完整流程演示）
-![盘前研报热度演示](screenshots/demo_pre_market_news.gif)
-
-### 复盘预测（阶段1小作文热度 ∥ 阶段2盘前新闻并行 → 阶段3 DeepSeek 指数预测）
-![复盘预测演示](screenshots/review_prediction.gif)
+### 盘前小作文热度分析 — 输出效果图（前端表格渲染，股票名/情绪/研报数/行业/摘要）
+![盘前研报热度输出效果图](screenshots/zsxq_hot_table.png)
 
 ### 分享长图（一键导出无白边高清 PNG，斜向水印覆盖）
 > 浏览器 **Ctrl+F5** 刷新后右键「分享」按钮即可生成长图
