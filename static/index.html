@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>无极 Agent - 多智能体对话</title>
+<title>无极股票AI助手</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; background: #f5f5f7; color: #1d1d1f; height: 100vh; display: flex; }
@@ -349,8 +349,8 @@
   <!-- ============ A5 登录遮罩（auth_bootstrap.js 控制显示/隐藏，z-index:99999 盖一切）============ -->
   <div id="login-screen" role="dialog" aria-modal="true" aria-labelledby="login-card-title">
     <div id="login-card">
-      <h1 id="login-card-title">MOSS · 无极金融助手</h1>
-      <div class="sub">散户投研 Agent 系统 · 请登录后使用（注册数据本地加密存储，零第三方泄露）</div>
+      <h1 id="login-card-title">MOSS · 无极股票AI助手</h1>
+      <div class="sub">股票AI助手系统 · 请登录后使用</div>
 
       <div class="login-row">
         <label for="login-user">用户名 / User ID</label>
@@ -366,7 +366,7 @@
       </div>
       <div class="login-row">
         <label for="login-display">显示昵称 <span style="color:#c7c7cc;">（注册时可选，留空=用户名）</span></label>
-        <input id="login-display" type="text" placeholder="例如：小王的观察仓（可选）" maxlength="64" />
+        <input id="login-display" type="text" placeholder="例如：小王（可选）" maxlength="64" />
       </div>
 
       <div id="login-error" role="alert"></div>
@@ -428,13 +428,13 @@
   <!-- ============ 主区域 ============ -->
   <div id="main">
     <div id="header">
-      <div class="brand">无极 Agent</div>
+      <div class="brand">无极股票AI助手</div>
       <div class="title" id="session-title">未选择会话</div>
       <button id="msg-multi-select-btn" onclick="toggleMsgMultiSelectMode()" style="margin-left:8px;display:none;">☑ 多选</button>
       <div id="auth-info-bar" style="margin-left:8px;min-width:180px;text-align:right;flex-shrink:0;"></div>
     </div>
     <div id="chat">
-      <div class="msg system">欢迎使用无极 Agent，输入问题即可开始对话。</div>
+      <div class="msg system">欢迎使用无极股票AI助手。</div>
     </div>
     <!-- 多选模式浮动操作栏（默认不显示，CSS display:none !important 兜底；进入多选模式时加 class=msg-multi-active 才显示）-->
     <div id="msg-multi-action-bar">
@@ -827,7 +827,7 @@ window.addEventListener('load', async () => {
         const list = $('session-list'); if (list) list.innerHTML = '';
         const titleEl = $('session-title'); if (titleEl) titleEl.textContent = '未选择会话';
         const chat = $('chat'); if (chat) {
-          chat.innerHTML = '<div class="msg system">欢迎使用无极 Agent，输入问题即可开始对话。</div>';
+          chat.innerHTML = '<div class="msg system">欢迎使用无极AI股票助手，输入问题即可开始对话。</div>';
         }
       }
     });
@@ -1427,7 +1427,7 @@ function handleWSMessage(p) {
         // 因为后端最终一定会有完成事件（task_result 真值或 error）
         return;
       }
-      // 盘前小作文热度结果靠右显示，普通任务结果靠左
+      // 盘前研报热度结果靠右显示，普通任务结果靠左
       const resultRole = currentTaskType === 'zsxq' ? 'user' : 'assistant';
       currentTaskType = 'normal';
       appendMessage(resultRole, result,
@@ -2022,7 +2022,8 @@ async function sendPreMarketNews() {
   if (!currentSessionId) { alert('请先选择或新建会话'); return; }
   if (isRunning) { alert('当前任务进行中，请等待完成'); return; }
 
-  const fullQuery = `请根据系统提供的搜索时间范围，执行网络搜索，涉及到多个股票或多个平台的搜索任务，拆分任务，调用网络搜索助手并发搜索以提高效率，并汇总获取的结果，输入给本地模型deepseek-r1:7b进行汇总分类、分析之后再输出，最好是表格输出或其他直观输出。1）韭研社区、炒股吧、雪球、同花顺股吧、东方财富股吧、微信公众号, 财联社讨论热度最高的新闻和个股前10；2）美股最新夜盘科技股（特别是美光、海力士、谷歌、meta、应用光电、康宁、英伟达的最新盘前或盘中股价涨跌情况、走势、相关最新当天的新闻）；最后汇总简要输出：1、热门个股按出现在各平台上数量，从高到低排序的股票清单；2）利好还是利空的逻辑A股概念板块或个股，给出1、利好和利空个股清单。字数控制在1000字以内，精简输出；`;
+  const fullQuery = `请根据系统提供的搜索时间范围，执行网络搜索，涉及到多个股票或多个平台的搜索任务，拆分任务，调用网络搜索助手并发搜索以提高效率，并汇总获取的结果，输入给本地模型deepseek-r1:7b进行汇总分类、分析之后再输出，最好是表格输出或其他直观输出。1）韭研社区、炒股吧、雪球、同花顺股吧、东方财富股吧、微信公众号, 财联社讨论热度最高的新闻和个股前10的内容简述；2）美股最新夜盘科技股（特别是美光、海力士、谷歌、meta、应用光电、康宁、英伟达的最新盘前或盘中股价涨跌情况、走势、相关最新当天的新闻）；
+3）简要输出：1、热门个股按出现在各平台上数量，从高到低排序的股票清单；2、利好还是利空的逻辑A股概念板块或个股，给出利好和利空个股清单。字数控制在1000字以内，精简输出；`
 
   if (SSE_STREAM_ENABLED) {
     // SSE 分支：走 /api/task/stream，打字机 + 来源引用 + 推理面板
@@ -2065,7 +2066,7 @@ async function sendPreMarketNews() {
   }
 }
 
-// ============ 盘前小作文热度：调用后端 zsxq_analysis_runner（知识星球抓取 + LLM 分析）============
+// ============ 盘前研报热度：调用后端 zsxq_analysis_runner（知识星球抓取 + LLM 分析）============
 async function sendZsxqHotNews() {
   if (!currentSessionId) { alert('请先选择或新建会话'); return; }
   if (isRunning) { alert('当前任务进行中，请等待完成'); return; }
@@ -2085,7 +2086,7 @@ async function sendZsxqHotNews() {
   }
 
   pendingTurnIndex += 1;
-  appendMessage('user', '盘前小作文热度', { turnIndex: pendingTurnIndex });
+  appendMessage('user', '盘前研报热度', { turnIndex: pendingTurnIndex });
   currentTaskType = 'zsxq';
   setRunning(true, 'zsxq');
   try {
@@ -2157,7 +2158,7 @@ function setRunning(v, taskType) {
   const reviewBtn = $('review-prediction-btn');
   if (reviewBtn) reviewBtn.disabled = v;
   // 超时保护：任务开始时启动计时器，到点自动解锁避免页面永久卡死
-  // zsxq 盘前小作文热度实测全流程 286s，单独走 8 分钟超时（与后端 runner 内部 480s 上限对齐）
+  // zsxq 盘前研报热度实测全流程 286s，单独走 8 分钟超时（与后端 runner 内部 480s 上限对齐）
   const timeoutMs = (taskType === 'zsxq' && APP_CONSTANTS.ZSXQ_RUNNING_TIMEOUT_MS)
     ? APP_CONSTANTS.ZSXQ_RUNNING_TIMEOUT_MS
     : RUNNING_TIMEOUT;
@@ -2416,7 +2417,7 @@ function _buildZsxqTable(rows) {
   table.className = 'zsxq-table';
   const thead = document.createElement('thead');
   const headRow = document.createElement('tr');
-  ['#', '股票名', '情绪', '研报数量', '行业', '摘要（利好/利空原因）'].forEach((h) => {
+  ['#', '股票名', '情绪', '研报数', '行业', '摘要'].forEach((h) => {
     const th = document.createElement('th');
     th.textContent = h;
     headRow.appendChild(th);
@@ -2868,7 +2869,7 @@ async function shareAsImage(msgs) {
     }
 
     const ts = new Date();
-    const fname = `无极Agent对话_${ts.getFullYear()}${String(ts.getMonth()+1).padStart(2,'0')}${String(ts.getDate()).padStart(2,'0')}_${String(ts.getHours()).padStart(2,'0')}${String(ts.getMinutes()).padStart(2,'0')}.png`;
+    const fname = `无极股票AI助手对话_${ts.getFullYear()}${String(ts.getMonth()+1).padStart(2,'0')}${String(ts.getDate()).padStart(2,'0')}_${String(ts.getHours()).padStart(2,'0')}${String(ts.getMinutes()).padStart(2,'0')}.png`;
     const blobUrl = URL.createObjectURL(blob);
 
     // 显示预览覆盖层：用户可长按保存或下载
@@ -2882,13 +2883,24 @@ async function shareAsImage(msgs) {
 
     // 保存图片（桌面端下载，移动端提示长按）
     const onSave = () => {
-      const a = document.createElement('a');
-      a.href = blobUrl;
-      a.download = fname;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      showToast('图片已下载');
+      try {
+        const a = document.createElement('a');
+        a.href = blobUrl;
+        a.download = fname;
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        // 延迟移除，确保浏览器已触发下载（部分浏览器同步移除会导致下载丢失）
+        setTimeout(() => {
+          if (a.parentNode) a.parentNode.removeChild(a);
+        }, 1000);
+        showToast('图片已开始下载');
+      } catch (e) {
+        console.error('下载失败', e);
+        // 回退：新开窗口打开图片，用户可右键另存
+        window.open(blobUrl, '_blank');
+        showToast('下载失败，请右键图片另存');
+      }
     };
     const onClose = () => {
       overlay.style.display = 'none';
@@ -2973,16 +2985,16 @@ function stopProgressTimer() {
 async function generateLongImage(msgs) {
   const canvas = document.createElement('canvas');
   const ctx = canvas.getContext('2d');
-  const DPR = Math.min(window.devicePixelRatio || 1, 2);  // 限制 DPR 防止 canvas 超过浏览器尺寸上限
+  const DPR = Math.min(window.devicePixelRatio || 1, 4);  // 提高到 4x 提升文字清晰度
   const baseW = 750;  // 设计稿宽度（逻辑像素）
-  const padding = 32;
+  const padding = 0;   // 去掉四周白边
   const msgMaxW = baseW - padding * 2;  // 气泡最大宽度（无头像，占满内容区）
-  const footerH = 72;   // 底部水印高度
+  const footerH = 0;   // 悬浮水印覆盖在内容之上，无需底部预留高度
   const bubblePadX = 18;
   const bubblePadY = 14;
   const lineH = 26;
   const fontSize = 18;
-  const gap = 24;  // 消息间距
+  const gap = 12;  // 消息间距（仅消息之间，不做上下外边距）
 
   // 先算每行字数（粗略），用离屏 canvas 度量
   const metricCanvas = document.createElement('canvas');
@@ -3014,8 +3026,8 @@ async function generateLongImage(msgs) {
   }
 
   // ---------- 设定 canvas 尺寸（限制最大高度防止浏览器溢出）----------
-  const MAX_CANVAS_H = 16000;  // 浏览器 canvas 最大高度安全值
-  let totalH = gap + contentH + footerH + gap;
+  const MAX_CANVAS_H = 32767;  // 放宽画布高度上限，避免长图被整体降采样导致文字发糊
+  let totalH = Math.max(0, contentH - gap);  // 去掉上下外边距（contentH 末尾多算了一个 gap）
   let scale = 1;
   const pixelH = totalH * DPR;
   if (pixelH > MAX_CANVAS_H) {
@@ -3027,6 +3039,9 @@ async function generateLongImage(msgs) {
   canvas.height = Math.round(totalH * DPR * scale);
   canvas.style.width = baseW + 'px';
   canvas.style.height = totalH + 'px';
+  // 开启高质量图像平滑（文字与图片缩放时更锐利）
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
   if (scale < 1) {
     ctx.scale(DPR * scale, DPR * scale);
   } else {
@@ -3041,7 +3056,7 @@ async function generateLongImage(msgs) {
   ctx.fillRect(0, 0, baseW, totalH);
 
   // ---------- 消息绘制（仅内容气泡：无标题栏/副标题/头像） ----------
-  let y = gap;
+  let y = 0;  // 从顶部开始，无上方白边
   for (const row of layoutRows) {
     const isUser = row.msg.role === 'user';
 
@@ -3092,14 +3107,35 @@ async function generateLongImage(msgs) {
     y += row.rowH;
   }
 
-  // ---------- 底部水印：无极Moss金融研报（不透明度 80%） ----------
+  // ---------- 悬浮水印：无极股票AI助手（文档式斜向平铺，不透明度 10%），覆盖在内容之上 ----------
+  const wmText = '无极股票AI助手';
+  const wmFontSize = 24;
+  const wmColor = '#8e8e93';
+  const wmAlpha = 0.1;
+  const wmAngle = -Math.PI / 6;   // -30° 斜向，文档水印常用角度
+  const wmGapX = 300;             // 横向间距
+  const wmGapY = 300;             // 纵向间距
+
   ctx.save();
-  ctx.globalAlpha = 0.8;
-  ctx.fillStyle = '#8e8e93';
-  ctx.font = `bold 16px -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif`;
-  ctx.textBaseline = 'middle';
+  ctx.globalAlpha = wmAlpha;
+  ctx.fillStyle = wmColor;
+  ctx.font = `bold ${wmFontSize}px -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif`;
   ctx.textAlign = 'center';
-  ctx.fillText('无极Moss金融研报', baseW / 2, y + (footerH / 2));
+  ctx.textBaseline = 'middle';
+
+  // 以画布中心为原点，斜向平铺覆盖整张图（网格按画布对角线放大，确保旋转后无空白角）
+  const wmDiag = Math.sqrt(totalH * totalH + baseW * baseW);
+  const wmRows = Math.ceil(wmDiag / wmGapY) + 2;
+  const wmCols = Math.ceil(wmDiag / wmGapX) + 2;
+  for (let r = -wmRows; r <= wmRows; r++) {
+    for (let c = -wmCols; c <= wmCols; c++) {
+      ctx.save();
+      ctx.translate(baseW / 2 + c * wmGapX, totalH / 2 + r * wmGapY);
+      ctx.rotate(wmAngle);
+      ctx.fillText(wmText, 0, 0);
+      ctx.restore();
+    }
+  }
   ctx.restore();
 
   // 使用 toBlob 替代 toDataURL（内存占用更低，移动端大 canvas 兼容性更好）
@@ -3164,7 +3200,7 @@ function drawZsxqShareTable(ctx, L, tx, ty, meta) {
   ctx.font = 'bold 15px -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif';
   ctx.textBaseline = 'top';
   ctx.textAlign = 'left';
-  ctx.fillText('📊 盘前研报热度：共 ' + (meta && meta.total ? meta.total : L.dataRows.length) + ' 只股票'
+  ctx.fillText('📊 盘前研报热度：关注竞价大于1%的中小股票，非买卖建议，盈亏自负' 
     + (meta && meta.generated_at ? '（生成于 ' + meta.generated_at + '）' : ''), tx, ty);
   const tableTop = ty + 30;
   ctx.font = ZSXQ_SHARE_FONT;
@@ -3172,7 +3208,7 @@ function drawZsxqShareTable(ctx, L, tx, ty, meta) {
   ctx.fillStyle = '#eef1f5';
   ctx.fillRect(tx, tableTop, L.tableW, L.headerH);
   ctx.fillStyle = '#5a5f66';
-  const headers = ['#', '股票名', '情绪', '研报数量', '行业', '摘要（利好/利空原因）'];
+  const headers = ['#', '股票名', '情绪', '研报数', '行业', '摘要'];
   L.colDefs.forEach((c, i) => {
     const cx = tx + L.colXs[i] + (c.align === 'right' ? c.w - L.cellPadX : c.align === 'center' ? c.w / 2 : L.cellPadX);
     ctx.textAlign = c.align;

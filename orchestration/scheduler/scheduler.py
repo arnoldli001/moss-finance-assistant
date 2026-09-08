@@ -2,7 +2,7 @@
 Layer 4 - Loop Engineering: 自动化调度模块。
 
 定时触发盘前任务：
-- 工作日 9:13 触发"盘前小作文热度"按钮（调用 zsxq 分析）
+- 工作日 9:13 触发"盘前研报热度"按钮（调用 zsxq 分析）
 - 工作日 9:15 触发"盘前新闻"按钮（调用主智能体盘前问询）
 
 调度器以 30 秒为轮询单位，使用中国时区（UTC+8）。
@@ -178,7 +178,7 @@ class TaskScheduler:
 # 预设任务：盘前触发
 # ======================================================================
 PRESET_PRE_MARKET_HEAT = ScheduledTask(
-    name="盘前小作文热度",
+    name="盘前研报热度",
     hour=9,
     minute=SCHEDULER_PRE_MARKET_DEFAULT_MINUTE,
     weekday_only=True,
@@ -198,7 +198,7 @@ def setup_preset_tasks(scheduler: TaskScheduler, zsxq_callback: Callable,
                        news_callback: Callable) -> None:
     """
     将预设盘前任务注册到调度器：
-    - 9:13 盘前小作文热度 → zsxq_callback（调用知识星球分析）
+    - 9:13 盘前研报热度 → zsxq_callback（调用知识星球分析）
     - 9:15 盘前新闻 → news_callback（调用主智能体盘前问询）
     """
     scheduler.add_task(

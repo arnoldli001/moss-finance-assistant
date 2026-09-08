@@ -268,7 +268,7 @@
         "forbidden_error_patterns": [
           "盘前新闻结果为空",
           "分析失败，请稍后重试",
-          "盘前小作文热度分析未返回结果"
+          "盘前研报热度分析未返回结果"
         ],
         "final_answer_should_contain_keywords": ["预测", "风险"]
       },

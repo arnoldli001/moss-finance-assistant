@@ -36,14 +36,14 @@
 
 ## 编码规范
 - 所有导入使用相对包路径（`from agent.xxx import`），不硬编码项目名
-- `.gitignore` 忽略 `docs/` 下所有文件，唯一白名单是 `docs/adr/`（架构决策记录入库）；`benchmarks/results/` 运行产物不入库
+- `.gitignore` 忽略 `docs/` 下所有本地文档（不入库）；`benchmarks/results/` 运行产物不入库
 - API 响应包含 `X-Powered-By: MOSS-Finance-Assistant` 头
 - 测试用例存储在 `test_cases.json`，每条含 `_description` 字段
 
 ## Agent 架构约定
 - 主 Agent 协调三个子 Agent（网络搜索/数据库查询/RAGFlow知识库）
 - 记忆管理：滑窗(10轮) + 摘要压缩(3段) + 优先级排序
-- 渐进式工具披露(PTD)：两阶段路由减少 Token 消耗；带自适应门控——工具池全量 Schema 开销 ≤ 路由菜单开销时自动旁路（小池负优化，基准实测结论，见 docs/adr/adr-0003）
+- 渐进式工具披露(PTD)：两阶段路由减少 Token 消耗；带自适应门控——工具池全量 Schema 开销 ≤ 路由菜单开销时自动旁路（小池负优化，基准实测结论，见 `benchmarks/bench_ptd_tokens.py`）
 - Prompt 注入双层防护：统一入口 `sanitize_user_input_async`（正则快路 + 本地 LLM 分类器慢路 + JSONL 审计），请求流水线 enterprise_hooks 已接入；LLM 故障默认 fail-open（可用性优先）
 - Context Engineering：2000字阈值精简裁剪，按问题关联度筛选
 
@@ -60,8 +60,8 @@
 - `output/` — 生成的文件输出
 - `skills/` — 可复用技能编码（每个 skill 一个子目录，含 SKILL.md）
 - `tests/` — 单元测试统一目录（`python tests/test_xxx.py` 运行）
-- `benchmarks/` — 量化基准脚本（PTD token / 语义缓存阈值 / Judge 一致性），`python benchmarks/bench_xxx.py` 独立运行；`benchmarks/k6/` — HTTP 压测（k6 冒烟+阶梯负载，SLO 阈值断言，`k6 run benchmarks/k6/xxx.js`）；结果 JSON 写 `benchmarks/results/`（gitignored），基准得出的行为改动须同步 ADR
-- `docs/adr/` — 架构决策记录（唯一入库文档）：高影响/不可逆决策先写 ADR 再改代码，编号递增不改旧决策
+- `benchmarks/` — 量化基准脚本（PTD token / 语义缓存阈值 / Judge 一致性），`python benchmarks/bench_xxx.py` 独立运行；`benchmarks/k6/` — HTTP 压测（k6 冒烟+阶梯负载，SLO 阈值断言，`k6 run benchmarks/k6/xxx.js`）；结果 JSON 写 `benchmarks/results/`（gitignored）
+- `docs/` — 本地开发文档（含 ADR 架构决策记录），全部 gitignored 不入库；高影响/不可逆决策仍先写本地 ADR 再改代码，编号递增不改旧决策
 - `tools/zsxq_analysis_runner.py` — 知识星球抓取 + Ollama 金融分析的独立可执行工具脚本（与 zsxq_tool.py 同级管理），由 server.py 以子进程方式调用
 
 ## 金融业务规则

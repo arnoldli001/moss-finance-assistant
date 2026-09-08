@@ -1,5 +1,5 @@
 #coding = utf-8
-"""盘前小作文热度分析子路由（从 interfaces/api/server.py P1-F 拆分出来）。
+"""盘前研报热度分析子路由（从 interfaces/api/server.py P1-F 拆分出来）。
 
 拆分范围（原 server.py L1782-L2226 块）：
   - 6 个 zsxq/ollama 辅助函数：
@@ -111,7 +111,7 @@ def _find_latest_today_txt(news_dir: Path, today_prefix: str):
 # 辅助函数 2/8：把 zsxq txt 结果写入会话历史 + 记忆管理
 # ===========================================================
 async def _save_zsxq_to_history(thread_id: str, txt_content: str):
-    """把盘前小作文热度的用户消息和结果存入会话历史（checkpointer），刷新后可恢复。
+    """把盘前研报热度的用户消息和结果存入会话历史（checkpointer），刷新后可恢复。
     同时写入 Context Engineering 记忆管理，供后续摘要压缩和关键决策检索。"""
     try:
         from langchain_core.messages import HumanMessage, AIMessage
@@ -119,14 +119,14 @@ async def _save_zsxq_to_history(thread_id: str, txt_content: str):
         agent = await get_main_agent()
         config = {"configurable": {"thread_id": thread_id}}
         await agent.aupdate_state(config, {"messages": [  # type: ignore[attr-defined]
-            HumanMessage(content="盘前小作文热度"),
+            HumanMessage(content="盘前研报热度"),
             AIMessage(content=txt_content),
         ]})
         # 同步写入记忆管理（该条为高优关键决策）
         try:
             from agents.reasoning.memory_manager import get_memory_manager
             mm = get_memory_manager()
-            await mm.add_turn(thread_id, "盘前小作文热度分析", txt_content)
+            await mm.add_turn(thread_id, "盘前研报热度分析", txt_content)
         except Exception as mm_err:
             print(f"[ZSXQ分析] 写入记忆管理失败（不致命）: {mm_err}")
     except Exception as e:
@@ -375,7 +375,7 @@ async def _ensure_ollama_ready(
 # ===========================================================
 async def _fetch_zsxq_txt_summary(thread_id: str) -> str:
     """
-    【server 端适配层】盘前小作文热度 **抓取 + 返回 txt 总结**。
+    【server 端适配层】盘前研报热度 **抓取 + 返回 txt 总结**。
       - 若当天已有 txt 总结，直接复用，跳过抓取；
       - 否则运行 tools/zsxq_analysis_runner.py 完整流程（抓取 + LLM 分析）。
 
@@ -396,7 +396,7 @@ async def _fetch_zsxq_txt_summary(thread_id: str) -> str:
     try:
         # ---- 工具内部 progress:tool_start 已经被适配层翻译为 thinking/tool_start；
         #      这里先补一条 thinking 起点，避免抓 Ollama 前 1~3 秒视觉空白。
-        monitor.report_thinking("盘前小作文热度分析")
+        monitor.report_thinking("盘前研报热度分析")
 
         # 适配：把工具的 progress(msg) 翻译为 HTTP 会话可见的 monitor 事件
         def _progress_cb(msg: str) -> None:
@@ -411,12 +411,12 @@ async def _fetch_zsxq_txt_summary(thread_id: str) -> str:
                         base = base[len(_pre):]
                         break
                 monitor._emit("tool_start", msg)
-                if base.startswith("盘前小作文热度：") or msg.startswith("⏳ "):
+                if base.startswith("盘前研报热度：") or msg.startswith("⏳ "):
                     monitor.report_thinking(base)
                 return
             # 中间等待（⏳ / 没 emoji 的过程文本）→ 合并到顶部 thinking 不独立气泡
-            base = msg[len("⏳ 盘前小作文热度："):] if msg.startswith("⏳ 盘前小作文热度：") else msg
-            monitor.report_thinking("盘前小作文热度：" + base)
+            base = msg[len("⏳ 盘前研报热度："):] if msg.startswith("⏳ 盘前研报热度：") else msg
+            monitor.report_thinking("盘前研报热度：" + base)
 
         # 直接调用独立工具（抓取 + 返回 txt）：progress、today_prefix、Ollama helper
         # 都由新工具内聚，不再 server.py 里双份实现，避免漂移。
@@ -428,7 +428,7 @@ async def _fetch_zsxq_txt_summary(thread_id: str) -> str:
         # ---- 适配层补全：抓失败时兜底 report_error（工具内部只负责 stderr + cb 推）
         if not txt_content:
             # 进度回调已把具体失败类型 cb 过；这里只补一条空结果用户可见 error
-            monitor.report_error("盘前小作文热度分析未返回结果，请检查日志或稍后重试")
+            monitor.report_error("盘前研报热度分析未返回结果，请检查日志或稍后重试")
         return txt_content
     except FileNotFoundError as e:
         print(f"[ZSXQ分析] 脚本或 Python 解释器不存在: {e}")
@@ -455,7 +455,7 @@ async def _push_zsxq_summary_via_ws(thread_id: str, txt_content: str) -> None:
               → app.js handleWSMessage(ev=='task_result')
                 → appendMessage(currentTaskType=='zsxq' ? 'user' : 'assistant', result)
 
-    同时会把"盘前小作文热度 + txt 总结"写入会话历史 _save_zsxq_to_history，
+    同时会把"盘前研报热度 + txt 总结"写入会话历史 _save_zsxq_to_history，
     刷新后可被历史恢复接口回显。
     """
     from api.context import set_thread_context, reset_session_context
@@ -493,8 +493,8 @@ async def _run_zsxq_analysis(thread_id: str, emit_to_frontend: bool = True) -> s
     if emit_to_frontend:
         await _push_zsxq_summary_via_ws(thread_id, txt_content)
     else:
-        # 复盘预测阶段1：不推气泡，但仍把"盘前小作文热度 / AI 总结"写入会话历史，
-        # 避免后续阶段引用小作文时 LangGraph 记忆里没上下文。
+        # 复盘预测阶段1：不推气泡，但仍把"盘前研报热度 / AI 总结"写入会话历史，
+        # 避免后续阶段引用研报时 LangGraph 记忆里没上下文。
         try:
             await _save_zsxq_to_history(thread_id, txt_content)
         except Exception as _e:

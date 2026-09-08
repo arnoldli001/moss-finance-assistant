@@ -37,7 +37,7 @@ PRESET_SHORTCUT_MAP = {
         "盘前新闻", "pre_market_news", "盘前新闻速览", "获取今日盘前新闻", "今日盘前新闻",
     ],
     "ESSAY_HEAT_HINT": [
-        "盘前小作文热度", "小作文热度", "今日小作文热度", "essay_heat",
+        "盘前研报热度", "研报热度", "今日研报热度", "essay_heat",
     ],
     "REVIEW_FORECAST_HINT": [
         "复盘预测", "复盘+预测", "今日复盘预测", "review_forecast",
@@ -190,7 +190,7 @@ _GEMMA4_ROUTER_PROMPT_TEMPLATE = """你是一个金融投研多Agent系统的路
 
 可选的 route 枚举（只能选一个）：
   PRE_MARKET_NEWS         = 用户问盘前新闻（今天/最近的盘前汇总）
-  PRESET_SHORTCUT_OTHER   = 盘前小作文热度 或 复盘预测 快捷按钮
+  PRESET_SHORTCUT_OTHER   = 盘前研报热度 或 复盘预测 快捷按钮
   STOCK_QUERY             = 用户输入包含具体股票/板块，需要4源整合分析
   GENERAL_QUERY           = 普通查询，不涉及个股，只需联网+知识星球
   CODE_GENERATION         = 用户要求写脚本/爬虫/抓数据/代码生成

@@ -341,7 +341,7 @@ runtime_prompts:
     # 大盘指数预测 SKILL 规则（必须严格遵守）
     {skill_content}
 
-    # 盘前小作文热度分析结果
+    # 盘前研报热度分析结果
     {zsxq_result}
 
     # 盘前新闻搜索结果

@@ -710,7 +710,7 @@ _data_dir.mkdir(parents=True, exist_ok=True)
 _checkpointer_db = _data_dir / "checkpointer.db"
 
 # ==================== 静默模式（快捷按钮用） ====================
-# 场景：用户点击前端"盘前新闻 / 盘前小作文热度 / 复盘预测"快捷按钮时，
+# 场景：用户点击前端"盘前新闻 / 盘前研报热度 / 复盘预测"快捷按钮时，
 # 后端控制台不应刷 verbose 级 print（如 5000 字最终结果）。
 # 机制：ContextVar<bool> + 全局 QUIET 环境变量双重控制；
 #       set_quiet_mode(True) 仅影响当前请求链路，不串台；
@@ -846,7 +846,7 @@ async def run_deep_agent(task_query, session_id, user_id=None, quiet: bool = Fal
           对应 output 输出目录），同时作为 LangGraph thread_id，由 AsyncSqliteSaver
           持久化对话历史，实现连续对话。
       user_id: 可选，所属用户 ID；传入时会更新会话标题与时间戳。
-      quiet: 快捷按钮（盘前新闻/盘前小作文热度/复盘预测）专用，开启后：
+      quiet: 快捷按钮（盘前新闻/盘前研报热度/复盘预测）专用，开启后：
     """
     if quiet:
         set_quiet_mode(True)
@@ -1419,7 +1419,7 @@ async def get_session_history(session_id: str, limit: int = MAIN_AGENT_SESSION_H
                 if cleaned:  # 被完全剥离的情况（如测试数据）不显示
                     msgs.append({"role": "user", "content": cleaned, "type": "user"})
             elif role in ("assistant", "ai") and content and not getattr(m, "tool_calls", None):
-                # 盘前小作文热度总结以特定标题开头，标记 type 供前端靠右显示
+                # 盘前研报热度总结以特定标题开头，标记 type 供前端靠右显示
                 msg_type = "zsxq" if content.startswith("知识星球财经资讯分析总结") else "assistant"
                 msgs.append({"role": "assistant", "content": content, "type": msg_type})
         # 只返回最新的 limit 条消息，避免历史过长

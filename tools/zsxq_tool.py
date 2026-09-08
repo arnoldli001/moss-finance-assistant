@@ -606,10 +606,10 @@ def fetch_zsxq_group_topics(
     用 Playwright 浏览器自动化，通过拦截 API 响应获取主题列表。
     首次使用需先用 ZSXQ_HEADLESS=false 运行一次完成登录。
     Args:
-        max_topics: 最多抓取多少条主题（默认 100）
+        max_topics: 最多抓取多少条主题（默认 70）
         incremental: 是否增量抓取（默认 True，遇到与上次相同时间戳+内容的主题则停止）
         save_to_db: 是否保存到 MySQL 数据库（默认 False，仅打印到控制台）
-        max_scrolls: 最大滚动次数（默认 10，每次约加载 10 条）
+        max_scrolls: 最大滚动次数（默认 15，每次约加载 10 条）
     Returns:
         抓取结果摘要
     """

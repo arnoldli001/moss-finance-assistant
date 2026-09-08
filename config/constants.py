@@ -1148,6 +1148,18 @@ STOCK_CACHE_DIR: str = os.getenv("STOCK_CACHE_DIR",
                                  )))
 # 单文件名格式：YYYYMMDDHH_<sanitized_stock_name>.txt
 STOCK_CACHE_FILE_FMT: str = "%Y%m%d%H"
+# ============ 盘前新闻 / 热门股来源平台清单（单一真源，2026-09-08 收敛） ============
+# 使用方：server.py 盘前新闻签名检测、analysis_workflow 搜索词 + 综答提示词、
+#         hot_stock_warmup 兜底、STOCK_CACHE_WARMUP_SOURCES。
+# 修改平台清单只改本元组；"/"串、空格串、签名检测前4项均为派生，自动跟随。
+# 注意前 4 项顺序不可乱动：_PREMARKET_NEWS_SIGNATURE 依赖 [:4] 作为按钮签名检测。
+PREMARKET_NEWS_PLATFORMS: tuple = (
+    "韭研社区", "炒股吧", "同花顺股吧", "东方财富股吧", "雪球", "微信公众号", "财联社",
+)
+# 派生格式：综答提示词用"/"分隔、Tavily 搜索词用空格分隔
+PREMARKET_NEWS_PLATFORMS_SLASH: str = "/".join(PREMARKET_NEWS_PLATFORMS)
+PREMARKET_NEWS_PLATFORMS_SPACE: str = " ".join(PREMARKET_NEWS_PLATFORMS)
+
 # 预热定时：工作日 早 08:00 / 晚 20:00（可通过 .env 覆盖，便于调试）
 STOCK_CACHE_WARMUP_HOURS: tuple = tuple(int(h.strip()) for h in os.getenv(
     "STOCK_CACHE_WARMUP_HOURS", "8,20").split(",") if h.strip())

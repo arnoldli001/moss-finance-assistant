@@ -871,7 +871,7 @@ function handleWSMessage(p) {
         // 因为后端最终一定会有完成事件（task_result 真值或 error）
         return;
       }
-      // 盘前小作文热度结果靠右显示，普通任务结果靠左
+      // 盘前研报热度结果靠右显示，普通任务结果靠左
       const resultRole = currentTaskType === 'zsxq' ? 'user' : 'assistant';
       currentTaskType = 'normal';
       appendMessage(resultRole, result,
@@ -1510,7 +1510,7 @@ async function sendPreMarketNews() {
   }
 }
 
-// ============ 盘前小作文热度：调用后端 zsxq_analysis_runner（知识星球抓取 + LLM 分析）============
+// ============ 盘前研报热度：调用后端 zsxq_analysis_runner（知识星球抓取 + LLM 分析）============
 async function sendZsxqHotNews() {
   if (!currentSessionId) { alert('请先选择或新建会话'); return; }
   if (isRunning) { alert('当前任务进行中，请等待完成'); return; }
@@ -1530,7 +1530,7 @@ async function sendZsxqHotNews() {
   }
 
   pendingTurnIndex += 1;
-  appendMessage('user', '盘前小作文热度', { turnIndex: pendingTurnIndex });
+  appendMessage('user', '盘前研报热度', { turnIndex: pendingTurnIndex });
   currentTaskType = 'zsxq';
   setRunning(true, 'zsxq');
   try {
@@ -1602,7 +1602,7 @@ function setRunning(v, taskType) {
   const reviewBtn = $('review-prediction-btn');
   if (reviewBtn) reviewBtn.disabled = v;
   // 超时保护：任务开始时启动计时器，到点自动解锁避免页面永久卡死
-  // zsxq 盘前小作文热度实测全流程 286s，单独走 8 分钟超时（与后端 runner 内部 480s 上限对齐）
+  // zsxq 盘前研报热度实测全流程 286s，单独走 8 分钟超时（与后端 runner 内部 480s 上限对齐）
   const timeoutMs = (taskType === 'zsxq' && APP_CONSTANTS.ZSXQ_RUNNING_TIMEOUT_MS)
     ? APP_CONSTANTS.ZSXQ_RUNNING_TIMEOUT_MS
     : RUNNING_TIMEOUT;
@@ -1860,7 +1860,7 @@ function _buildZsxqTable(rows) {
   table.className = 'zsxq-table';
   const thead = document.createElement('thead');
   const headRow = document.createElement('tr');
-  ['#', '股票名', '情绪', '研报数量', '行业', '摘要（利好/利空原因）'].forEach((h) => {
+  ['#', '股票名', '情绪', '研报数', '行业', '摘要'].forEach((h) => {
     const th = document.createElement('th');
     th.textContent = h;
     headRow.appendChild(th);
@@ -2312,7 +2312,7 @@ async function shareAsImage(msgs) {
     }
 
     const ts = new Date();
-    const fname = `无极Agent对话_${ts.getFullYear()}${String(ts.getMonth()+1).padStart(2,'0')}${String(ts.getDate()).padStart(2,'0')}_${String(ts.getHours()).padStart(2,'0')}${String(ts.getMinutes()).padStart(2,'0')}.png`;
+    const fname = `无极股票AI助手对话_${ts.getFullYear()}${String(ts.getMonth()+1).padStart(2,'0')}${String(ts.getDate()).padStart(2,'0')}_${String(ts.getHours()).padStart(2,'0')}${String(ts.getMinutes()).padStart(2,'0')}.png`;
     const blobUrl = URL.createObjectURL(blob);
 
     // 显示预览覆盖层：用户可长按保存或下载
@@ -2326,13 +2326,24 @@ async function shareAsImage(msgs) {
 
     // 保存图片（桌面端下载，移动端提示长按）
     const onSave = () => {
-      const a = document.createElement('a');
-      a.href = blobUrl;
-      a.download = fname;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      showToast('图片已下载');
+      try {
+        const a = document.createElement('a');
+        a.href = blobUrl;
+        a.download = fname;
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        // 延迟移除，确保浏览器已触发下载（部分浏览器同步移除会导致下载丢失）
+        setTimeout(() => {
+          if (a.parentNode) a.parentNode.removeChild(a);
+        }, 1000);
+        showToast('图片已开始下载');
+      } catch (e) {
+        console.error('下载失败', e);
+        // 回退：新开窗口打开图片，用户可右键另存
+        window.open(blobUrl, '_blank');
+        showToast('下载失败，请右键图片另存');
+      }
     };
     const onClose = () => {
       overlay.style.display = 'none';
@@ -2417,16 +2428,16 @@ function stopProgressTimer() {
 async function generateLongImage(msgs) {
   const canvas = document.createElement('canvas');
   const ctx = canvas.getContext('2d');
-  const DPR = Math.min(window.devicePixelRatio || 1, 2);  // 限制 DPR 防止 canvas 超过浏览器尺寸上限
+  const DPR = Math.min(window.devicePixelRatio || 1, 4);  // 提高到 4x 提升文字清晰度
   const baseW = 750;  // 设计稿宽度（逻辑像素）
-  const padding = 32;
-  const msgMaxW = baseW - padding * 2;  // 气泡最大宽度（无头像，占满内容区）
-  const footerH = 72;   // 底部水印高度
+  const padding = 0;   // 去掉四周白边
+  const msgMaxW = baseW - padding * 2; 
+  const footerH = 0;   // 悬浮水印覆盖在内容之上，无需底部预留高度
   const bubblePadX = 18;
   const bubblePadY = 14;
   const lineH = 26;
   const fontSize = 18;
-  const gap = 24;  // 消息间距
+  const gap = 12;  // 消息间距（仅消息之间，不做上下外边距）
 
   //用离屏 canvas 度量
   const metricCanvas = document.createElement('canvas');
@@ -2446,8 +2457,8 @@ async function generateLongImage(msgs) {
   }
 
   // ---------- 设定 canvas 尺寸（限制最大高度防止浏览器溢出）----------
-  const MAX_CANVAS_H = 16000;  // 浏览器 canvas 最大高度安全值
-  let totalH = gap + contentH + footerH + gap;
+  const MAX_CANVAS_H = 32767;  // 放宽画布高度上限，避免长图被整体降采样导致文字发糊
+  let totalH = Math.max(0, contentH - gap);  // 去掉上下外边距（contentH 末尾多算了一个 gap）
   let scale = 1;
   const pixelH = totalH * DPR;
   if (pixelH > MAX_CANVAS_H) {
@@ -2459,6 +2470,9 @@ async function generateLongImage(msgs) {
   canvas.height = Math.round(totalH * DPR * scale);
   canvas.style.width = baseW + 'px';
   canvas.style.height = totalH + 'px';
+  // 开启高质量图像平滑（文字与图片缩放时更锐利）
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
   if (scale < 1) {
     ctx.scale(DPR * scale, DPR * scale);
   } else {
@@ -2473,7 +2487,7 @@ async function generateLongImage(msgs) {
   ctx.fillRect(0, 0, baseW, totalH);
 
   // ---------- 消息绘制（仅内容气泡：无标题栏/副标题/头像） ----------
-  let y = gap;
+  let y = 0;  // 从顶部开始，无上方白边
   for (const row of layoutRows) {
     const isUser = row.msg.role === 'user';
 
@@ -2513,14 +2527,35 @@ async function generateLongImage(msgs) {
     y += row.rowH;
   }
 
-  // ---------- 底部水印：无极Moss金融研报（不透明度 80%） ----------
+  // ---------- 悬浮水印：无极股票AI助手（文档式斜向平铺，不透明度 10%），覆盖在内容之上 ----------
+  const wmText = '无极股票AI助手';
+  const wmFontSize = 24;
+  const wmColor = '#8e8e93';
+  const wmAlpha = 0.1;
+  const wmAngle = -Math.PI / 6;   // -30° 斜向，文档水印常用角度
+  const wmGapX = 300;             // 横向间距
+  const wmGapY = 300;            // 纵向间距
+
   ctx.save();
-  ctx.globalAlpha = 0.8;
-  ctx.fillStyle = '#8e8e93';
-  ctx.font = `bold 16px -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif`;
-  ctx.textBaseline = 'middle';
+  ctx.globalAlpha = wmAlpha;
+  ctx.fillStyle = wmColor;
+  ctx.font = `bold ${wmFontSize}px -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif`;
   ctx.textAlign = 'center';
-  ctx.fillText('无极Moss金融研报', baseW / 2, y + (footerH / 2));
+  ctx.textBaseline = 'middle';
+
+  // 以画布中心为原点，斜向平铺覆盖整张图（网格按画布对角线放大，确保旋转后无空白角）
+  const wmDiag = Math.sqrt(totalH * totalH + baseW * baseW);
+  const wmRows = Math.ceil(wmDiag / wmGapY) + 2;
+  const wmCols = Math.ceil(wmDiag / wmGapX) + 2;
+  for (let r = -wmRows; r <= wmRows; r++) {
+    for (let c = -wmCols; c <= wmCols; c++) {
+      ctx.save();
+      ctx.translate(baseW / 2 + c * wmGapX, totalH / 2 + r * wmGapY);
+      ctx.rotate(wmAngle);
+      ctx.fillText(wmText, 0, 0);
+      ctx.restore();
+    }
+  }
   ctx.restore();
 
   // 使用 toBlob 替代 toDataURL（内存占用更低，移动端大 canvas 兼容性更好）

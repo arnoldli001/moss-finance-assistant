@@ -242,7 +242,7 @@ async def fetch_zsxq_latest_summary_async(
     emit_progress: Optional[ProgressFn] = None,
     quiet: bool = False,
 ) -> str:
-    """【函数 1 / 2（纯数据抓取）】知识星球盘前小作文热度最新总结。
+    """【函数 1 / 2（纯数据抓取）】知识星球盘前研报热度最新总结。
     两段执行（完全对应 server.py L2085-2086）：
         ① 当天已有 txt 总结 → 读取并直接返回，跳过抓取。
         ② 否则：
@@ -378,7 +378,7 @@ async def fetch_zsxq_latest_summary_async(
                     if milestone:
                         progress(f"🏁 {safe}")
                     elif any(kw in stripped for kw in ("[抓取]", "[分析]", "[ZSXQ]", "分析结果", "总结已保存")):
-                        progress(f"⏳ 盘前小作文热度：{safe}")
+                        progress(f"⏳ 盘前研报热度：{safe}")
             except Exception as e:
                 print(f"[ZSXQ-Crawler] 读取 runner stdout 异常: {e}", file=sys.stderr)
                 lines.append(f"[READ_EXC] {type(e).__name__}: {e}")
@@ -496,12 +496,12 @@ def fetch_zsxq_latest_summary(
 # ---------------------------------------------------------------------------
 @_lc_tool
 def zsxq_fetch_latest_hot_summary() -> str:
-    """盘前小作文热度总结抓取工具。
+    """盘前研报热度总结抓取工具。
 
     什么时候使用：
-      - 用户问"今天知识星球有什么热帖 / 小作文热度 / 盘前情绪 / 散户观点"时使用本工具；
-      - 执行"复盘预测"等需要盘前小作文热度作为输入的流程时，第一步调用本工具取结果；
-      - 快捷按钮"盘前小作文热度"对应的后台工作，最终也走到本工具的 async 版本。
+      - 用户问"今天知识星球有什么热帖 / 研报热度 / 盘前情绪 / 散户观点"时使用本工具；
+      - 执行"复盘预测"等需要盘前研报热度作为输入的流程时，第一步调用本工具取结果；
+      - 快捷按钮"盘前研报热度"对应的后台工作，最终也走到本工具的 async 版本。
 
     什么时候 **不** 要用：
       - 用户在问"某只具体股票在知识星球里的研报" → 用 tools.zsxq_tool.search_zsxq_by_stock；

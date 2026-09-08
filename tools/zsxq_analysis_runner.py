@@ -147,7 +147,7 @@ def _call_ollama_chat(model: str, user_prompt: str, system_prompt: str = "",
 def _run_financial_analysis(news_json_path: Path) -> list[dict]:
     """对 JSON 内容做金融分析师分析，返回按出现次数从高到低排序的 list。
     现在实现优先走 shared.utils.ollama_analyzer.analyze_zsxq_hot_news（封装好的
-    盘前小作文热度模板，system prompt / schema / parse 回退链都已统一），
+    盘前研报热度模板，system prompt / schema / parse 回退链都已统一），
     之后再做"真实文本计数重算 + 去重 + 排序"，与旧输出排序 100% 等价。
     """
     data = json.loads(news_json_path.read_text(encoding="utf-8"))
@@ -415,7 +415,7 @@ def main() -> int:
     # =================== Step 4: 写入以日期命名的 txt 总结 ===================
     txt_lines = [
         f"时间：{now_display}",
-        f"{'序':<4}{'股票名':<12}{'情绪':<6}{'次数':<6}{'行业':<10}摘要（利好/利空原因）",
+        f"{'序':<4}{'股票名':<12}{'情绪':<6}{'次数':<6}{'行业':<10}摘要",
         "-" * 80,
     ]
     for i, d in enumerate(analysis, 1):

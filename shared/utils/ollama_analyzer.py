@@ -9,7 +9,7 @@ shared.utils.ollama_analyzer：本地 Ollama 大模型「输入分析汇总」�
     输出最终汇总文本或结构化结果（JSON / 列表 / 评分）**，供：
       · 主 Agent（通过 LangChain tool 包装后调用）
       · 调度协调 Agent（定时任务：盘前汇总、盘后复盘报告、舆情热度日度画像等）
-      · tools/zsxq_analysis_runner.py（盘前小作文热度：原来 _call_ollama_chat + _parse_analysis 双份逻辑，现 import 本文件复用，消除重复）
+      · tools/zsxq_analysis_runner.py（盘前研报热度：原来 _call_ollama_chat + _parse_analysis 双份逻辑，现 import 本文件复用，消除重复）
       · 未来任何需要本地 LLM 离线分析场景（财报要点抽取、公告利好利空定性、
         股吧帖子情绪聚类……）。
 
@@ -22,7 +22,7 @@ shared.utils.ollama_analyzer：本地 Ollama 大模型「输入分析汇总」�
   Layer 6 预定义分析模板（可直接一行调用，无需手写 system prompt + schema）：
       summarize_text(text, max_words, model?)                     通用总结
       analyze_sentiment(text, aspect?, model?)                     多维度情绪（正/中/负）
-      analyze_zsxq_hot_news(news_entries_text, model?)             盘前小作文热度：提取股票名+利好/利空+次数（返回 [dict]）
+      analyze_zsxq_hot_news(news_entries_text, model?)             盘前研报热度：提取股票名+利好/利空+次数（返回 [dict]）
       extract_structured(text, schema, *, hints, model?)           任意 JSON Schema 抽取
 
 配置默认值来源：config.constants 中的 TEST_ZXSQ_OLLAMA_* / OLLAMA_* 常量集中 import，
@@ -226,7 +226,7 @@ def parse_jsonish(raw: str) -> Any:
 
 
 # ---------------------------------------------------------------------------
-# 解析：盘前小作文热度输出 → 标准化 list[dict(name, sentiment, count)]
+# 解析：盘前研报热度输出 → 标准化 list[dict(name, sentiment, count)]
 # （从 tools/zsxq_analysis_runner._parse_analysis 中抽出、共享实现）
 # ---------------------------------------------------------------------------
 def _strip_zh_name(name: str) -> str:
@@ -241,7 +241,7 @@ def _strip_zh_name(name: str) -> str:
 
 
 def parse_stock_sentiment_items(raw: str) -> List[Dict[str, Any]]:
-    """把 LLM 的"盘前小作文热度"输出解析为标准 list[dict(name, sentiment, count)]。
+    """把 LLM 的"盘前研报热度"输出解析为标准 list[dict(name, sentiment, count)]。
 
     4 重回退链：JSON → 正则取块 → 强模板逐行 → 宽松逐行，保证覆盖 99% 的中文 qwen 输出。
     """
@@ -261,7 +261,7 @@ def parse_stock_sentiment_items(raw: str) -> List[Dict[str, Any]]:
             or item.get("类型") or item.get("方向") or ""
         ).strip()
         count_raw = (
-            item.get("count") or item.get("mention_count")or item.get("次数") or item.get("研报数量")
+            item.get("count") or item.get("mention_count")or item.get("次数") or item.get("研报数")
             or item.get("出现次数") or item.get("提及次数") or item.get("热度") or 0
         )
         try:
@@ -647,7 +647,7 @@ def _repair_truncated_json(raw: str) -> Optional[str]:
 
 
 def _zsxq_stock_schema() -> Dict[str, Any]:
-    """盘前小作文热度分析：JSON Schema（Ollama format 参数用）。
+    """盘前研报热度分析：JSON Schema（Ollama format 参数用）。
 
     Ollama 的 format 不支持顶层 type=array，需包装为 object。
     字段：stocks[stock / sector / mention_count / summary / sentiment]
@@ -699,7 +699,7 @@ async def analyze_zsxq_hot_news_async(
     timeout: float = _DEFAULT_CLI_TIMEOUT,
     progress_cb: Optional[ProgressCb] = None,
 ) -> List[Dict[str, Any]]:
-    """盘前小作文热度（异步）：输入资讯拼接文本，返回 list[dict(name, sentiment, count)]。
+    """盘前研报热度（异步）：输入资讯拼接文本，返回 list[dict(name, sentiment, count)]。
     2026-09-08：动态智能分批（按研报字符预算贪心打包，替代固定 20 条/批，见 config 中 OLLAMA_ZSXQ_BATCH_*）。
     2026-09-07：改用 /api/chat 端点 + 分批处理，解决 qwen3:8b 只处理前 10 条的问题。
     """
@@ -859,7 +859,7 @@ def analyze_zsxq_hot_news(
     timeout: float = _DEFAULT_CLI_TIMEOUT,
     progress_cb: Optional[ProgressCb] = None,
 ) -> List[Dict[str, Any]]:
-    """盘前小作文热度（同步版）：供 tools/zsxq_analysis_runner.py 这类同步子进程直接调用。"""
+    """盘前研报热度（同步版）：供 tools/zsxq_analysis_runner.py 这类同步子进程直接调用。"""
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:

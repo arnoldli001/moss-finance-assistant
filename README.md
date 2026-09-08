@@ -93,8 +93,6 @@ k6 run benchmarks/k6/load.js                          # 阶梯负载 + SLO 断�
 
 **Eval 实测**（20 条新增样本 http 模式串行）：direct 模式平均分 0.60 / 通过率 50%；http 模式（联网 + 知识库）平均分 **0.825** / 通过率 **100%**；4 条无联网失败样本联网后提升 +0.20~+0.28 分；幻觉率 0%，风险合规一致为 1。
 
-架构决策的"为什么"记录在 ADR（`docs/adr/`）：分层真源、常量唯一真源、PTD 自适应门控、注入双层防护、测试门控与 CI 策略。
-
 ---
 
 ## 💰 业务价值（成本量化）
@@ -308,7 +306,6 @@ moss_finance_assistant/
 ├── benchmarks/              # 量化基准（PTD/语义缓存阈值/Judge 一致性）+ k6/（HTTP 压测）
 ├── static/                  # 前端单页应用
 ├── tests/                   # 单元测试 + tests/eval（LLM 评估回归，CI 阻断）
-├── docs/adr/                # 架构决策记录（唯一入库文档）
 ├── .github/workflows/ci.yml # CI：ruff fatal + import 冒烟 + pytest(cov) + Codecov + LLM 评估抽样
 ├── Dockerfile / docker-compose.yml   # 容器化：app + MySQL + Redis + Jaeger
 └── data/ output/            # 运行时数据与生成物（gitignored）

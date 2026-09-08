@@ -79,8 +79,6 @@ k6 run benchmarks/k6/load.js                          # staged load + SLO assert
 
 **Eval measurements** (20 new samples, http mode, serial): direct mode average score 0.60 / pass rate 50%; http mode (web + knowledge base) average score **0.825** / pass rate **100%**; 4 previously failing samples improved by +0.20–0.28 after enabling web search; hallucination rate 0%, risk compliance consistently 1.
 
-The "why" behind architecture decisions is recorded in ADRs (`docs/adr/`): layered source-of-truth, single source for constants, PTD adaptive gating, dual-layer injection protection, test gating, and CI strategy.
-
 ---
 
 ## 💰 Business Value (Cost Quantification)
@@ -293,7 +291,6 @@ moss_finance_assistant/
 ├── benchmarks/              # Benchmarks (PTD / semantic cache threshold / judge consistency) + k6/ (HTTP load tests)
 ├── static/                  # Frontend single-page app
 ├── tests/                   # Unit tests + tests/eval (LLM eval regression, CI-blocking)
-├── docs/adr/                # Architecture decision records (the only docs tracked in git)
 ├── .github/workflows/ci.yml # CI: ruff fatal + import smoke + pytest(cov) + Codecov + LLM eval sampling
 ├── Dockerfile / docker-compose.yml   # Containers: app + MySQL + Redis + Jaeger
 └── data/ output/            # Runtime data & artifacts (gitignored)
@@ -321,7 +318,7 @@ The 10 questions interviewers are most likely to probe, with evidence locations 
 
 | # | Question | Evidence |
 |---|------|---------|
-| 1 | Why is PTD a negative optimization for a 4-tool pool? | `benchmarks/bench_ptd_tokens.py` measurement (607 vs 678 tok) + `docs/adr/adr-0003` |
+| 1 | Why is PTD a negative optimization for a 4-tool pool? | `benchmarks/bench_ptd_tokens.py` measurement (607 vs 678 tok) |
 | 2 | How was the semantic cache threshold chosen? | `bench_semantic_cache_threshold.py` sweep 0.70–0.98 + embedding-discrimination lessons |
 | 3 | Can you trust an LLM judge? | `bench_judge_consistency.py`: 100% self-consistency / 100% position-bias-free / 80% human agreement |
 | 4 | How do you prevent hallucinations? Does it block answers? | Triple pipeline + "attach warning, never block" strategy (FAQ) |

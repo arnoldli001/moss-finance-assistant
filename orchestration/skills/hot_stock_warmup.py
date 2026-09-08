@@ -35,7 +35,8 @@ def _warmup_cfg() -> Dict[str, Any]:
             RECENCY_TIMEZONE_OFFSET_HOURS as _TZH,
         )
     except Exception:
-        _K, _SRC, _RDS, _TZH = 10, ("韭研社区", "东方财富股吧", "同花顺股吧", "微信公众号", "财联社"), (
+        # 兜底仅在 config.constants 导入失败时生效；值需与 constants.PREMARKET_NEWS_PLATFORMS 保持一致
+        _K, _SRC, _RDS, _TZH = 10, ("韭研社区", "炒股吧", "同花顺股吧", "东方财富股吧", "雪球", "微信公众号", "财联社"), (
             "⚠️ 以上信息来自互联网公开资料，仅供参考，不构成投资建议。投资有风险，入市需谨慎，盈亏自负。"), 8
     return dict(K=int(_K), SRC=tuple(_SRC), RDS=str(_RDS), TZH=int(_TZH))
 
