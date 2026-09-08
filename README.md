@@ -24,6 +24,25 @@
 
 ---
 
+## 🖼️ 功能演示
+
+### 登录与游客体验
+![登录界面](screenshots/login.png)
+
+### 盘前小作文热度分析（知识星球 Playwright 抓取 + Ollama qwen3:8b 本地动态分批抽取）
+![盘前研报热度表](screenshots/zsxq_hot_table.png)
+
+### 盘前研报热度分析（完整流程演示）
+![盘前研报热度演示](screenshots/demo_pre_market_news.gif)
+
+### 复盘预测（阶段1小作文热度 ∥ 阶段2盘前新闻并行 → 阶段3 DeepSeek 指数预测）
+![复盘预测演示](screenshots/review_prediction.gif)
+
+### 分享长图（一键导出无白边高清 PNG，斜向水印覆盖）
+> 浏览器 **Ctrl+F5** 刷新后右键「分享」按钮即可生成长图
+
+---
+
 ## ✨ 核心亮点
 
 ### 1. 多智能体协作（deepagents + LangChain）
@@ -249,7 +268,7 @@ python -m tests.eval.run_eval --mode direct --limit 3   # LLM 评估抽样
 | POST | `/api/task/stream` | SSE 流式端点（首包 <50ms，断点续传 Last-Event-ID） |
 | POST | `/api/task/stop` | 停止当前任务（CancellationToken 级联取消） |
 | POST | `/api/auth/register` / `login` / `refresh` / `guest` | JWT 认证四端点（guest 一键游客，10 QPM） |
-| POST | `/api/zsxq-analysis` | 盘前小作文热度分析 |
+| POST | `/api/zsxq-analysis` | 盘前研报热度分析 |
 | POST | `/api/review-prediction` | 复盘预测：阶段1小作文热度 ∥ 阶段2盘前新闻（复用按钮工作流：6h缓存→双源并发→直连综答）并行 → 阶段3 DeepSeek 指数预测；分段预算 150/280/150s，后台 450s 兜底，任一阶段超时降级输出已完成阶段原始结果 |
 | GET/POST/DELETE | `/api/users/*` `/api/sessions/*` | 用户/会话管理（JWT + 行级越权校验） |
 | **GET** | **`/api/slo/status`** | **SLO 快照（可用性/错误预算/降级链/熔断器，owner/admin）** |
@@ -353,7 +372,7 @@ moss_finance_assistant/
 </details>
 
 <details>
-<summary><b>点击「盘前小作文热度」时 Ollama 没启动会怎样？</b></summary>
+<summary><b>点击「盘前研报热度」时 Ollama 没启动会怎样？</b></summary>
 
 系统自动后台拉起：定位 CLI（PATH + 用户目录兜底）→ 后台 `ollama serve`（Windows 下 `CREATE_NO_WINDOW`）→ 轮询 30 秒等就绪 → 模型未拉取自动 `ollama pull` 并推下载进度。全程前端可见。
 </details>
