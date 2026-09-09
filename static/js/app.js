@@ -945,12 +945,12 @@ function _streamAppendText(el, chunk) {
 }
 
 // _streamRenderText：用 HTML（含引用角标）替换当前正文（仅在 [N] 出现的 done/source 刷新时调用）
+// 盘前新闻等结构化输出走 markdown 渲染（表格/标题/列表/加粗），普通文本渲染结果不变
 function _streamRenderText(el, text) {
   if (!el) return;
   const span = el.querySelector('span.stream-text');
   if (!span) return;
-  const escaped = _escapeHtml(text).replace(/\n/g, '<br>');
-  span.innerHTML = escaped;
+  span.innerHTML = _renderMarkdown(text);
   _streamAttachCitationLinks(el);
   const chat = $('chat');
   if (chat) chat.scrollTop = chat.scrollHeight;
@@ -964,6 +964,68 @@ function _escapeHtml(s) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+// _renderMarkdown：轻量 markdown 渲染（盘前新闻等结构化输出用）。
+// 支持：### 三级标题、**加粗**、- 列表、|...| 表格。全程先 escape 再解析，防 XSS。
+function _renderMarkdown(text) {
+  if (text === undefined || text === null || text === '') return '';
+  const lines = String(text).split('\n');
+  const out = [];
+  let tableBuf = [];
+  let inList = false;
+
+  function flushTable() {
+    if (tableBuf.length < 2) {
+      for (const r of tableBuf) out.push('<div>' + _inlineMd(r) + '</div>');
+      tableBuf = [];
+      return;
+    }
+    const headerCells = tableBuf[0].replace(/^\||\|$/g, '').split('|').map(s => s.trim());
+    const bodyRows = tableBuf.slice(2).map(r => r.replace(/^\||\|$/g, '').split('|').map(s => s.trim()));
+    let t = '<table class="md-table"><thead><tr>';
+    for (const c of headerCells) t += '<th>' + _inlineMd(c) + '</th>';
+    t += '</tr></thead><tbody>';
+    for (const row of bodyRows) {
+      t += '<tr>';
+      for (const c of row) t += '<td>' + _inlineMd(c) + '</td>';
+      t += '</tr>';
+    }
+    t += '</tbody></table>';
+    out.push(t);
+    tableBuf = [];
+  }
+
+  for (const rawLine of lines) {
+    const line = rawLine.replace(/\s+$/, '');
+    const trimmed = line.trim();
+    if (trimmed.startsWith('|') && trimmed.endsWith('|') && trimmed.length > 3) {
+      tableBuf.push(trimmed);
+      inList = false;
+      continue;
+    }
+    if (tableBuf.length) flushTable();
+
+    if (trimmed === '') { out.push('<br>'); inList = false; continue; }
+    const h3 = line.match(/^###\s+(.+)$/);
+    if (h3) { out.push('<div class="md-h3">' + _inlineMd(h3[1]) + '</div>'); inList = false; continue; }
+    const li = line.match(/^[-*]\s+(.+)$/);
+    if (li) {
+      if (!inList) { out.push('<ul class="md-list">'); inList = true; }
+      out.push('<li>' + _inlineMd(li[1]) + '</li>');
+      continue;
+    }
+    if (inList) { out.push('</ul>'); inList = false; }
+    out.push('<div>' + _inlineMd(line) + '</div>');
+  }
+  if (tableBuf.length) flushTable();
+  if (inList) out.push('</ul>');
+  return out.join('');
+}
+
+// 内联 markdown：加粗 **xxx**（已在外层 escape）
+function _inlineMd(s) {
+  return _escapeHtml(s).replace(/\*\*([^*]+?)\*\*/g, '<strong>$1</strong>');
 }
 
 // ===== 前端最后一道"展示脱敏"：绝对路径（盘符 C:\ D:\…、Unix /usr…）统一
@@ -1920,6 +1982,8 @@ function appendMessage(role, content, options) {
     div.appendChild(meta);
     div.appendChild(_buildZsxqTable(_zsxq.rows));
     div.classList.add('zsxq-table-msg');
+  } else if (role === 'assistant') {
+    div.innerHTML = _renderMarkdown(content);
   } else {
     div.textContent = content;
   }
@@ -1942,7 +2006,8 @@ function appendMessage(role, content, options) {
     copyBtn.innerHTML = '📋';
     copyBtn.onclick = async (e) => {
       e.stopPropagation();
-      await copyText(content);
+      // 流式消息闭包 content 为空串，兜底读 finalize 写回的 dataset.content
+      await copyText(div.dataset.content || (wrap && wrap.dataset.content) || content);
       copyBtn.classList.add('copied');
       copyBtn.innerHTML = '✓';
       setTimeout(() => { copyBtn.classList.remove('copied'); copyBtn.innerHTML = '📋'; }, APP_CONSTANTS.COPY_BTN_HIGHLIGHT_MS);
@@ -2040,7 +2105,11 @@ function bindContextMenu(msgEl, content, role, turnIndex) {
 
 // ============ 显示/隐藏上下文菜单 ============
 function showContextMenu(x, y, content, role, msgEl, turnIndex) {
-  currentContextContent = content;
+  // 流式消息创建时 content 为空串、最终文本在 finalize 时写回 dataset.content，
+  // 这里兜底读取最新内容（否则右键复制/分享拿到的是空串 → 分享图空白）
+  currentContextContent = content
+    || (msgEl && (msgEl.dataset.content || (msgEl.parentNode && msgEl.parentNode.dataset.content)))
+    || '';
   currentContextRole = role;
   currentContentEl = msgEl;
   currentTurnIndex = turnIndex != null ? Number(turnIndex) : null;

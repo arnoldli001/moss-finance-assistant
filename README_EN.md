@@ -24,6 +24,28 @@ An **enterprise-grade multi-agent financial research system** for retail investo
 
 ---
 
+## 🖼️ Demo
+
+### Pre-Market Research-Report Heat — walkthrough (Zsxq scraping via Playwright + Ollama qwen3:8b local dynamic batching)
+![Pre-market research heat walkthrough](screenshots/demo_pre_market_news.gif)
+
+### Pre-Market Research-Report Heat — output (frontend table: stock / sentiment / report count / sector / summary)
+![Pre-market research heat output](screenshots/zsxq_hot_table.png)
+
+### Pre-Market News — walkthrough (one click: site-targeted concurrent search across 6 major finance platforms + US overnight session + Zsxq aggregation → DeepSeek cloud reasoning → structured tables, with live progress)
+![Pre-market news walkthrough](screenshots/盘前新闻功能演示动画2.gif)
+
+### Pre-Market News — output (three-part structured report: platform hot-topic table / US tech-stock pre-market table)
+![Pre-market news output - tables](screenshots/盘前新闻输出结果展示1.png)
+
+### Pre-Market News — output (reasoning & prediction: bullish/bearish A-share concepts and stocks, each with risk disclaimer)
+![Pre-market news output - reasoning](screenshots/盘前新闻输出结果展示2.png)
+
+### Share-as-image (one-click borderless high-res PNG with diagonal watermark; both report-heat tables and pre-market-news structured tables are drawn as real Canvas tables)
+> After **Ctrl+F5**, right-click a message → "Share → Generate share image".
+
+---
+
 ## ✨ Highlights
 
 ### 1. Multi-Agent Collaboration (deepagents + LangChain)

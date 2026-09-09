@@ -1,7 +1,7 @@
 # 定义一个网络搜索的工具！
 # ======================== 导入核心依赖 ========================
 # 类型注解：增强代码提示和静态检查能力
-from typing import  Literal
+from typing import  Literal, Optional, List
 # LangChain 工具装饰器：将普通函数转为 Agent 可调用的工具
 from langchain_core.tools import tool
 # Tavily 官方客户端：实现网络搜索核心功能
@@ -96,10 +96,19 @@ def _raw_tavily_search_once(
     topic: Literal["news", "finance", "general"],
     max_results: int,
     include_raw_content: bool,
+    include_domains: Optional[List[str]] = None,
 ):
-    """不做 retry 的单次 Tavily 调用 + 结构化 + SSE 发布（子查询并发粒度）。"""
-    result = _get_tavily_client().search(query=query, topic=topic,
-                                         max_results=max_results, include_raw_content=include_raw_content)
+    """不做 retry 的单次 Tavily 调用 + 结构化 + SSE 发布（子查询并发粒度）。
+
+    include_domains 非空时启用站点定向（Tavily 白名单域名，如 ["xueqiu.com"]），
+    用于盘前新闻 6 平台定向并发搜索。
+    """
+    search_kwargs: dict = dict(
+        query=query, topic=topic, max_results=max_results, include_raw_content=include_raw_content
+    )
+    if include_domains:
+        search_kwargs["include_domains"] = list(include_domains)
+    result = _get_tavily_client().search(**search_kwargs)
     if isinstance(result, dict):
         raw_results = result.get("results") or []
         items_list = []
@@ -197,20 +206,56 @@ async def internet_search_async(
         topic: Literal["news", "finance", "general"] = "general",
         max_results: int = TAVILY_DEFAULT_MAX_RESULTS,
         include_raw_content: bool = False,
+        include_domains: Optional[List[str]] = None,
 ):
     """异步版本网络搜索：供 analysis_workflow / SSE 主链路 await。
 
     - 单查询：asyncio.to_thread + 同 internet_search 相同的 retry / 结构化 / SSE 发布
     - 多股票 / 多平台：拆分 + asyncio.gather 并发 + aggregate_results 汇总
+    - include_domains 非空：站点定向直连（查询词为手工构造的单平台任务，
+      跳过自动拆分，域名白名单透传给 Tavily）
     返回 dict{query, answer, results, _structured_items, aggregated_report}，
     与同步 internet_search @tool 返回字段完全对齐（可互换）。
     """
     monitor.report_tool(
         tool_name="网络搜索工具(异步)",
         args={"query": query, "topic": topic, "max_results": max_results,
-              "include_raw_content": include_raw_content},
+              "include_raw_content": include_raw_content,
+              "include_domains": include_domains},
     )
     import asyncio as _aio
+
+    # 站点定向：手工单平台任务，不走自动拆分（拆分子查询会丢失域名白名单）
+    if include_domains:
+        last_err = None
+        for attempt in range(1, _TAVILY_MAX_RETRIES + 1):
+            try:
+                t0 = time.time()
+                result = await _aio.to_thread(
+                    _raw_tavily_search_once, query, topic, max_results,
+                    include_raw_content, list(include_domains),
+                )
+                elapsed = time.time() - t0
+                if isinstance(result, dict):
+                    hits = len(result.get("_structured_items") or result.get("results") or [])
+                    if attempt > 1:
+                        print(f"[Tavily][async][定向] 第{attempt}次重试成功 ({elapsed:.1f}s, {hits}条, domains={include_domains})")
+                    else:
+                        print(f"[Tavily][async][定向] {elapsed:.1f}s, {hits}条, domains={include_domains}, query={query[:50]}")
+                    items_list = result.get("_structured_items") or []
+                    if items_list:
+                        _try_publish_retrieve_result("tavily", query, items_list)
+                return result
+            except _CONNECTION_ERRORS as e:
+                last_err = e
+                backoff = TAVILY_BACKOFF_BASE ** attempt
+                print(f"[Tavily][async][定向] 连接异常，第{attempt}次重试 (等待{backoff}s): {type(e).__name__}: {e} (domains={include_domains})")
+                await _aio.sleep(backoff)
+            except Exception as e:
+                print(f"[Tavily][async][定向] 搜索失败: {type(e).__name__}: {e} (domains={include_domains})")
+                return f"网络搜索失败: {type(e).__name__}: {str(e)}"
+        print(f"[Tavily][async][定向] 重试{_TAVILY_MAX_RETRIES}次全部失败: {type(last_err).__name__}: {last_err} (domains={include_domains})")
+        return f"网络搜索失败（网络连接异常，已重试{_TAVILY_MAX_RETRIES}次）: {type(last_err).__name__}: {str(last_err)}"
 
     _run_sync_p, run_async_p, _extract_sq = _get_split_support()
     if run_async_p is not None:

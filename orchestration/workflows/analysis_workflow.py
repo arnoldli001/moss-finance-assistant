@@ -59,6 +59,9 @@ STOCK_CACHE_TTL_DAYS = 7
 FOUR_SOURCE_DAG_TIMEOUT_SEC = 180.0
 TWO_SOURCE_DAG_TIMEOUT_SEC = 120.0
 ANALYSIS_DAG_MAX_TIMEOUT = 180.0  # 整个工作流外层 shield 超时
+# 盘前新闻：8 路并发搜索实测 ~7s 墙钟，故终态综答可给到 150s（搜索7s+综答150s+余量 < 180s 外墙）。
+# 120s 在 DeepSeek 拥堵 + 7800 字上下文时会超时（2026-09-08 实测 TimeoutError）。
+PREMARKET_FINAL_MODEL_TIMEOUT_SEC = 150.0
 RISK_DISCLAIMER = (
     "⚠️ 以上信息来自互联网公开资料，仅供参考，不构成投资建议。"
     "投资有风险，入市需谨慎，盈亏自负。"
@@ -132,9 +135,13 @@ def _try_hit_premarket_cache(force_refresh: bool = False) -> Optional[str]:
             age_hours = float(hours_back)
         if age_hours < PRE_MARKET_TTL_HOURS:
             try:
-                return fp.read_text(encoding="utf-8")
+                _cached = fp.read_text(encoding="utf-8")
             except Exception:
                 return None
+            # 0 字节/纯空白缓存视为未命中（旧版本失败时曾把空串写缓存，导致 6h 内全员拿空结果）
+            if _cached.strip():
+                return _cached
+            continue
     return None
 
 
@@ -256,6 +263,68 @@ async def _run_web_search(query: str, max_results: int = 8) -> SourceResult:
                             raw_text=(str(res)[:10000] + raw_text_extra))
     except Exception as e:
         return SourceResult(source_key="web_search", ok=False, error=f"{type(e).__name__}: {e}")
+
+
+# 盘前新闻：6 路平台定向并发搜索（Tavily include_domains 白名单限定站点）
+# 历史教训：旧实现把平台名拼进一条自然语言查询，Tavily 不做站点定向、拆分器只按股票拆，
+#          导致雪球/股吧/同花顺热榜等平台内容实际一条都搜不到（2026-09-08 线上故障）。
+# 每条 = (平台标签, 检索词, 域名白名单)；topic 统一 general——热榜/论坛/股吧不在 Tavily news 索引内。
+_PREMARKET_SITE_SEARCHES: tuple = (
+    ("雪球", "雪球 7x24快讯 热股榜 今日热门股票 热门话题 个股讨论",
+     ["xueqiu.com"]),
+    ("东方财富股吧", "东方财富股吧 今日热门个股 热门概念板块 热门话题 热议 股票",
+     ["guba.eastmoney.com", "eastmoney.com"]),
+    ("同花顺", "同花顺 今日头条 热榜 投资日历 快讯 重要公告 个股 事件",
+     ["10jqka.com.cn"]),
+    ("财联社", "财联社 今日A股头条 电报 热门文章排行 热门个股 新闻",
+     ["cls.cn"]),
+    ("百度人气榜", "百度股市通 今日股票人气排行榜 讨论热度最高 热门股票",
+     ["baidu.com"]),
+    ("韭研公社", "韭研公社 公社热榜 今日热门关键词 研报 个股 排行",
+     ["jiuyangongshe.com"]),
+)
+
+# 单路站点搜索超时墙：6 路并发取最慢一条，45s 上限保证搜索段 ≤ 180s DAG 总预算
+_PREMARKET_SITE_SEARCH_TIMEOUT_SEC: float = 45.0
+
+
+async def _run_site_search(label: str, query: str, domains: List[str],
+                           max_results: int = 8) -> SourceResult:
+    """Tavily 站点定向搜索（include_domains 白名单），单查询直连不拆分。
+
+    每条结果打上平台 channel 标签（如「雪球(xueqiu.com)」），Aggregator 渲染
+    prompt_context_block 时即带来源，供最终模型填「提及的平台」列。
+    """
+    src_key = f"web:{label}"
+    try:
+        from shared.data_sources.web_search import internet_search_async
+        res = await asyncio.wait_for(
+            internet_search_async(query=query, topic="general",
+                                  max_results=max_results, include_domains=domains),
+            timeout=_PREMARKET_SITE_SEARCH_TIMEOUT_SEC,
+        )
+        items: List[Any] = []
+        if isinstance(res, list):
+            items = list(res)
+        elif isinstance(res, dict):
+            items = list(res.get("_structured_items") or res.get("results") or [])
+        # 平台归属标签：覆盖通用 tavily channel，保证最终 prompt 里来源可追溯。
+        # 热榜页（雪球 hots / 韭研 study_hot 等）本身无发布日期——它们是「当下抓取的今日榜单」，
+        # 补当天日期，避免在 Aggregator 按日期排序时沉底被上下文截断裁掉。
+        _today = _now_cn().strftime("%Y-%m-%d")
+        for it in items:
+            if isinstance(it, dict):
+                it["channel"] = f"{label}({domains[0]})"
+                it["source_type"] = "web"
+                if not str(it.get("published_at") or "").strip():
+                    it["published_at"] = _today
+        return SourceResult(source_key=src_key, ok=isinstance(res, dict),
+                            items=items, raw_text=str(res)[:8000])
+    except asyncio.TimeoutError:
+        return SourceResult(source_key=src_key, ok=False,
+                            error=f"Timeout({_PREMARKET_SITE_SEARCH_TIMEOUT_SEC:.0f}s)")
+    except Exception as e:
+        return SourceResult(source_key=src_key, ok=False, error=f"{type(e).__name__}: {e}")
 
 
 async def _run_zsxq(query: str, stock_names: List[str], stock_codes: List[str], limit: int = 2) -> SourceResult:
@@ -520,83 +589,90 @@ async def run_analysis_workflow(
             _wf_r(title="📭 盘前新闻：6h 缓存未命中",
                   content=(
                       f"时间窗口：{_china_market_search_window_tip()}\n"
-                      "启动并发搜索：\n"
-                      "  ① Tavily 联网·A股多平台（雪球/东财股吧/同花顺/财联社…自动拆分并发）\n"
-                      "  ② Tavily 联网·美股夜盘专项（美光/海力士/谷歌/Meta/AAOI/康宁/英伟达）\n"
-                      "  ③ 知识星球（小作文热度 + 散户情绪）\n"
-                      "⏱ 预计联网阶段约 20-40s；之后云端 DeepSeek 综合作答约 30-60s。"
+                      "启动 8 路并发搜索（Tavily 站点定向 + 专项）：\n"
+                      "  ① 雪球（xueqiu.com）：7x24 快讯 / 热股榜 / 热门话题\n"
+                      "  ② 东方财富股吧（guba.eastmoney.com）：热门个股 / 热门概念 / 热门话题\n"
+                      "  ③ 同花顺（10jqka.com.cn）：头条 / 热榜 / 投资日历 / 快讯 / 公告\n"
+                      "  ④ 财联社（cls.cn）：A股头条 / 热门文章排行 / 热门个股\n"
+                      "  ⑤ 百度人气榜（baidu.com）：今日股票人气排行榜\n"
+                      "  ⑥ 韭研公社（jiuyangongshe.com）：公社热榜关键词前 10 股票\n"
+                      "  ⑦ 美股夜盘专项：美光/SK海力士/谷歌/Meta/应用光电/康宁/英伟达 盘前盘中涨跌\n"
+                      "  ⑧ 知识星球（盘前研报热度）\n"
+                      "⏱ 预计联网阶段约 20-40s；之后云端 DeepSeek-V4-Flash 综合作答约 30-60s。"
                   ), stage="cache")
-            # 缓存未命中 → 并发(web_search + 美股夜盘 + zsxq)
-            # 注意：不把用户 fullQuery 原文喂给搜索——实测 StockMatcher 会把「海力士/应用光电」
-            # 误匹配成 A 股（海力风电/光电股份），且子查询尾部是指令噪音。
-            # 改用后端构造的干净搜索词：A股词含 ≥2 平台 → 自动拆分并发（覆盖要求1 七大平台热榜）；
-            # 美股词用「SK海力士/AAOI」写法避开误匹配 → 单查询直达（覆盖要求2 美股夜盘名单）。
-            # 平台清单来自 constants 单一真源（空格串），修改平台只改 constants
-            from config.constants import (
-                PREMARKET_NEWS_PLATFORMS_SPACE as _pnp_space,
-                PREMARKET_NEWS_PLATFORMS_SLASH as _pnp_slash,
-            )
-            _web_q = f"今日盘前 A股 热门个股 新闻 简述 {_pnp_space} 股市早报"
-            _us_q = "美股 盘前行情 科技股 美光科技 SK海力士 谷歌 Meta AAOI 康宁 英伟达 涨跌 新闻"
-            # 【N1 拆分并发可视化】对实际搜索词先过拆分器，检测子查询数量（不执行搜索）
-            try:
-                from shared.search_split_aggregator import extract_sub_queries as _probe_split
-                _probe = _probe_split(_web_q)
-                if _probe is not None:
-                    _wf_r(title="🔀 拆分并发搜索",
-                          content=(
-                              f"检测到 多股票 / 多平台，自动拆分为 {len(_probe)} 条子查询并发执行：\n"
-                              + "\n".join(
-                                  f"  {i+1}. [{s.category}] {s.label}：{s.query[:70]}"
-                                  f"{'…' if len(s.query) > 70 else ''}（权重 {s.weight:.2f}）"
-                                  for i, s in enumerate(_probe)
-                              )
-                          ), stage="parallel")
-            except Exception:
-                pass
-            # 缓存未命中 → 并发(web_search + 美股夜盘 + zsxq)
+            # 缓存未命中 → 8 路并发（6 平台站点定向 + 美股夜盘 + zsxq）
+            # 站点定向用 Tavily include_domains 白名单：旧实现把平台名拼进一条自然语言查询，
+            # Tavily 不做站点定向、拆分器只按股票拆，导致各平台热榜内容一条都搜不到。
+            # 注意：不把用户 fullQuery 原文喂给美股搜索——StockMatcher 会把「海力士/应用光电」
+            # 误匹配成 A 股（海力风电/光电股份）；美股词用「SK海力士/AAOI」写法避开误匹配。
+            _us_q = "美股 盘前（盘中）行情 科技股 MU美光 SK海力士 谷歌 Meta AAOI 康宁 英伟达 的最新涨跌及新闻事件"
             win_tip = _china_market_search_window_tip()
-            zsxq_task = _run_zsxq("盘前新闻 今日 小作文 公告", stock_names=[], stock_codes=[], limit=3)
-            web_task = _run_web_search(query=_web_q, max_results=10)
+            site_tasks = [
+                _run_site_search(label=_lbl, query=_q, domains=_dom, max_results=8)
+                for _lbl, _q, _dom in _PREMARKET_SITE_SEARCHES
+            ]
             us_task = _run_web_search(query=_us_q, max_results=8)
-            _wf_p(stage="盘前新闻：联网 + 美股夜盘 + 知识星球 并发检索中", percent=35,
-                  detail="3 个异步任务并行，等待 gather 返回 ...")
-            web_res, us_res, zsxq_res = await asyncio.gather(web_task, us_task, zsxq_task, return_exceptions=False)
-            raw_all = [*web_res.items, *us_res.items, *zsxq_res.items]
-            ag = agg.aggregate(raw_all, thread_id=thread_id, append_to_shared_pool=True)
+            zsxq_task = _run_zsxq("盘前新闻 今日 小作文 公告", stock_names=[], stock_codes=[], limit=3)
+            _wf_p(stage="盘前新闻：6 平台定向 + 美股夜盘 + 知识星球 并发检索中", percent=35,
+                  detail="8 个异步任务并行（单路 45s 超时墙），等待 gather 返回 ...")
+            _gathered = await asyncio.gather(*site_tasks, us_task, zsxq_task, return_exceptions=False)
+            site_res = list(_gathered[:len(_PREMARKET_SITE_SEARCHES)])
+            us_res = _gathered[len(_PREMARKET_SITE_SEARCHES)]
+            zsxq_res = _gathered[len(_PREMARKET_SITE_SEARCHES) + 1]
+            # 美股夜盘条目同样补 channel 标签 + 当天日期：
+            # topic=news 命中的富途/tradingkey 快讯含真实涨跌幅但无日期，不补会在聚合排序中沉底被截断。
+            _today_us = _now_cn().strftime("%Y-%m-%d")
+            for _uit in us_res.items:
+                if isinstance(_uit, dict):
+                    _uit["channel"] = "美股夜盘专项"
+                    if not str(_uit.get("published_at") or "").strip():
+                        _uit["published_at"] = _today_us
+            raw_all: List[Any] = []
+            for _sr in site_res:
+                raw_all.extend(_sr.items)
+            raw_all.extend(us_res.items)
+            raw_all.extend(zsxq_res.items)
+            # 盘前分支放大上下文配额：默认块仅 2000 字，6 平台 40+ 条热榜会被截到只剩前几条；
+            # 终态 prompt 截取 9000 字（头部状态行 ~300），故块给到 7800，保证平台热榜条目可见。
+            ag = agg.aggregate(raw_all, thread_id=thread_id, append_to_shared_pool=True,
+                               context_max_chars=7800)
             aggregator_stats = ag.stats
+            _site_status = "\n".join(
+                f"平台定向·{_sr.source_key.split(':', 1)[-1]}："
+                f"{'成功' if _sr.ok else '失败'} 条目={len(_sr.items)} {_sr.error or ''}"
+                for _sr in site_res
+            )
             aggregated_prompt_context = (
                 f"【盘前新闻搜索】{win_tip}\n"
-                f"联网搜索(A股多平台): {web_res.ok} 条目={len(web_res.items)} 异常={web_res.error}\n"
+                f"{_site_status}\n"
                 f"美股夜盘专项: {us_res.ok} 条目={len(us_res.items)} 异常={us_res.error}\n"
                 f"知识星球: {zsxq_res.ok} 条目={len(zsxq_res.items)} 异常={zsxq_res.error}\n"
+                "【各平台检索条目（channel 字段即来源平台，填「提及的平台」列时以此为准）】\n"
                 f"{ag.prompt_context_block}\n"
             )
+            _site_counts = " / ".join(
+                f"{_sr.source_key.split(':', 1)[-1]} {len(_sr.items)}条" for _sr in site_res
+            )
             _wf_p(stage="盘前新闻：多源并发结束，结果聚合中", percent=75,
-                  detail=(f"Web {len(web_res.items)} 条 / 美股 {len(us_res.items)} 条 / ZSXQ {len(zsxq_res.items)} 条 → "
+                  detail=(f"{_site_counts} | 美股 {len(us_res.items)} 条 / ZSXQ {len(zsxq_res.items)} 条 → "
                           f"合并去重 → 进入 DeepSeek 最终推理"))
+            _site_lines = "\n".join(
+                f"  {'✅' if _sr.ok else '❌'} {_sr.source_key.split(':', 1)[-1]}："
+                f"{'命中 ' + str(len(_sr.items)) + ' 条' if _sr.ok else (_sr.error or '无结果')}"
+                for _sr in site_res
+            )
             _wf_r(title="✅ 多源并发检索完成",
                   content=(
-                      f"🌐 联网搜索（Tavily·A股多平台）：{'成功' if web_res.ok else '失败'}，"
-                      f"命中 {len(web_res.items)} 条；{web_res.error or ''}\n"
+                      f"🌐 6 路平台定向搜索（Tavily include_domains 白名单）：\n{_site_lines}\n"
                       f"🇺🇸 美股夜盘专项：{'成功' if us_res.ok else '失败'}，"
                       f"命中 {len(us_res.items)} 条；{us_res.error or ''}\n"
                       f"💬 知识星球：{'成功' if zsxq_res.ok else '失败'}，"
                       f"命中 {len(zsxq_res.items)} 条；{zsxq_res.error or ''}\n"
                       f"🔗 聚合统计："
                       + (", ".join(f"{k}={v}" for k, v in list(ag.stats.items())[:6]) or "（无）")
-                      + "\n"
-                      + (
-                          f"🔀 并发汇总报告：\n{str(web_res.raw_text)[:800]}"
-                          if isinstance(web_res.raw_text, str) and "并发汇总" in web_res.raw_text
-                          else ""
-                      )
                   ), stage="retrieve")
-            # 最终推理：直连云端 DeepSeek-V4-Flash 综合作答（120s）。
-            # 2026-09-08 用户决策：推理用云端 V4_FLASH（快 ~2.5 倍、零编造、诚实标注素材缺口）；
             # 本地 deepseek-r1:7b 留给单股深度推演类任务，不再用于本链路。
             # 历史教训：不走 run_deep_agent（agent 循环在 DeepSeek 拥堵时无日志返回空串）。
-            # 保留用户手调措辞「盘前研报热度简报」与任务要求预算 [:2400]。
             _wf_p(stage="盘前新闻：DeepSeek 最终推理中", percent=88,
                   detail="结合 A股多平台 + 美股夜盘 + 知识星球聚合素材，生成最终答复（约 30-60s）...")
             _wf_r(title="🧠 最终推理（云端 DeepSeek-V4-Flash）",
@@ -606,17 +682,29 @@ async def run_analysis_workflow(
                       "基于聚合素材输出结构化盘前研报热度简报，并在结尾附风险声明；素材未覆盖的项目如实标注。"
                   ), stage="model")
             _fin_prompt = (
-                "你是一名金融信息分析师。以下是一次综合网络搜索（A股多平台热度 + 美股夜盘专项）"
-                "与知识星球聚合的搜索结果。\n\n"
-                f"【用户任务要求（必须严格遵守）】\n{str(query)[:2400]}\n\n"
-                "执行要求：\n"
-                "1. 按用户任务要求组织输出（清单/排序/表格/字数限制等全部遵守）；\n"
-                "2. 用户要求中提到的具体平台（" + _pnp_slash + "）"
-                "或具体美股（美光/海力士/谷歌/Meta/应用光电/康宁/英伟达），若素材未覆盖，"
-                "明确标注「素材未覆盖」，禁止编造；\n"
-                "3. 结尾必须单独一行附风险声明：\n"
-                "⚠️ 以上信息来自互联网公开资料，仅供参考，不构成投资建议。投资有风险，入市需谨慎，盈亏自负。\n\n"
-                f"【素材】\n{str(aggregated_prompt_context)[:9000]}"
+                "你是一名金融信息分析师。以下是 6 大财经平台站点定向搜索"
+                "（雪球/东方财富股吧/同花顺/财联社/百度人气榜/韭研公社，每条结果的 channel 字段即来源平台）"
+                " + 美股夜盘专项 + 知识星球聚合的搜索结果。\n\n"
+                f"【搜索结果】\n{str(aggregated_prompt_context)[:9000]}\n\n"
+                "【输出结构（必须严格按以下三段 markdown 格式输出，禁止增减段落、禁止用 HTML 标签）】\n"
+                "\n"
+                "### 1. 平台热点总结（热门个股/事件）\n"
+                "以 markdown 表格输出，表头固定为：| 股票/板块 | 事件 | 提及的平台 |\n"
+                "（股票/板块列可填个股名或概念板块名；事件列简述热点事件≤30字；提及的平台列填 channel 字段对应的平台名，多平台用顿号分隔）\n"
+                "\n"
+                "### 2. 美股相关科技股盘前/盘中表现\n"
+                "以 markdown 表格输出，表头固定为：| 股票 | 涨跌幅 | 新闻 |\n"
+                "（股票固定为：美光、SK海力士、谷歌、Meta、应用光电、康宁、英伟达；涨跌幅有数据填百分比如+5%/-2.3%，无则填「无」；新闻列简述当日要点，无则填「搜索结果未提供相关行情/新闻」）\n"
+                "\n"
+                "### 3. 推理分析与预测\n"
+                "**利好 A股概念/个股：**\n"
+                "- 板块/概念：简述利好逻辑，可列具体 A股个股名（需标注「需自选验证」）。\n"
+                "**利空 A股概念/个股：**\n"
+                "- 板块/概念：简述利空逻辑。\n"
+                "\n"
+                "（若某方向素材不足，仍保留对应标题并写「暂无明确素材」；禁止编造未出现的个股和数据。）\n"
+                "\n"
+                "最后单独一行附风险声明：⚠️ 以上信息来自互联网公开资料，仅供参考，不构成投资建议。投资有风险，入市需谨慎，盈亏自负。\n"
             )
             final_answer = ""
             try:
@@ -624,21 +712,30 @@ async def run_analysis_workflow(
                 from langchain_core.messages import HumanMessage as _HM
                 _fin_resp = await asyncio.wait_for(
                     _base_model.ainvoke([_HM(content=_fin_prompt)]),
-                    timeout=120.0,
+                    timeout=PREMARKET_FINAL_MODEL_TIMEOUT_SEC,
                 )
                 final_answer = (_fin_resp.content or "").strip() if hasattr(_fin_resp, "content") else str(_fin_resp)
                 trace["final_model"] = "cloud:DEEPSEEK_V4_FLASH"
             except Exception as _fin_err:
                 print(f"[盘前新闻] 直连综合作答失败: {_fin_err!r}")
+                trace["final_model_error"] = f"{type(_fin_err).__name__}: {_fin_err}"
                 final_answer = ""
-            _wf_p(stage="盘前新闻：写入 6h 本地缓存", percent=97,
-                  detail="推理完成，结果归档到本地缓存，后续相同问题秒回 ...")
-            # 保存到文件
-            try:
-                saved = await asyncio.to_thread(_save_premarket_result, final_answer)
-                trace["premarket_saved_to"] = str(saved)
-            except Exception as _e:
-                trace["premarket_save_error"] = f"{type(_e).__name__}: {_e}"
+            if final_answer:
+                _wf_p(stage="盘前新闻：写入 6h 本地缓存", percent=97,
+                      detail="推理完成，结果归档到本地缓存，后续相同问题秒回 ...")
+                # 保存到文件（空结果禁止写缓存——否则 6h 内所有用户都拿到空串）
+                try:
+                    saved = await asyncio.to_thread(_save_premarket_result, final_answer)
+                    trace["premarket_saved_to"] = str(saved)
+                except Exception as _e:
+                    trace["premarket_save_error"] = f"{type(_e).__name__}: {_e}"
+            else:
+                _wf_p(stage="盘前新闻：综答失败，跳过缓存", percent=97,
+                      detail="云端模型超时或异常，本次结果不写入缓存，下次请求自动重试 ...")
+                final_answer = (
+                    "⚠️ 盘前新闻综合作答失败（云端模型超时或繁忙），本次搜索已完成但未能生成简报，请稍后重试。\n\n"
+                    "⚠️ 以上信息来自互联网公开资料，仅供参考，不构成投资建议。投资有风险，入市需谨慎，盈亏自负。"
+                )
             return WorkflowResult(router_decision=router, final_answer=final_answer,
                                   branch_trace=trace, aggregator_stats=aggregator_stats)
 

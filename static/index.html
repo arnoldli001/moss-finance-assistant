@@ -102,6 +102,17 @@
   .msg.user .zsxq-table { background: #fff; color: #1d1d1f; border-radius: 6px; }
   .msg.user .zsxq-table th { background: #eef1f5; color: #1d1d1f; }
   .msg.user .zsxq-table td { border-color: #d8dde3; }
+  /* 通用 markdown 渲染（盘前新闻结构化输出） */
+  .msg .md-h3 { font-weight: 700; font-size: 14px; margin: 12px 0 6px; color: #1d1d1f; }
+  .msg.assistant .md-h3 { color: #1565c0; }
+  .msg .md-table { border-collapse: collapse; width: 100%; margin: 6px 0 10px; font-size: 12.5px; table-layout: auto; }
+  .msg .md-table th, .msg .md-table td { border: 1px solid #d8dde3; padding: 5px 8px; text-align: left; vertical-align: top; word-break: break-word; }
+  .msg .md-table th { background: #eef3fb; font-weight: 600; white-space: nowrap; }
+  .msg .md-table tr:nth-child(even) td { background: #fafbfd; }
+  .msg.user .md-table { background: #fff; color: #1d1d1f; border-radius: 6px; }
+  .msg.user .md-table th { background: #eef1f5; color: #1d1d1f; }
+  .msg .md-list { margin: 4px 0 6px; padding-left: 22px; }
+  .msg .md-list li { margin: 2px 0; line-height: 1.5; }
   /* 消息操作栏（hover显示复制） */
   .msg-actions { display: flex; flex-direction: column; gap: 4px; opacity: 0; transition: opacity 0.2s; padding-top: 6px; flex-shrink: 0; }
   .msg-wrap:hover .msg-actions { opacity: 1; }
@@ -1501,12 +1512,12 @@ function _streamAppendText(el, chunk) {
 }
 
 // _streamRenderText：用 HTML（含引用角标）替换当前正文（仅在 [N] 出现的 done/source 刷新时调用）
+// 盘前新闻等结构化输出走 markdown 渲染（表格/标题/列表/加粗），普通文本渲染结果不变
 function _streamRenderText(el, text) {
   if (!el) return;
   const span = el.querySelector('span.stream-text');
   if (!span) return;
-  const escaped = _escapeHtml(text).replace(/\n/g, '<br>');
-  span.innerHTML = escaped;
+  span.innerHTML = _renderMarkdown(text);
   _streamAttachCitationLinks(el);
   const chat = $('chat');
   if (chat) chat.scrollTop = chat.scrollHeight;
@@ -1520,6 +1531,69 @@ function _escapeHtml(s) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+// _renderMarkdown：轻量 markdown 渲染（盘前新闻等结构化输出用）。
+// 支持：### 三级标题、**加粗**、- 列表、|...| 表格。全程先 escape 再解析，防 XSS。
+function _renderMarkdown(text) {
+  if (text === undefined || text === null || text === '') return '';
+  const lines = String(text).split('\n');
+  const out = [];
+  let tableBuf = [];
+  let inList = false;
+
+  function flushTable() {
+    if (tableBuf.length < 2) {
+      for (const r of tableBuf) out.push('<div>' + _inlineMd(r) + '</div>');
+      tableBuf = [];
+      return;
+    }
+    const headerCells = tableBuf[0].replace(/^\||\|$/g, '').split('|').map(s => s.trim());
+    const bodyRows = tableBuf.slice(2).map(r => r.replace(/^\||\|$/g, '').split('|').map(s => s.trim()));
+    let t = '<table class="md-table"><thead><tr>';
+    for (const c of headerCells) t += '<th>' + _inlineMd(c) + '</th>';
+    t += '</tr></thead><tbody>';
+    for (const row of bodyRows) {
+      t += '<tr>';
+      for (const c of row) t += '<td>' + _inlineMd(c) + '</td>';
+      t += '</tr>';
+    }
+    t += '</tbody></table>';
+    out.push(t);
+    tableBuf = [];
+  }
+
+  for (const rawLine of lines) {
+    const line = rawLine.replace(/\s+$/, '');
+    const trimmed = line.trim();
+    // 表格行（以 | 开头并以 | 结尾，且不是分隔行的全匹配）
+    if (trimmed.startsWith('|') && trimmed.endsWith('|') && trimmed.length > 3) {
+      tableBuf.push(trimmed);
+      inList = false;
+      continue;
+    }
+    if (tableBuf.length) flushTable();
+
+    if (trimmed === '') { out.push('<br>'); inList = false; continue; }
+    const h3 = line.match(/^###\s+(.+)$/);
+    if (h3) { out.push('<div class="md-h3">' + _inlineMd(h3[1]) + '</div>'); inList = false; continue; }
+    const li = line.match(/^[-*]\s+(.+)$/);
+    if (li) {
+      if (!inList) { out.push('<ul class="md-list">'); inList = true; }
+      out.push('<li>' + _inlineMd(li[1]) + '</li>');
+      continue;
+    }
+    if (inList) { out.push('</ul>'); inList = false; }
+    out.push('<div>' + _inlineMd(line) + '</div>');
+  }
+  if (tableBuf.length) flushTable();
+  if (inList) out.push('</ul>');
+  return out.join('');
+}
+
+// 内联 markdown：加粗 **xxx**（已在外层 escape）
+function _inlineMd(s) {
+  return _escapeHtml(s).replace(/\*\*([^*]+?)\*\*/g, '<strong>$1</strong>');
 }
 
 // ===== 前端最后一道"展示脱敏"：绝对路径（盘符 C:\ D:\…、Unix /usr…）统一
@@ -2477,6 +2551,8 @@ function appendMessage(role, content, options) {
     div.appendChild(meta);
     div.appendChild(_buildZsxqTable(_zsxq.rows));
     div.classList.add('zsxq-table-msg');
+  } else if (role === 'assistant') {
+    div.innerHTML = _renderMarkdown(content);
   } else {
     div.textContent = content;
   }
@@ -2499,7 +2575,8 @@ function appendMessage(role, content, options) {
     copyBtn.innerHTML = '📋';
     copyBtn.onclick = async (e) => {
       e.stopPropagation();
-      await copyText(content);
+      // 流式消息闭包 content 为空串，兜底读 finalize 写回的 dataset.content
+      await copyText(div.dataset.content || (wrap && wrap.dataset.content) || content);
       copyBtn.classList.add('copied');
       copyBtn.innerHTML = '✓';
       setTimeout(() => { copyBtn.classList.remove('copied'); copyBtn.innerHTML = '📋'; }, APP_CONSTANTS.COPY_BTN_HIGHLIGHT_MS);
@@ -2597,7 +2674,11 @@ function bindContextMenu(msgEl, content, role, turnIndex) {
 
 // ============ 显示/隐藏上下文菜单 ============
 function showContextMenu(x, y, content, role, msgEl, turnIndex) {
-  currentContextContent = content;
+  // 流式消息创建时 content 为空串、最终文本在 finalize 时写回 dataset.content，
+  // 这里兜底读取最新内容（否则右键复制/分享拿到的是空串 → 分享图空白）
+  currentContextContent = content
+    || (msgEl && (msgEl.dataset.content || (msgEl.parentNode && msgEl.parentNode.dataset.content)))
+    || '';
   currentContextRole = role;
   currentContentEl = msgEl;
   currentTurnIndex = turnIndex != null ? Number(turnIndex) : null;
@@ -3017,6 +3098,15 @@ async function generateLongImage(msgs) {
       contentH += rowH;
       continue;
     }
+    // 盘前新闻 markdown 结构化消息（含表格）：解析 h3/表格/列表/段落，Canvas 真表格绘制
+    if (m.role === 'assistant' && (typeof _hasMdTable === 'function') && _hasMdTable(raw)) {
+      const ml = layoutMdShare(mctx, _parseMdBlocks(raw), msgMaxW - bubblePadX * 2);
+      const bubbleH = bubblePadY * 2 + ml.totalH;
+      const rowH = bubbleH + gap;
+      layoutRows.push({ msg: { role: m.role, content: '' }, lines: [], md: ml, bubbleH, rowH });
+      contentH += rowH;
+      continue;
+    }
     const text = raw.replace(/<[^>]+>/g, '');  // 去除 HTML 标签
     const lines = splitTextToLines(mctx, text, msgMaxW - bubblePadX * 2);
     const bubbleH = lines.length * lineH + bubblePadY * 2;
@@ -3061,12 +3151,12 @@ async function generateLongImage(msgs) {
     const isUser = row.msg.role === 'user';
 
     // 气泡定位（无头像）：用户消息右对齐、AI 消息左对齐
-    const bubbleW = row.zsxq ? msgMaxW : Math.min(msgMaxW, bubblePadX * 2 + measureLinesWidth(mctx, row.lines));
+    const bubbleW = (row.zsxq || row.md) ? msgMaxW : Math.min(msgMaxW, bubblePadX * 2 + measureLinesWidth(mctx, row.lines));
     const bx = isUser ? (baseW - padding - bubbleW) : padding;
     const by = y + 4;
 
     drawRoundRect(ctx, bx, by, bubbleW, row.bubbleH, 14);
-    if (row.zsxq) {
+    if (row.zsxq || row.md) {
       ctx.fillStyle = '#ffffff';
       ctx.fill();
       ctx.strokeStyle = '#e3e6eb';
@@ -3089,6 +3179,13 @@ async function generateLongImage(msgs) {
     // 盘前研报表格：绘制元信息行 + 真表格
     if (row.zsxq) {
       drawZsxqShareTable(ctx, row.zsxq.layout, bx + bubblePadX, by + bubblePadY, row.zsxq.meta);
+      y += row.rowH;
+      continue;
+    }
+
+    // 盘前新闻 markdown：绘制 h3 标题 + 真表格 + 列表/段落
+    if (row.md) {
+      drawMdShare(ctx, row.md, bx + bubblePadX, by + bubblePadY);
       y += row.rowH;
       continue;
     }
@@ -3243,6 +3340,254 @@ function drawZsxqShareTable(ctx, L, tx, ty, meta) {
     if (gx < tx + L.tableW) { ctx.beginPath(); ctx.moveTo(gx, tableTop); ctx.lineTo(gx, tableTop + L.tableH); ctx.stroke(); }
   }
   ctx.textAlign = 'start';
+  ctx.font = prevFont;
+}
+
+// ============ 盘前新闻 markdown 结构化分享图（Canvas 真表格，复用 zsxq 长图模式） ============
+const MD_SHARE_FONT = '13px -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif';
+const MD_SHARE_BOLD_FONT = 'bold 13px -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif';
+const MD_SHARE_H3_FONT = 'bold 16px -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif';
+const MD_SHARE_CELL_LINE_H = 17;
+const MD_SHARE_PARA_LINE_H = 21;
+
+// 检测：markdown 表格（表头行 + 分隔行）——盘前新闻固定三段式输出含表格
+function _hasMdTable(text) {
+  return typeof text === 'string' && /\n\|[^\n]*\|\s*\n\|[\s:|-]{3,}\|/.test('\n' + text);
+}
+
+// 解析 markdown 为结构块：h3 / table / list / para（空行忽略，块间距由布局控制）
+function _parseMdBlocks(text) {
+  const lines = String(text).replace(/\r/g, '').split('\n');
+  const blocks = [];
+  const isTableRow = (s) => { const t = String(s || '').trim(); return t.startsWith('|') && t.endsWith('|') && t.length > 3; };
+  const isSepRow = (s) => /^\|[\s:|-]+\|$/.test(String(s || '').trim());
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    const t = line.trim();
+    if (t === '') { i++; continue; }
+    const h3 = line.match(/^###\s+(.+)$/);
+    if (h3) { blocks.push({ type: 'h3', text: h3[1].trim() }); i++; continue; }
+    if (isTableRow(t)) {
+      const tbl = [];
+      while (i < lines.length && isTableRow(lines[i])) { tbl.push(lines[i].trim()); i++; }
+      const rows = tbl.filter(r => !isSepRow(r)).map(r =>
+        r.replace(/^\||\|$/g, '').split('|').map(c => c.trim()));
+      if (rows.length >= 1) blocks.push({ type: 'table', headers: rows[0], rows: rows.slice(1) });
+      continue;
+    }
+    if (/^[-*]\s+/.test(t)) {
+      const items = [];
+      while (i < lines.length) {
+        const m = lines[i].match(/^\s*[-*]\s+(.+)$/);
+        if (!m) break;
+        items.push(m[1].trim());
+        i++;
+      }
+      blocks.push({ type: 'list', items });
+      continue;
+    }
+    blocks.push({ type: 'para', text: t });
+    i++;
+  }
+  return blocks;
+}
+
+// 富文本折行：支持 **bold** 段切换，返回 [[{text, bold}, ...], ...] 行数组
+function _layoutRichLines(mctx, text, maxW) {
+  const prev = mctx.font;
+  const segs = [];
+  const re = /\*\*([^*]+?)\*\*/g;
+  let last = 0, mm;
+  while ((mm = re.exec(text)) !== null) {
+    if (mm.index > last) segs.push({ text: text.slice(last, mm.index), bold: false });
+    segs.push({ text: mm[1], bold: true });
+    last = mm.index + mm[0].length;
+  }
+  if (last < text.length) segs.push({ text: text.slice(last), bold: false });
+
+  const out = [];
+  let cur = [];
+  let curW = 0;
+  for (const seg of segs) {
+    let rest = seg.text;
+    const bold = seg.bold;
+    while (rest.length) {
+      const ch = rest[0];
+      mctx.font = bold ? MD_SHARE_BOLD_FONT : MD_SHARE_FONT;
+      const w = mctx.measureText(ch).width;
+      if (curW + w > maxW && cur.length) {
+        out.push(cur);
+        cur = [];
+        curW = 0;
+        if (ch === ' ') { rest = rest.slice(1); continue; }
+      }
+      const tail = cur[cur.length - 1];
+      if (tail && tail.bold === bold) tail.text += ch;
+      else cur.push({ text: ch, bold });
+      curW += w;
+      rest = rest.slice(1);
+    }
+  }
+  if (cur.length) out.push(cur);
+  mctx.font = prev;
+  return out.length ? out : [[{ text: '', bold: false }]];
+}
+
+// 布局：计算每个块的高度与表格列宽（列宽按内容度量加权，最小列宽保护，末列吸收取整误差）
+function layoutMdShare(mctx, blocks, innerW) {
+  const prevFont = mctx.font;
+  mctx.font = MD_SHARE_FONT;
+  const cellPadX = 8, cellPadY = 6, headerMinH = 26;
+  const h3H = 28, gapAfterH3 = 6, gapAfterBlock = 10;
+  const laid = [];
+  let totalH = 0;
+
+  blocks.forEach((b) => {
+    if (b.type === 'h3') {
+      laid.push({ type: 'h3', text: b.text, h: h3H });
+      totalH += h3H + gapAfterH3;
+    } else if (b.type === 'para') {
+      const lines = _layoutRichLines(mctx, b.text, innerW);
+      const h = lines.length * MD_SHARE_PARA_LINE_H;
+      laid.push({ type: 'para', lines, h });
+      totalH += h + gapAfterBlock;
+    } else if (b.type === 'list') {
+      const items = b.items.map(it => ({
+        lines: _layoutRichLines(mctx, it, innerW - 16),
+      }));
+      const h = items.reduce((s, it) => s + it.lines.length * MD_SHARE_PARA_LINE_H, 0) + 2;
+      laid.push({ type: 'list', items, h });
+      totalH += h + gapAfterBlock;
+    } else if (b.type === 'table') {
+      const ncol = Math.max(1, b.headers.length);
+      const colWs = new Array(ncol).fill(0);
+      [b.headers, ...b.rows].forEach(r => {
+        for (let c = 0; c < ncol; c++) {
+          const txt = r[c] != null ? String(r[c]) : '';
+          const w = mctx.measureText(txt.slice(0, 40)).width + cellPadX * 2;
+          if (w > colWs[c]) colWs[c] = w;
+        }
+      });
+      const minCol = 56;
+      let weights = colWs.map(w => Math.min(Math.max(w, minCol), innerW * 0.55));
+      const sumW = weights.reduce((s, w) => s + w, 0);
+      const colWidths = weights.map(w => Math.floor(w / sumW * innerW));
+      colWidths[ncol - 1] += innerW - colWidths.reduce((s, w) => s + w, 0);
+      const colXs = [];
+      let cx = 0;
+      for (const w of colWidths) { colXs.push(cx); cx += w; }
+
+      const headerCells = b.headers.map((hh, c) =>
+        splitTextToLines(mctx, hh, colWidths[c] - cellPadX * 2));
+      const dataRows = b.rows.map(r => {
+        const cells = [];
+        let maxLines = 1;
+        for (let c = 0; c < ncol; c++) {
+          const lines = splitTextToLines(mctx, r[c] != null ? r[c] : '', colWidths[c] - cellPadX * 2);
+          cells.push(lines);
+          maxLines = Math.max(maxLines, lines.length);
+        }
+        return { cells, rowH: maxLines * MD_SHARE_CELL_LINE_H + cellPadY * 2 };
+      });
+      const headerLines = headerCells.reduce((s, hc) => Math.max(s, hc.length), 1);
+      const realHeaderH = Math.max(headerMinH, headerLines * MD_SHARE_CELL_LINE_H + cellPadY * 2);
+      const tableH = realHeaderH + dataRows.reduce((s, r) => s + r.rowH, 0);
+      laid.push({
+        type: 'table', colWidths, colXs, tableW: innerW,
+        headerCells, realHeaderH, dataRows, tableH, cellPadX, cellPadY,
+      });
+      totalH += tableH + gapAfterBlock;
+    }
+  });
+  mctx.font = prevFont;
+  return { blocks: laid, totalH: Math.max(0, totalH - gapAfterBlock) };
+}
+
+// 绘制：h3 蓝色标题 / 段落与列表项富文本（**加粗**）/ 真表格（表头底色 + 网格线）
+function drawMdShare(ctx, L, tx, ty) {
+  const prevFont = ctx.font;
+  const prevAlign = ctx.textAlign;
+  ctx.textBaseline = 'top';
+  ctx.textAlign = 'left';
+  let y = ty;
+
+  const drawRich = (lines, x, yy) => {
+    for (const ln of lines) {
+      let xx = x;
+      for (const seg of ln) {
+        ctx.font = seg.bold ? MD_SHARE_BOLD_FONT : MD_SHARE_FONT;
+        ctx.fillText(seg.text, xx, yy);
+        xx += ctx.measureText(seg.text).width;
+      }
+      yy += MD_SHARE_PARA_LINE_H;
+    }
+    return yy;
+  };
+
+  for (const b of L.blocks) {
+    if (b.type === 'h3') {
+      ctx.font = MD_SHARE_H3_FONT;
+      ctx.fillStyle = '#1565c0';
+      ctx.fillText(b.text, tx, y);
+      y += b.h;
+    } else if (b.type === 'para') {
+      ctx.fillStyle = '#1d1d1f';
+      y = drawRich(b.lines, tx, y);
+      y += 10;
+    } else if (b.type === 'list') {
+      for (const it of b.items) {
+        ctx.font = MD_SHARE_FONT;
+        ctx.fillStyle = '#1565c0';
+        ctx.beginPath();
+        ctx.arc(tx + 4, y + 8, 2.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#1d1d1f';
+        y = drawRich(it.lines, tx + 16, y);
+      }
+      y += 10;
+    } else if (b.type === 'table') {
+      const bottom = y + b.tableH;
+      // 表头底色
+      ctx.fillStyle = '#eef3fb';
+      ctx.fillRect(tx, y, b.tableW, b.realHeaderH);
+      // 表头文字（加粗）
+      ctx.fillStyle = '#4a5568';
+      ctx.font = MD_SHARE_BOLD_FONT;
+      b.headerCells.forEach((lines, c) => {
+        const cx = tx + b.colXs[c] + b.cellPadX;
+        lines.forEach((ln, li) => ctx.fillText(ln, cx, y + b.cellPadY + li * MD_SHARE_CELL_LINE_H));
+      });
+      // 数据行
+      let ry = y + b.realHeaderH;
+      ctx.font = MD_SHARE_FONT;
+      for (const dr of b.dataRows) {
+        ctx.fillStyle = '#1d1d1f';
+        dr.cells.forEach((lines, c) => {
+          const cx = tx + b.colXs[c] + b.cellPadX;
+          lines.forEach((ln, li) => ctx.fillText(ln, cx, ry + b.cellPadY + li * MD_SHARE_CELL_LINE_H));
+        });
+        ry += dr.rowH;
+      }
+      // 网格线（外框 + 表头分隔 + 行间 + 列间）
+      ctx.strokeStyle = '#d8dde3';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(tx, y, b.tableW, b.tableH);
+      ctx.beginPath(); ctx.moveTo(tx, y + b.realHeaderH); ctx.lineTo(tx + b.tableW, y + b.realHeaderH); ctx.stroke();
+      ry = y + b.realHeaderH;
+      for (const dr of b.dataRows) {
+        ry += dr.rowH;
+        if (ry < bottom) { ctx.beginPath(); ctx.moveTo(tx, ry); ctx.lineTo(tx + b.tableW, ry); ctx.stroke(); }
+      }
+      let gx = tx;
+      for (let c = 0; c < b.colWidths.length - 1; c++) {
+        gx += b.colWidths[c];
+        ctx.beginPath(); ctx.moveTo(gx, y); ctx.lineTo(gx, bottom); ctx.stroke();
+      }
+      y = bottom + 10;
+    }
+  }
+  ctx.textAlign = prevAlign;
   ctx.font = prevFont;
 }
 
