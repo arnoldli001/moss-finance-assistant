@@ -641,7 +641,7 @@ async def run_analysis_workflow(
                       "  ④ 财联社(cls.cn)：A股头条 / 热门文章排行 / 热门个股\n"
                       "  ⑤ 百度人气榜(baidu.com)：今日股票人气排行榜\n"
                       "  ⑥ 韭研公社(jiuyangongshe.com)：公社热榜关键词前 10 股票\n"
-                      "  ⑦ 美股涨跌(baidu.com)：美光科技公司(MU)/SK海力士(000660.KS)/谷歌(GOOGL)/应用光电(AAOI)/康宁(GLW)/英伟达(NVDA)等热门美股最新盘前/盘中涨跌幅、最新相关新闻\n"
+                      "  ⑦ 美股涨跌(baidu.com)：美光(MU)/SK海力士(000660.KS)/谷歌(GOOGL)/应用光电(AAOI)/康宁(GLW)/英伟达(NVDA)等热门美股的最新涨跌幅、相关新闻\n"
                       "  ⑧ 知识星球（盘前研报热度）\n"
                       "⏱ 预计联网阶段约 20-40s；之后云端 DeepSeek-V4-Flash 综合作答约 30-60s。"
                   ), stage="cache")
@@ -650,7 +650,7 @@ async def run_analysis_workflow(
             # Tavily 不做站点定向、拆分器只按股票拆，导致各平台热榜内容一条都搜不到。
             # 注意：不把用户 fullQuery 原文喂给美股搜索——StockMatcher 会把「海力士/应用光电」
             # 误匹配成 A 股（海力风电/光电股份）；美股词用「SK海力士/AAOI」写法避开误匹配。
-            _us_q = "美股 盘前（盘中）行情 科技股 MU美光 SK海力士 谷歌 Meta AAOI 康宁 英伟达 的最新涨跌及新闻事件"
+            _us_q = "美股 MU美光、SK海力士、谷歌、Meta、AAOI、康宁、英伟达等科技股最新涨跌幅及新闻"
             win_tip = _china_market_search_window_tip()
             site_tasks = [
                 _run_site_search(label=_lbl, query=_q, domains=_dom, max_results=8)
@@ -681,16 +681,27 @@ async def run_analysis_workflow(
                     _uit["channel"] = "美股"
                     if not str(_uit.get("published_at") or "").strip():
                         _uit["published_at"] = _today_us
-            raw_all: List[Any] = []
+                    # 正文截到 200 字：美股块 2600 字预算内装下全部 8 条（新浪快讯标题
+                    # 已含涨跌幅关键信息，长摘要多为模板化导语，只会挤占条目数）。
+                    _uit["content"] = str(_uit.get("content") or "")[:200]
+            # 2026-09-10：美股与国内平台分池聚合（混排截断故障修复）。
+            # 实测混排（45 条输入）：终态 prompt 在 _fin_prompt 处 [:9000] 硬截断，
+            # 国内长正文条目（每条≤500字）占满前段，美股 8 条仅 1 条进入 prompt，
+            # 综答美股表格只能填「无」；单纯调大聚合预算无效（块越长被截越深）。
+            # 分池后：国内块 5800 + 美股块 2600（条目正文截 200 字）≈ 8400 + 状态行，全落 9000 线内。
+            _dom_items: List[Any] = []
             for _sr in site_res:
-                raw_all.extend(_sr.items)
-            raw_all.extend(us_res.items)
-            raw_all.extend(zsxq_res.items)
-            # 盘前分支放大上下文配额：默认块仅 2000 字，6 平台 40+ 条热榜会被截到只剩前几条；
-            # 终态 prompt 截取 9000 字（头部状态行 ~300），故块给到 7800，保证平台热榜条目可见。
-            ag = agg.aggregate(raw_all, thread_id=thread_id, append_to_shared_pool=True,
-                               context_max_chars=7800)
-            aggregator_stats = ag.stats
+                _dom_items.extend(_sr.items)
+            ag_dom = agg.aggregate(_dom_items + list(zsxq_res.items), thread_id=thread_id,
+                                   append_to_shared_pool=True, context_max_chars=5800)
+            ag_us = agg.aggregate(list(us_res.items), thread_id=thread_id,
+                                  append_to_shared_pool=True, context_max_chars=2600)
+            _us_block = ag_us.prompt_context_block.replace(
+                "【检索结果汇总（已去重+可靠性标注）】",
+                "【美股盘前/盘中行情检索结果（channel=美股，供表格②填涨跌幅与新闻）】", 1)
+            aggregator_stats = {**ag_dom.stats,
+                                "us_input_total": ag_us.stats["input_total"],
+                                "us_after_dedup": ag_us.stats["after_dedup"]}
             _site_status = "\n".join(
                 f"平台定向·{_sr.source_key.split(':', 1)[-1]}："
                 f"{'成功' if _sr.ok else '失败'} 条目={len(_sr.items)} {_sr.error or ''}"
@@ -702,7 +713,8 @@ async def run_analysis_workflow(
                 f"美股: {us_res.ok} 条目={len(us_res.items)} 异常={us_res.error}\n"
                 f"知识星球: {zsxq_res.ok} 条目={len(zsxq_res.items)} 异常={zsxq_res.error}\n"
                 "【各平台检索条目（channel 字段即来源平台，填「提及的平台」列时以此为准）】\n"
-                f"{ag.prompt_context_block}\n"
+                f"{ag_dom.prompt_context_block}\n\n"
+                f"{_us_block}\n"
             )
             _site_counts = " / ".join(
                 f"{_sr.source_key.split(':', 1)[-1]} {len(_sr.items)}条" for _sr in site_res
@@ -723,7 +735,7 @@ async def run_analysis_workflow(
                       f"💬 知识星球：{'成功' if zsxq_res.ok else '失败'}，"
                       f"命中 {len(zsxq_res.items)} 条；{zsxq_res.error or ''}\n"
                       f"🔗 聚合统计："
-                      + (", ".join(f"{k}={v}" for k, v in list(ag.stats.items())[:6]) or "（无）")
+                      + (", ".join(f"{k}={v}" for k, v in list(aggregator_stats.items())[:6]) or "（无）")
                   ), stage="retrieve")
             # 本地 deepseek-r1:7b 留给单股深度推演类任务，不再用于本链路。
             # 历史教训：不走 run_deep_agent（agent 循环在 DeepSeek 拥堵时无日志返回空串）。
