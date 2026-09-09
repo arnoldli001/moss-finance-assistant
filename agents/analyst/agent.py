@@ -2,7 +2,7 @@ from agent.subagents.knowledge_base_agent import knowledge_base_agent
 from agent.subagents.database_query_agent import database_query_agent
 from agent.subagents.network_search_agent import network_search_agent
 # 使用 SQLite 持久化 checkpointer：重启后对话历史不丢失，按 thread_id (= session_id) 隔离
-# 注意：agent 用 astream (异步)，必须用 AsyncSqliteSaver；同步版 SqliteSaver 不支持 async 方法
+# agent 用 astream (异步)，必须用 AsyncSqliteSaver
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 # main_agent tool导入
