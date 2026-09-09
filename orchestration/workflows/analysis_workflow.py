@@ -48,6 +48,9 @@ from typing import Any, Dict, List, Optional
 
 from shared.models import RouterDecision, RouteBranch, RetrievalItem, SourceReliability
 from shared.aggregator import Aggregator, get_aggregator
+from config.constants import (
+    PREMARKET_FINAL_MODEL_TIMEOUT_SEC, PREMARKET_FINAL_RETRY_TIMEOUT_SEC,
+)
 
 # 盘前缓存目录 & TTL（规则1严格按设计）
 # 2026-09-09 用户要求：盘前新闻输出迁移到 output/pre_market_news（输出产物与运行时数据分离）
@@ -61,11 +64,6 @@ STOCK_CACHE_TTL_DAYS = 7
 FOUR_SOURCE_DAG_TIMEOUT_SEC = 180.0
 TWO_SOURCE_DAG_TIMEOUT_SEC = 120.0
 ANALYSIS_DAG_MAX_TIMEOUT = 180.0  # 整个工作流外层 shield 超时
-# 盘前新闻终态综答（直连 DEEPSEEK_V4_FLASH）：搜索 ~7s + 首试 120s + 失败重试 50s ≈ 177s < 180s DAG 外墙。
-# （2026-09-08 实测：拥堵 + 7800 字上下文时 120s 会超时；150s 单发改 120s+50s 双发——
-#   DeepSeek 拥堵为分钟级波动，超时后立即快速重试一次的总体成功率高于单发 150s。）
-PREMARKET_FINAL_MODEL_TIMEOUT_SEC = 120.0
-PREMARKET_FINAL_RETRY_TIMEOUT_SEC = 50.0
 RISK_DISCLAIMER = (
     "⚠️ 以上信息来自互联网公开资料，仅供参考，不构成投资建议。"
     "投资有风险，入市需谨慎，盈亏自负。"
@@ -757,11 +755,10 @@ async def run_analysis_workflow(
             try:
                 from shared.llm_client.deepseek_client import _base_model
                 from langchain_core.messages import HumanMessage as _HM
-                from config.constants import PREMARKET_FINAL_RETRY_TIMEOUT_SEC as _RETRY_TMO
                 # 首试 + 快速重试（DeepSeek 拥堵是分钟级波动，超时后立即二发常能命中）
                 _fin_err_first: "Exception | None" = None
                 for _attempt, _tmo in enumerate(
-                    (PREMARKET_FINAL_MODEL_TIMEOUT_SEC, _RETRY_TMO), 1,
+                    (PREMARKET_FINAL_MODEL_TIMEOUT_SEC, PREMARKET_FINAL_RETRY_TIMEOUT_SEC), 1,
                 ):
                     try:
                         if _attempt == 2:

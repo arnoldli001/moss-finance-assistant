@@ -49,6 +49,12 @@ DEFAULT_BACKGROUND_TIMEOUT_SEC: float = 360.0
 REVIEW_PREDICTION_BG_TIMEOUT_SEC: float = 450.0
 REVIEW_STAGE3_DEEPSEEK_TIMEOUT_SEC: float = 150.0
 
+# 盘前新闻终态综答（直连 DEEPSEEK_V4_FLASH）：搜索 ~7s + 首试 120s + 失败重试 50s ≈ 177s < 180s DAG 外墙。
+# （2026-09-08 实测：拥堵 + 7800 字上下文时 120s 会超时；150s 单发改 120s+50s 双发——
+#   DeepSeek 拥堵为分钟级波动，超时后立即快速重试一次的总体成功率高于单发 150s。）
+PREMARKET_FINAL_MODEL_TIMEOUT_SEC: float = 120.0
+PREMARKET_FINAL_RETRY_TIMEOUT_SEC: float = 50.0
+
 # HTTP 请求类短超时（Ollama 预检、ngrok 隧道 API 读取、探针等）
 SHORT_HTTP_TIMEOUT_SEC: float = 2.0
 
