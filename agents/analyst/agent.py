@@ -793,7 +793,7 @@ _async_sqlite_conn = None
 
 
 async def get_main_agent():
-    """惰性初始化并返回 main_agent。首次调用在事件循环内建立 aiosqlite 连接 + 建表。"""
+    """首次调用在事件循环内建立aiosqlite 连接 + 建表。"""
     global _main_agent, _checkpointer, _async_sqlite_conn
     if _main_agent is None:
         # aiosqlite.connect 返回 Connection 对象，需在事件循环中 __aenter__ 才真正连接

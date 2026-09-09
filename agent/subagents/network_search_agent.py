@@ -1,5 +1,5 @@
 # 目标： 创建网络搜索子智能体
-# 方式1： dict -> deepagents  方式： compiledSubAgent -> langchain langgraph
+# 方式1： 基于字典的配置deepagents  方式： compiledSubAgent -> langchain langgraph
 from agents.analyst.prompts_legacy import sub_agents_content
 from tools.tavily_tool import internet_search
 

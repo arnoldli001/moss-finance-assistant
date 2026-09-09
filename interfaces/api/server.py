@@ -84,6 +84,12 @@ project_root = _find_project_root(current_dir)
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
+# 复盘预测输出存档目录（2026-09-09 用户要求）：output/Market_Recap_Outlook，
+# 每次成功推理存一份 markdown（文件名=创建时间 YYYYMMDDHHMMSS.md），
+# _run_review_prediction_dedup 开头检测 3 小时内的存档直接复用（类似盘前研报热度）。
+RECAP_ARCHIVE_DIR = Path(project_root) / "output" / "Market_Recap_Outlook"
+RECAP_ARCHIVE_FRESH_HOURS = 3.0
+
 # ===== Actor Model 集成：导入Actor基类与具体 Actor =====
 from shared.actors.actor_base import get_actor_system
 from shared.actors import (
@@ -123,6 +129,7 @@ from config.constants import (
     SCHEDULER_CANCEL_WAIT_SEC,
     SUBPROCESS_WAIT_TIMEOUT_SEC,
     SHUTDOWN_SESSION_TASKS_WAIT_SEC,
+    SHUTDOWN_STEP_HARD_TIMEOUT_SEC,
     HTTP_CODE_TOO_MANY_REQUESTS,
     HTTP_CODE_NOT_FOUND,
     STREAM_DISCONNECT_POLL_INTERVAL_SEC,
@@ -396,8 +403,14 @@ async def _try_run_workflow_push_events(
     quiet: bool = False,
     has_visual_input: bool = False,
     _start_monotonic: "Optional[float]" = None,
+    user_label: "Optional[str]" = None,
 ) -> "dict":
-    """Router+analysis_workflow 结果桥接到 StreamBus 事件序列；失败直接抛异常。"""
+    """Router+analysis_workflow 结果桥接到 StreamBus 事件序列；失败直接抛异常。
+
+    user_label：落库（checkpointer）时用户气泡文案。必须在 ev_done 之前落库——
+    ev_done 后主循环会立即结束并 cancel 本 task，之后再 await 会被 CancelledError
+    打断（曾导致盘前新闻结果只推 SSE 不进历史，切会话即丢）。
+    """
     import time as _t
     _start_monotonic = _start_monotonic or _t.monotonic()
     from orchestration.workflows.analysis_workflow import (
@@ -577,7 +590,19 @@ async def _try_run_workflow_push_events(
     #     旧 monitor.report_task_result 仅影响 WS 监控面板，不影响前端 SSE 展示。
     #     这里通过 ev_done(force_final_text=final_answer) 同时完成终态标记+全量文本。
 
-    # (6) 终态：ev_done(force_final_text=final_answer, usage=usage_dict)
+    # (6) 落库（2026-09-09）：workflow 直连路径此前只推 SSE 不写 checkpointer，
+    #     切会话再切回时历史为空（用户报告"盘前新闻交互内容消失"）。
+    #     必须在 ev_done 之前 await 完成（见函数 docstring 的竞态说明）。
+    if user_label:
+        try:
+            _fa_save = final_answer.strip()
+            if _fa_save:
+                from interfaces.api.routes.zsxq import _save_zsxq_to_history
+                await _save_zsxq_to_history(thread_id, _fa_save, user_label=user_label)
+        except Exception as _save_err:
+            print(f"[SSE-WF] workflow 结果落库失败（不致命）: {_save_err}")
+
+    # (7) 终态：ev_done(force_final_text=final_answer, usage=usage_dict)
     #     真实签名：ev_done(tid, *, usage: Dict[str,int]=None, force_final_text: str=None)
     total_ms = int((_t.monotonic() - _start_monotonic) * 1000)
     usage_dict: "Dict[str, Any]" = {
@@ -607,20 +632,63 @@ async def _try_run_workflow_push_events(
     return {"final_answer": final_answer, "workflow_result": result, "duration_ms": total_ms}
 
 
+async def _fix_rewritten_human_label(thread_id: str, effective_query: str, raw_query: str) -> None:
+    """把 checkpointer 里被 prompt 改写顶替的 Human 消息修正回用户原话。
+
+    背景（2026-09-09 用户报告）：盘前新闻短词会在服务端改写成完整任务 prompt
+    （_rewrite_premarket_query_if_shortcut）。workflow 直连成功时由 user_label
+    参数落库用户原话；但 fallback 到 run_deep_agent 时 agent.astream 会把
+    effective_query（长 prompt）作为 HumanMessage 自动落库——历史恢复时用户
+    气泡显示成长 prompt。本函数按消息 id 精确替换（add_messages 同 id upsert，
+    不改变消息顺序），把最新一条匹配的 Human 修正回 raw_query。
+    """
+    if not raw_query or raw_query == effective_query:
+        return
+    try:
+        from langchain_core.messages import HumanMessage
+        from langgraph.graph import START
+        from agents.analyst.agent import get_main_agent
+        agent = await get_main_agent()
+        config = {"configurable": {"thread_id": thread_id}}
+        state = await agent.aget_state(config)  # type: ignore[attr-defined]
+        msgs = (state.values or {}).get("messages", []) if state else []
+        for i in range(len(msgs) - 1, -1, -1):
+            m = msgs[i]
+            mid = getattr(m, "id", None)
+            if (type(m).__name__ == "HumanMessage"
+                    and getattr(m, "content", "") == effective_query):
+                if not mid:
+                    print("[Premarket] 修正历史 Human 标签跳过：消息缺 id（无法按 id upsert）")
+                    return
+                fixed = list(msgs)
+                fixed[i] = HumanMessage(content=raw_query, id=mid)
+                await agent.aupdate_state(config, {"messages": fixed}, as_node=START)  # type: ignore[attr-defined]
+                print(f"[Premarket] 历史 Human 标签已从改写 prompt 修正为用户原话 (thread={thread_id})")
+                return
+        print("[Premarket] 修正历史 Human 标签：未找到匹配消息（可能已被修正或非改写场景）")
+    except Exception as e:
+        print(f"[Premarket] 修正历史 Human 标签失败（不致命）: {e}")
+
+
 async def _run_coro_with_workflow_priority(
     query: str,
     thread_id: str,
     user_id: str,
     quiet: bool = False,
+    raw_query: str = "",
 ) -> None:
     """给非流式 POST /api/task 的 _run_with_ctx 作为 corofn。
     Router+Workflow 优先；**任何异常** → 静默 fallback 到旧 run_deep_agent（兼容兜底）。
+
+    raw_query：用户原话（未改写）。workflow 成功时用它落库；fallback 后用于
+    修正 agent 自动落库的长 prompt 标签（见 _fix_rewritten_human_label）。
     """
     from api.stream_bus import get_stream_bus_sync
     _bus = get_stream_bus_sync()
     try:
         await _try_run_workflow_push_events(
             query, thread_id, user_id, bus=_bus, quiet=quiet,
+            user_label=raw_query or None,
         )
         return
     except Exception as _wf_err:
@@ -633,6 +701,7 @@ async def _run_coro_with_workflow_priority(
             flush=True,
         )
     await run_deep_agent(query, thread_id, user_id, quiet=quiet)
+    await _fix_rewritten_human_label(thread_id, query, raw_query)
 
 
 @asynccontextmanager
@@ -894,7 +963,9 @@ async def lifespan(app: FastAPI):
             except (asyncio.CancelledError, asyncio.TimeoutError):
                 pass
         from orchestration.scheduler.scheduler import get_scheduler
-        await get_scheduler().stop()
+        # 硬超时（2026-09-09）：scheduler.stop() 若内部等卡死的循环任务会挂死关停流程
+        await asyncio.wait_for(get_scheduler().stop(),
+                               timeout=SHUTDOWN_STEP_HARD_TIMEOUT_SEC)
         print("[Scheduler] 定时调度器已停止")
     except Exception:
         pass
@@ -922,21 +993,26 @@ async def lifespan(app: FastAPI):
     # 关停"本进程亲手拉起"的 ollama serve（用户手动启动的不动）
     try:
         from shared.utils.ollama_helper import shutdown_ollama_if_spawned
-        if await shutdown_ollama_if_spawned():
+        # 硬超时：内部 await 子进程退出若卡死会拖死关停流程（10s 后放弃，由树杀兜底）
+        if await asyncio.wait_for(shutdown_ollama_if_spawned(),
+                                  timeout=SHUTDOWN_STEP_HARD_TIMEOUT_SEC):
             print("[Shutdown] 自拉起的 Ollama 推理服务已关闭")
     except Exception:
         pass
     # 最后防线：树杀注册表中仍存活的残留子进程（zsxq runner / pull 等）
     try:
         from shared.utils.proc_registry import kill_all_tracked
-        _killed_pids = await kill_all_tracked()
+        _killed_pids = await asyncio.wait_for(kill_all_tracked(),
+                                              timeout=SHUTDOWN_STEP_HARD_TIMEOUT_SEC)
         if _killed_pids:
             print(f"[Shutdown] 已清理 {len(_killed_pids)} 个残留子进程: {_killed_pids}")
     except Exception:
         pass
     # ===== Actor Model: 优雅停止所有 Actor =====
     try:
-        await get_actor_system().stop_all()
+        # 硬超时：某 Actor 邮箱卡在子进程阻塞时 stop_all 会挂死关停流程
+        await asyncio.wait_for(get_actor_system().stop_all(),
+                               timeout=SHUTDOWN_STEP_HARD_TIMEOUT_SEC)
     except Exception as _actor_stop_err:
         print(f"[ActorSystem] 停止异常（不致命）: {_actor_stop_err}")
     if ngrok_proc:
@@ -1421,6 +1497,7 @@ async def run_task(request: TaskRequest, current: CurrentUser = _Depends(get_cur
                 thread_id,
                 effective_user_id,
                 quiet=_is_news_btn,
+                raw_query=_raw_query,  # 用户原话：workflow 成功落库 + fallback 后修正 Human 标签
             )
         )
     # 登记：让 CancellationToken 在被取消时，也把对应 asyncio.Task 一起 cancel（双重保险）
@@ -1912,6 +1989,7 @@ async def run_task_stream(req: _StreamTaskRequest, request: Request,
                 await _try_run_workflow_push_events(
                     effective_query, thread_id, effective_user_id,
                     bus=bus, quiet=is_news_btn,
+                    user_label=raw_query,  # 落库用户气泡=用户原始输入（ev_done 前落库，见函数 docstring）
                 )
             except Exception as _wf_exc:
                 _wf_fallback = True
@@ -2037,6 +2115,9 @@ async def run_task_stream(req: _StreamTaskRequest, request: Request,
                     effective_user_id,
                     quiet=is_news_btn,
                 )
+                # 【修正（2026-09-09）】fallback agent 自动落库的是改写后长 prompt，
+                # 历史恢复时用户气泡会显示成长 prompt——修正回用户原话（非改写场景自短路）。
+                await _fix_rewritten_human_label(thread_id, effective_query, raw_query)
                 bus.ev_done(thread_id)
             except asyncio.CancelledError as ce:
                 cancelled_reason2 = cancelled_reason or "asyncio_cancelled"
@@ -2320,11 +2401,11 @@ async def _run_review_prediction(thread_id: str, user_id: Optional[str] = None, 
         # 280s = 路由~5s + 双源并发 ≤120s(TWO_SOURCE_DAG_TIMEOUT_SEC) + 直连综合作答 ≤120s + 裕量
         _news_timeout_sec = 280.0
         _zsxq_res, _news_res = await asyncio.gather(
-            asyncio.wait_for(
+            _hard_timeout(
                 _run_zsxq_analysis(thread_id, emit_to_frontend=False),
                 timeout=_zsxq_timeout_sec,
             ),
-            asyncio.wait_for(
+            _hard_timeout(
                 run_analysis_workflow(
                     "盘前新闻", thread_id=thread_id, user_id=user_id, quiet=True, bus=None
                 ),
@@ -2415,7 +2496,7 @@ async def _run_review_prediction(thread_id: str, user_id: Optional[str] = None, 
         _ds_ok = False
         analysis_result = ""
         try:
-            resp = await asyncio.wait_for(
+            resp = await _hard_timeout(
                 _base_model.ainvoke([HumanMessage(content=analysis_prompt)]),
                 timeout=_ds_timeout_sec,
             )
@@ -2456,11 +2537,27 @@ async def _run_review_prediction(thread_id: str, user_id: Optional[str] = None, 
         # ===== 推送最终结果到前端对话区 =====
         monitor.report_task_result(analysis_result)
 
+        # ===== 存档到本地（2026-09-09 用户要求）=====
+        # 仅 DeepSeek 成功综答（_ds_ok）才写档：超时/失败兜底文案不存，
+        # 否则 3 小时存档窗口会把兜底文案反复端给用户。
+        if _ds_ok and analysis_result.strip():
+            try:
+                RECAP_ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
+                _archive_fp = RECAP_ARCHIVE_DIR / (
+                    f"{datetime.now().strftime('%Y%m%d%H%M%S')}.md"
+                )
+                _archive_fp.write_text(analysis_result, encoding="utf-8")
+                print(f"[ReviewPrediction] 结果已存档: {_archive_fp}")
+            except Exception as e:
+                print(f"[ReviewPrediction] 存档失败（不致命）: {e}")
+
         # ===== 保存到会话历史 =====
         try:
             await _save_zsxq_to_history(thread_id, analysis_result)
         except Exception as e:
             print(f"[ReviewPrediction] 保存历史失败（不致命）: {e}")
+
+        return analysis_result  # 供 single-flight wrapper 共享给并发跟随者请求
 
     except asyncio.CancelledError:
         # 与 main_agent 取消语义分级对齐，避免误报"用户取消"
@@ -2495,6 +2592,145 @@ async def _run_review_prediction(thread_id: str, user_id: Optional[str] = None, 
         reset_session_context(None, thread_token)
 
 
+# ===== 复盘预测 single-flight 并发去重（2026-09-09）=====
+# 背景：两个会话同时点"复盘预测"会双跑阶段2（Tavily 6 路站点搜索 ×2 = 12 路并发触发
+# 限流 + DeepSeek 双倍压力），导致两路都远超预算、前端长时间无输出（实测 6 分钟+）。
+# 复盘预测内容是"当日市场信息"，同日同关注点（user_query）的请求共享同一次计算在业务
+# 上完全合理；跟随者拿到共享结果后写入自己的会话（推送 + 落库），互不串数据。
+_REVIEW_INFLIGHT: dict[str, asyncio.Future] = {}
+
+
+async def _hard_timeout(awaitable, timeout: float):
+    """带「放弃等待」语义的硬超时（2026-09-09）。
+
+    asyncio.wait_for 超时后要等内部协程【实际结束】才返回——若协程卡在
+    不可取消点（DeepSeek API 极端拥堵时 httpx 挂起、Playwright 子进程阻塞），
+    超时墙彻底失效，任务拖到总墙后僵尸化，前端永远无输出（实测复盘预测
+    阶段1 落库后 450s+ 零输出）。
+
+    hard 模式：超时立即抛 TimeoutError 让主流程走兜底文案；卡死协程仅被
+    请求取消（cancel 后不等待其退出），由 SessionRegistry 950s STALE 与
+    proc_registry 树杀兜底清理。 """
+    task = awaitable if isinstance(awaitable, asyncio.Task) else asyncio.create_task(awaitable)
+    try:
+        return await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
+    except asyncio.TimeoutError:
+        task.cancel()  # 请求取消但不等待其优雅退出——主流程立即恢复
+        raise
+
+
+async def _run_review_prediction_dedup(thread_id: str, user_id: Optional[str] = None,
+                                       user_query: str = ""):
+    """single-flight wrapper：同日同关注点的并发复盘预测只计算一次。
+
+    - 领导者：正常执行 _run_review_prediction（推送+落库自己的会话），结果放入 Future。
+    - 跟随者：等待共享结果，然后 set_thread_context(自己的会话) 重新推送 + 落库，
+      保证每个会话都能看到结果且历史互不串写。
+    - Key 复盘预测:{YYYYMMDD}:{user_query}——不同关注点不共享（阶段3 prompt 含个股 hint）。
+    """
+    from api.context import set_thread_context, reset_session_context
+    from api.monitor import monitor
+    from shared.utils.single_flight import is_inflight, today_key
+
+    # ---- 3 小时内存档直接复用（2026-09-09 用户要求，类似盘前研报热度的存档读取）----
+    # 找 output/Market_Recap_Outlook 下最新的 md；mtime 距今 <=3h → 命中：
+    # 直接推送该存档 + 写会话历史，跳过全部推理（搜索+DeepSeek 都不用跑）。
+    try:
+        import time as _time_mod
+        if RECAP_ARCHIVE_DIR.is_dir():
+            _archives = sorted(
+                (f for f in RECAP_ARCHIVE_DIR.glob("*.md") if f.is_file()),
+                key=lambda f: f.stat().st_mtime,
+                reverse=True,
+            )
+            if _archives:
+                _latest = _archives[0]
+                _age_sec = _time_mod.time() - _latest.stat().st_mtime
+                if _age_sec <= RECAP_ARCHIVE_FRESH_HOURS * 3600:
+                    _cached = _latest.read_text(encoding="utf-8", errors="replace")
+                    if _cached.strip():
+                        _age_min = int(_age_sec // 60)
+                        monitor._emit(
+                            "tool_start",
+                            f"♻️ 命中 {_age_min} 分钟前的复盘预测存档（{_latest.name}，"
+                            f"{RECAP_ARCHIVE_FRESH_HOURS:.0f} 小时内直接复用），无需重新推理。",
+                        )
+                        monitor.report_task_result(_cached)
+                        try:
+                            await _save_zsxq_to_history(thread_id, _cached)
+                        except Exception as e:
+                            print(f"[ReviewPrediction] 存档命中后写历史失败（不致命）: {e}")
+                        return _cached
+                else:
+                    print(f"[ReviewPrediction] 最新存档 {_latest.name} 已超过 "
+                          f"{RECAP_ARCHIVE_FRESH_HOURS:.0f} 小时（{_age_sec/3600:.1f}h），正常推理。")
+    except Exception as e:
+        print(f"[ReviewPrediction] 存档读取失败（不致命，走正常推理）: {e}")
+
+    # 跨任务共享提示（2026-09-09）：复盘预测的阶段2 就是盘前新闻工作流——
+    # 若"盘前新闻"按钮的 workflow 计算正在飞，本请求的阶段2 会成为 follower
+    # 静默等待；这里主动探测并提示，避免用户以为无响应。
+    try:
+        if is_inflight(today_key("premarket_news")):
+            monitor._emit(
+                "tool_start",
+                "♻️ 检测到同日的盘前新闻正在计算中，复盘预测的阶段2 将共享该计算结果"
+                "（避免并发双跑导致搜索限流），完成后会自动显示在本会话。",
+            )
+    except Exception:
+        pass
+
+    key = f"review:{datetime.now().strftime('%Y%m%d')}:{(user_query or '').strip()}"
+    fut = _REVIEW_INFLIGHT.get(key)
+    if fut is None:
+        fut = asyncio.get_running_loop().create_future()
+        _REVIEW_INFLIGHT[key] = fut
+        try:
+            result = await _run_review_prediction(thread_id, user_id, user_query)
+            if not fut.done():
+                fut.set_result(result)
+            return result
+        except asyncio.CancelledError:
+            if not fut.done():
+                fut.cancel()  # 领导者被停止/超时 → 通知跟随者
+            raise
+        except BaseException as e:
+            if not fut.done():
+                fut.set_exception(e)
+            raise
+        finally:
+            _REVIEW_INFLIGHT.pop(key, None)
+
+    # ---- 跟随者路径 ----
+    token = set_thread_context(thread_id)
+    try:
+        monitor._emit(
+            "tool_start",
+            "♻️ 检测到同日同关注点的复盘预测正在计算中，本次将共享该计算结果（避免并发"
+            "双跑导致搜索限流与分析超时），完成后会自动显示在本会话。",
+        )
+        try:
+            result = await asyncio.shield(fut)
+        except asyncio.CancelledError:
+            if fut.cancelled():
+                # 领导者被停止/超时/取消 → 转成明确错误（不吞掉跟随者自身的取消）
+                raise RuntimeError("共享的复盘预测任务已被停止或超时，请稍后重新点击") from None
+            raise
+        # 把共享结果落到跟随者自己的会话（推送 + 历史落库）
+        if not result or not str(result).strip():
+            # 领导者异常被内部吞掉时返回 None → 明确报错，避免前端渲染空内容
+            monitor.report_error("⚠️ 共享的复盘预测未返回有效结果，请稍后重新点击")
+            return result
+        monitor.report_task_result(result)
+        try:
+            await _save_zsxq_to_history(thread_id, result)
+        except Exception as e:
+            print(f"[ReviewPrediction] 跟随者保存历史失败（不致命）: {e}")
+        return result
+    finally:
+        reset_session_context(None, token)
+
+
 @app.post("/api/review-prediction")
 async def run_review_prediction(req: ReviewPredictionRequest,
                                 current: CurrentUser = _Depends(get_current_user)):
@@ -2519,7 +2755,7 @@ async def run_review_prediction(req: ReviewPredictionRequest,
             effective_user_id,
             None,
             REVIEW_PREDICTION_BG_TIMEOUT_SEC,
-            _run_review_prediction,
+            _run_review_prediction_dedup,  # single-flight：同日同关注点并发共享计算
             thread_id,
             effective_user_id,
             req.user_query or "",

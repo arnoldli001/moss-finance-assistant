@@ -104,7 +104,11 @@ def _raw_tavily_search_once(
     用于盘前新闻 6 平台定向并发搜索。
     """
     search_kwargs: dict = dict(
-        query=query, topic=topic, max_results=max_results, include_raw_content=include_raw_content
+        query=query, topic=topic, max_results=max_results,
+        include_raw_content=include_raw_content,
+        # 2026-09-09：让 Tavily 服务端返回 AI 总结答案（result["answer"]），
+        # 与 results 列表一同透传给上层（agent / workflow）按需消费。
+        include_answer=True,
     )
     if include_domains:
         search_kwargs["include_domains"] = list(include_domains)
@@ -225,14 +229,22 @@ async def internet_search_async(
     )
     import asyncio as _aio
 
+    async def _gated_tavily(*tavily_args):
+        """经全局并发闸调 Tavily（多用户限流，防套餐并发超限被 429）。
+        排队只打服务端日志——单查询 6 路并发下排队通常秒级，不推前端。"""
+        from shared.utils.concurrency_gate import tavily_gate
+        return await tavily_gate.run(
+            lambda: _aio.to_thread(_raw_tavily_search_once, *tavily_args)
+        )
+
     # 站点定向：手工单平台任务，不走自动拆分（拆分子查询会丢失域名白名单）
     if include_domains:
         last_err = None
         for attempt in range(1, _TAVILY_MAX_RETRIES + 1):
             try:
                 t0 = time.time()
-                result = await _aio.to_thread(
-                    _raw_tavily_search_once, query, topic, max_results,
+                result = await _gated_tavily(
+                    query, topic, max_results,
                     include_raw_content, list(include_domains),
                 )
                 elapsed = time.time() - t0
@@ -263,9 +275,7 @@ async def internet_search_async(
             last_err = None
             for attempt in range(1, _TAVILY_MAX_RETRIES + 1):
                 try:
-                    return await _aio.to_thread(
-                        _raw_tavily_search_once, sq, tp, mr, irc
-                    )
+                    return await _gated_tavily(sq, tp, mr, irc)
                 except _CONNECTION_ERRORS as _e:
                     last_err = _e
                     backoff = TAVILY_BACKOFF_BASE ** attempt
@@ -288,9 +298,7 @@ async def internet_search_async(
     for attempt in range(1, _TAVILY_MAX_RETRIES + 1):
         try:
             t0 = time.time()
-            result = await _aio.to_thread(
-                _raw_tavily_search_once, query, topic, max_results, include_raw_content
-            )
+            result = await _gated_tavily(query, topic, max_results, include_raw_content)
             elapsed = time.time() - t0
             hits = len(result.get("results", [])) if isinstance(result, dict) else 0
             if attempt > 1:

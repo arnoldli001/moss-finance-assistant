@@ -97,6 +97,7 @@
   .msg.user .zsxq-table th { background: #eef1f5; color: #1d1d1f; }
   .msg.user .zsxq-table td { border-color: #d8dde3; }
   /* 通用 markdown 渲染（盘前新闻结构化输出） */
+  .msg .md-meta { color: #8e8e93; font-size: 12.5px; margin: 2px 0 8px; }
   .msg .md-h3 { font-weight: 700; font-size: 14px; margin: 12px 0 6px; color: #1d1d1f; }
   .msg.assistant .md-h3 { color: #1565c0; }
   .msg .md-table { border-collapse: collapse; width: 100%; margin: 6px 0 10px; font-size: 12.5px; table-layout: auto; }
@@ -107,6 +108,7 @@
   .msg.user .md-table th { background: #eef1f5; color: #1d1d1f; }
   .msg .md-list { margin: 4px 0 6px; padding-left: 22px; }
   .msg .md-list li { margin: 2px 0; line-height: 1.5; }
+  .msg .md-hr { border: none; border-top: 1px solid #e3e6eb; margin: 10px 0; }
   /* 消息操作栏（hover显示复制） */
   .msg-actions { display: flex; flex-direction: column; gap: 4px; opacity: 0; transition: opacity 0.2s; padding-top: 6px; flex-shrink: 0; }
   .msg-wrap:hover .msg-actions { opacity: 1; }

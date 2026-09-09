@@ -50,8 +50,10 @@ from shared.models import RouterDecision, RouteBranch, RetrievalItem, SourceReli
 from shared.aggregator import Aggregator, get_aggregator
 
 # 盘前缓存目录 & TTL（规则1严格按设计）
-DATA_ROOT = Path(os.environ.get("DATA_DIR", Path(__file__).resolve().parents[2] / "data"))
-PRE_MARKET_DIR = DATA_ROOT / "pre_market_news"
+# 2026-09-09 用户要求：盘前新闻输出迁移到 output/pre_market_news（输出产物与运行时数据分离）
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DATA_ROOT = Path(os.environ.get("DATA_DIR", _PROJECT_ROOT / "data"))
+PRE_MARKET_DIR = _PROJECT_ROOT / "output" / "pre_market_news"
 STOCK_CACHE_DIR = DATA_ROOT / "stock"
 PRE_MARKET_TTL_HOURS = 6
 STOCK_CACHE_TTL_DAYS = 7
@@ -59,9 +61,11 @@ STOCK_CACHE_TTL_DAYS = 7
 FOUR_SOURCE_DAG_TIMEOUT_SEC = 180.0
 TWO_SOURCE_DAG_TIMEOUT_SEC = 120.0
 ANALYSIS_DAG_MAX_TIMEOUT = 180.0  # 整个工作流外层 shield 超时
-# 盘前新闻：8 路并发搜索实测 ~7s 墙钟，故终态综答可给到 150s（搜索7s+综答150s+余量 < 180s 外墙）。
-# 120s 在 DeepSeek 拥堵 + 7800 字上下文时会超时（2026-09-08 实测 TimeoutError）。
-PREMARKET_FINAL_MODEL_TIMEOUT_SEC = 150.0
+# 盘前新闻终态综答（直连 DEEPSEEK_V4_FLASH）：搜索 ~7s + 首试 120s + 失败重试 50s ≈ 177s < 180s DAG 外墙。
+# （2026-09-08 实测：拥堵 + 7800 字上下文时 120s 会超时；150s 单发改 120s+50s 双发——
+#   DeepSeek 拥堵为分钟级波动，超时后立即快速重试一次的总体成功率高于单发 150s。）
+PREMARKET_FINAL_MODEL_TIMEOUT_SEC = 120.0
+PREMARKET_FINAL_RETRY_TIMEOUT_SEC = 50.0
 RISK_DISCLAIMER = (
     "⚠️ 以上信息来自互联网公开资料，仅供参考，不构成投资建议。"
     "投资有风险，入市需谨慎，盈亏自负。"
@@ -470,6 +474,7 @@ async def run_analysis_workflow(
     preferred_agent_override: Optional[str] = None,
     bus: Any = None,
     quiet: bool = False,
+    _premarket_in_flight: bool = False,
 ) -> WorkflowResult:
     """
     主工作流入口（显式 DAG + 180s 超时硬墙 + 部分成功照样聚合）。
@@ -483,6 +488,8 @@ async def run_analysis_workflow(
         preferred_agent_override: 强制覆盖最终分析 Agent（测试用）
         bus: StreamBus 实例（可选，用于 ev_retrieve_result 桥接）
         quiet: 是否跳过中间事件（False=广播进度；True=静默，用于批处理）
+        _premarket_in_flight: 内部参数——True 表示本调用已在 single-flight 内执行
+            （重入），跳过 PRE_MARKET_NEWS 分支的并发去重拦截。外部调用方勿传。
     """
     trace: Dict[str, Any] = {
         "started_at": _now_cn().isoformat(),
@@ -518,6 +525,15 @@ async def run_analysis_workflow(
     # --- Node 1: Router ---
     _wf_p(stage="Router 智能路由识别中", percent=10,
           detail="规则级联 + Gemma4 意图匹配中 ...")
+    # 任务级繁忙提示（2026-09-09 方案3）：搜索通道已有排队时提前告知，避免用户误以为卡死
+    try:
+        from shared.utils.concurrency_gate import tavily_gate as _tavily_gate_entry
+        if _tavily_gate_entry.waiting > 0:
+            _wf_p(stage="搜索通道繁忙", percent=10,
+                  detail=(f"当前有 {_tavily_gate_entry.waiting} 个其他用户的搜索任务在排队，"
+                          "本任务将自动错峰执行，预计稍慢，请耐心等待 ..."))
+    except Exception:
+        pass
     try:
         from agents.router.agent import decide_cascade
         router: RouterDecision = await decide_cascade(
@@ -563,6 +579,37 @@ async def run_analysis_workflow(
 
         # ============= Branch 1: PRE_MARKET_NEWS =============
         if router.branch == RouteBranch.PRE_MARKET_NEWS:
+            # ===== single-flight 并发去重（2026-09-09）=====
+            # 背景：多会话/多用户并发触发盘前新闻（A 点"盘前新闻"按钮 + B 点"复盘预测"
+            # 阶段2 同样走本分支）会双跑 8 路 Tavily 站点搜索（16 路并发触发限流）+ 双份
+            # DeepSeek 综答，互相拖垮导致两路都长时间无输出（实测 5-6 分钟零输出）。
+            # 盘前新闻内容 = 当日市场信息，跨会话共享一次计算业务上完全合理；
+            # 每个调用方拿到共享 WorkflowResult 后各自按自己的 thread 推送/落库。
+            # _premarket_in_flight=True 为 flight 内重入调用，直接执行原分支体。
+            if not _premarket_in_flight:
+                from shared.utils.single_flight import run_single_flight, today_key
+                _sf_key = today_key("premarket_news")
+
+                def _notify_follower() -> None:
+                    # 仅 follower 触发（on_follow 回调）：共享身份确定后推送，无竞态
+                    _wf_p(stage="盘前新闻：检测到同日计算正在进行",
+                          percent=22, detail="♻️ 共享进行中的计算结果，避免并发双跑 ...")
+                    _wf_r(title="♻️ 盘前新闻：共享计算",
+                          content="检测到同日的盘前新闻正在计算中，本次将直接共享该计算结果"
+                                  "（避免并发双跑导致搜索限流与分析超时），完成后自动显示。")
+
+                return await run_single_flight(
+                    _sf_key,
+                    lambda: run_analysis_workflow(
+                        query, thread_id, user_id,
+                        has_visual_input=has_visual_input,
+                        enable_gemma4_router=enable_gemma4_router,
+                        preferred_agent_override=preferred_agent_override,
+                        bus=bus, quiet=quiet,
+                        _premarket_in_flight=True,
+                    ),
+                    on_follow=_notify_follower,
+                )
             trace["branch"] = "PRE_MARKET_NEWS"
             _wf_p(stage="盘前新闻：检查 6h 本地缓存", percent=20,
                   detail="读取盘前缓存目录，命中则秒级回显 ...")
@@ -596,7 +643,7 @@ async def run_analysis_workflow(
                       "  ④ 财联社（cls.cn）：A股头条 / 热门文章排行 / 热门个股\n"
                       "  ⑤ 百度人气榜（baidu.com）：今日股票人气排行榜\n"
                       "  ⑥ 韭研公社（jiuyangongshe.com）：公社热榜关键词前 10 股票\n"
-                      "  ⑦ 美股夜盘专项：美光/SK海力士/谷歌/Meta/应用光电/康宁/英伟达 盘前盘中涨跌\n"
+                      "  ⑦ 美股涨跌（可自定义查询：https://finance.sina.com.cn/stock/usstock/sector.shtml）：美光科技公司(MU)/SK海力士(000660.KS)/谷歌(GOOGL)/应用光电(AAOI)/康宁(GLW)/英伟达(NVDA) 盘前盘中涨跌\n"
                       "  ⑧ 知识星球（盘前研报热度）\n"
                       "⏱ 预计联网阶段约 20-40s；之后云端 DeepSeek-V4-Flash 综合作答约 30-60s。"
                   ), stage="cache")
@@ -624,7 +671,7 @@ async def run_analysis_workflow(
             _today_us = _now_cn().strftime("%Y-%m-%d")
             for _uit in us_res.items:
                 if isinstance(_uit, dict):
-                    _uit["channel"] = "美股夜盘专项"
+                    _uit["channel"] = "美股"
                     if not str(_uit.get("published_at") or "").strip():
                         _uit["published_at"] = _today_us
             raw_all: List[Any] = []
@@ -645,7 +692,7 @@ async def run_analysis_workflow(
             aggregated_prompt_context = (
                 f"【盘前新闻搜索】{win_tip}\n"
                 f"{_site_status}\n"
-                f"美股夜盘专项: {us_res.ok} 条目={len(us_res.items)} 异常={us_res.error}\n"
+                f"美股: {us_res.ok} 条目={len(us_res.items)} 异常={us_res.error}\n"
                 f"知识星球: {zsxq_res.ok} 条目={len(zsxq_res.items)} 异常={zsxq_res.error}\n"
                 "【各平台检索条目（channel 字段即来源平台，填「提及的平台」列时以此为准）】\n"
                 f"{ag.prompt_context_block}\n"
@@ -664,7 +711,7 @@ async def run_analysis_workflow(
             _wf_r(title="✅ 多源并发检索完成",
                   content=(
                       f"🌐 6 路平台定向搜索（Tavily include_domains 白名单）：\n{_site_lines}\n"
-                      f"🇺🇸 美股夜盘专项：{'成功' if us_res.ok else '失败'}，"
+                      f"🇺🇸 美股：{'成功' if us_res.ok else '失败'}，"
                       f"命中 {len(us_res.items)} 条；{us_res.error or ''}\n"
                       f"💬 知识星球：{'成功' if zsxq_res.ok else '失败'}，"
                       f"命中 {len(zsxq_res.items)} 条；{zsxq_res.error or ''}\n"
@@ -684,7 +731,7 @@ async def run_analysis_workflow(
             _fin_prompt = (
                 "你是一名金融信息分析师。以下是 6 大财经平台站点定向搜索"
                 "（雪球/东方财富股吧/同花顺/财联社/百度人气榜/韭研公社，每条结果的 channel 字段即来源平台）"
-                " + 美股夜盘专项 + 知识星球聚合的搜索结果。\n\n"
+                " + 美股 + 知识星球聚合的搜索结果。\n\n"
                 f"【搜索结果】\n{str(aggregated_prompt_context)[:9000]}\n\n"
                 "【输出结构（必须严格按以下三段 markdown 格式输出，禁止增减段落、禁止用 HTML 标签）】\n"
                 "\n"
@@ -710,17 +757,39 @@ async def run_analysis_workflow(
             try:
                 from shared.llm_client.deepseek_client import _base_model
                 from langchain_core.messages import HumanMessage as _HM
-                _fin_resp = await asyncio.wait_for(
-                    _base_model.ainvoke([_HM(content=_fin_prompt)]),
-                    timeout=PREMARKET_FINAL_MODEL_TIMEOUT_SEC,
-                )
-                final_answer = (_fin_resp.content or "").strip() if hasattr(_fin_resp, "content") else str(_fin_resp)
-                trace["final_model"] = "cloud:DEEPSEEK_V4_FLASH"
+                from config.constants import PREMARKET_FINAL_RETRY_TIMEOUT_SEC as _RETRY_TMO
+                # 首试 + 快速重试（DeepSeek 拥堵是分钟级波动，超时后立即二发常能命中）
+                _fin_err_first: "Exception | None" = None
+                for _attempt, _tmo in enumerate(
+                    (PREMARKET_FINAL_MODEL_TIMEOUT_SEC, _RETRY_TMO), 1,
+                ):
+                    try:
+                        if _attempt == 2:
+                            print(f"[盘前新闻] 综答首试失败({_fin_err_first!r})，{int(_tmo)}s 快速重试 ...")
+                            _wf_p(stage="盘前新闻：综答首试超时，自动重试", percent=95,
+                                  detail="云端模型繁忙，正在第二次尝试生成简报 ...")
+                        _fin_resp = await asyncio.wait_for(
+                            _base_model.ainvoke([_HM(content=_fin_prompt)]),
+                            timeout=_tmo,
+                        )
+                        final_answer = (_fin_resp.content or "").strip() if hasattr(_fin_resp, "content") else str(_fin_resp)
+                        trace["final_model"] = "cloud:DEEPSEEK_V4_FLASH" + ("(retry)" if _attempt == 2 else "")
+                        break
+                    except Exception as _fin_err:
+                        if _attempt == 1:
+                            _fin_err_first = _fin_err
+                            continue
+                        print(f"[盘前新闻] 直连综合作答失败（含重试）: {_fin_err!r}")
+                        trace["final_model_error"] = f"{type(_fin_err).__name__}: {_fin_err}"
+                        final_answer = ""
             except Exception as _fin_err:
                 print(f"[盘前新闻] 直连综合作答失败: {_fin_err!r}")
                 trace["final_model_error"] = f"{type(_fin_err).__name__}: {_fin_err}"
                 final_answer = ""
             if final_answer:
+                # 顶部注入生成时间戳（在写缓存前注入：缓存命中时展示的是该简报的真实生成时间）
+                _ts = _now_cn().strftime("%Y-%m-%d %H:%M")
+                final_answer = f"📅 生成时间：{_ts}（北京时间）\n\n{final_answer}"
                 _wf_p(stage="盘前新闻：写入 6h 本地缓存", percent=97,
                       detail="推理完成，结果归档到本地缓存，后续相同问题秒回 ...")
                 # 保存到文件（空结果禁止写缓存——否则 6h 内所有用户都拿到空串）
@@ -894,9 +963,20 @@ async def run_analysis_workflow(
                   ), stage="retrieve")
             _wf_p(stage="影响分析：DeepSeek-R1 最终推理中", percent=90,
                   detail="基于双源聚合上下文，输出【利多因素 / 利空因素 / 影响评级】结构化结论 ...")
-            final_answer = await _final_analyst_answer(
-                query, thread_id, user_id, aggregated_prompt_context,
-                preferred_agent="reasoning", bus=bus, quiet=quiet,
+            # 全局 Ollama 并发闸（2026-09-09 方案3）：单 GPU 长推理只允许 1 路占位，
+            # 多用户并发单股推演时排队 + 前端提示（避免无反馈互拖）。
+            from shared.utils.concurrency_gate import ollama_gate as _ollama_gate
+
+            def _gpu_wait(n_waiting: int) -> None:
+                _wf_p(stage="影响分析：GPU 推理排队中", percent=90,
+                      detail=f"本地 GPU 正被其他用户的推理任务占用，当前排队第 {n_waiting} 位，完成后自动继续 ...")
+
+            final_answer = await _ollama_gate.run(
+                lambda: _final_analyst_answer(
+                    query, thread_id, user_id, aggregated_prompt_context,
+                    preferred_agent="reasoning", bus=bus, quiet=quiet,
+                ),
+                on_wait=_gpu_wait,
             )
             return WorkflowResult(router_decision=router, final_answer=final_answer,
                                   branch_trace=trace, aggregator_stats=aggregator_stats)

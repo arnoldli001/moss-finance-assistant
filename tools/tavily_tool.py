@@ -105,7 +105,10 @@ def _raw_tavily_search_once(
     返回：Tavily 原始返回 dict（已注入 _structured_items & publish SSE）。
     """
     result = _get_tavily_client().search(query=query, topic=topic,
-                                         max_results=max_results, include_raw_content=include_raw_content)
+                                         max_results=max_results,
+                                         include_raw_content=include_raw_content,
+                                         # 2026-09-09：返回 Tavily AI 总结答案（result["answer"]）
+                                         include_answer=True)
     if isinstance(result, dict):
         raw_results = result.get("results") or []
         items_list = []
@@ -139,9 +142,9 @@ def _raw_tavily_search_once(
 @tool
 def internet_search(
         query: str,
-        topic: Literal[ "news",  "finance",  "general"] = "general",
+        topic: Literal[ "news",  "finance",  "general"] = "finance",
         max_results: int = TAVILY_DEFAULT_MAX_RESULTS,
-        include_raw_content: bool = False
+        include_raw_content: bool = True
 ):
     """
     根据用户问题，进行网络信息收！ 

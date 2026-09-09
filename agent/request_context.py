@@ -1,38 +1,13 @@
 # -*- coding: utf-8 -*-
 """
 跨层级任务终止联动：RequestContext 三位一体。
-解决如下问题：
-  1) WebSocket 断开时只移除连接，不取消任务 → LLM 推理/工具调用继续跑，浪费 token 与算力；
-  2) 只有 task.cancel()（被动 await 点生效），同步长耗时代码（大循环/预处理）无"主动检查"→
-     取消延迟可达数百毫秒甚至秒级（体感"点了停止还在跑"）；
-  3) 父任务 cancel 不传递到后台 create_task 的子任务（摘要压缩/反馈写入）→ 孤儿任务泄漏；
-  4) 取消语义与超时、请求元数据分散 → 无统一上下文对象贯穿请求全链路。
-
 本模块功能：
   - CancellationToken：事件驱动取消 + 主动 check + 子任务级联取消 + 可选 deadline；
   - RequestContext（三位一体）：取消令牌 + 元数据（thread_id/user_id/request_id/session_dir）+
     超时控制，ContextVar 存储，无需层层传参即可在任意调用深度访问；
-  - check_cancelled()：全局零参调用的取消检查钩子，在模型推理间隙/工具调用前主动插入。
+  - check_cancelled()：全局零参调用的取消检查钩子，在模型推理间隙/工具调用前主动插入。"""
 
-典型用法（外层入口）：
-    ctx = create_request_context(
-        thread_id="xxx", user_id="yyy", timeout_sec=REQUEST_CONTEXT_DEFAULT_TIMEOUT_SEC,
-        request_id=uuid.uuid4().hex, session_dir="...",
-    )
-    tok = bind_request_context(ctx)  # 返回 ContextVar token
-    try:
-        await run_agent()
-    finally:
-        unbind_request_context(tok)
-        ctx.dispose()
-
-典型用法（内层任意位置，零参）：
-    from agent.request_context import check_cancelled, current_context
-    check_cancelled("准备调用 DeepSeek")
-    ctx = current_context()  # 若需元数据
-"""
 from __future__ import annotations
-
 import asyncio
 import time
 import uuid
@@ -41,15 +16,12 @@ from contextvars import ContextVar, Token as _CtxToken
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Set
 
-
-
 # ======================================================================
 # 1. RequestCancelledError —— 取消时抛出的业务异常（有 reason 可追溯）
 # ======================================================================
 
 class RequestCancelledError(asyncio.CancelledError):
-    """带取消原因的取消异常。继承 asyncio.CancelledError 以便原有 catch 分支兼容。"""
-
+    """带取消原因的取消异常。继承asyncio.CancelledError 以便原有 catch 分支兼容。"""
     def __init__(self, reason: str = "cancelled", *, token_id: str = ""):
         super().__init__(reason)
         self.reason = reason
@@ -352,7 +324,7 @@ class RequestContext:
 _req_ctx_var: ContextVar[Optional[RequestContext]] = ContextVar("request_context", default=None)
 
 # thread_id → WeakRef[CancellationToken] 反向索引（供 DISCONNECT 等跨线程/跨请求场景
-# 拿 thread_id 直接找令牌，不必遍历 Task 树。注意是弱引用，令牌释放不会因该索引泄漏。
+# 拿 thread_id 直接找令牌，不必遍历 Task 树。是弱引用，令牌释放不会因该索引泄漏。
 # 该映射由 create_request_context 自动登记、dispose 自动移除。
 # 使用一把 asyncio.Lock 串行化读写。
 _thread_index: Dict[str, weakref.ReferenceType[CancellationToken]] = {}

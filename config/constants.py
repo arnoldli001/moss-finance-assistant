@@ -67,6 +67,19 @@ SHUTDOWN_SESSION_TASKS_WAIT_SEC: float = 8.0
 # 关闭阶段：逐个树杀残留子进程的等待超时（单进程）
 SHUTDOWN_PROC_KILL_WAIT_SEC: float = 5.0
 
+# 关闭阶段：单个关闭步骤（调度器 stop/Ollama 关停/树杀/ActorSystem stop_all）的硬超时墙。
+# 背景（2026-09-09）：Ctrl+C 后 uvicorn 等 WS 关闭 + lifespan 各步 await 无墙，任一步
+# 卡死（子进程阻塞/Actor 邮箱挂起）→ 主进程不退出 → 终端无提示符无法继续输入。
+# 每步独立硬墙保证进程必然退出（总预算 ≈ uvicorn 8s graceful + 步数 × 本值）。
+SHUTDOWN_STEP_HARD_TIMEOUT_SEC: float = 10.0
+
+# ===== 多用户并发闸（2026-09-09 方案3）：稀缺资源全局并发上限 =====
+# Tavily：套餐级并发限制（免费档约 5 路并发，超出触发 429/限流）——按实际套餐调整。
+TAVILY_MAX_CONCURRENCY: int = int(os.environ.get("TAVILY_MAX_CONCURRENCY", "5"))
+# 本地 Ollama：单 GPU 请求内部串行，多请求并发只互相拖慢——闸在主进程只包长推理段
+# （单股推演），Prompt 注入分类器/Model Router 兜底有意不纳闸（安全检查与路由必须低延迟）。
+OLLAMA_MAX_CONCURRENCY: int = int(os.environ.get("OLLAMA_MAX_CONCURRENCY", "1"))
+
 # 启动调度器后等待初始化日志打完的短等待
 SCHEDULER_STARTUP_WAIT_SEC: float = 0.3
 
@@ -88,10 +101,10 @@ NGROK_TUNNEL_MAX_POLL_ROUNDS: int = 10
 TAVILY_DEFAULT_MAX_RESULTS: int = 5
 
 # 知识星球群组抓取：默认最大滚动次数（触发更多主题加载）
-ZSXQ_DEFAULT_MAX_SCROLLS: int = 15
+ZSXQ_DEFAULT_MAX_SCROLLS: int = 14
 
 # 知识星球群组抓取：单轮最多抓取的主题条数
-ZSXQ_DEFAULT_MAX_TOPICS: int = 70
+ZSXQ_DEFAULT_MAX_TOPICS: int = 60
 
 # 知识星球 API 请求调试时最多打印到控制台的 URL 数量
 ZSXQ_DEBUG_API_URL_MAX_PRINT: int = 10

@@ -110,18 +110,38 @@ def _find_latest_today_txt(news_dir: Path, today_prefix: str):
 # ===========================================================
 # 辅助函数 2/8：把 zsxq txt 结果写入会话历史 + 记忆管理
 # ===========================================================
-async def _save_zsxq_to_history(thread_id: str, txt_content: str):
+async def _save_zsxq_to_history(thread_id: str, txt_content: str, *, user_label: str = "盘前研报热度"):
     """把盘前研报热度的用户消息和结果存入会话历史（checkpointer），刷新后可恢复。
-    同时写入 Context Engineering 记忆管理，供后续摘要压缩和关键决策检索。"""
+    同时写入 Context Engineering 记忆管理，供后续摘要压缩和关键决策检索。
+
+    user_label：写入 checkpointer 的用户气泡文案（快捷按钮场景传用户真实输入，
+    如"盘前新闻"——供 switchSession 恢复历史时还原交互现场）。
+
+    实现说明（2026-09-09 修复）：
+    deepagents graph 的 input_channels 是 '__start__'（str）而非 ['messages']（list），
+    aupdate_state(as_node=None) 在已有会话上会走 "最后更新节点" 推断逻辑，
+    但 deepagents 多层 middleware（TodoListMiddleware/PatchToolCallsMiddleware 等）
+    会让 versions_seen 出现多个节点同时更新，推断为 ambiguous → 只创建空 checkpoint
+    （writes_count=0，messages 完全没写入）。表现为快捷按钮结果不进历史，刷新即丢。
+
+    修复：显式传 as_node=START（"__start__"）。START 节点是 graph 入口，其 writers 会
+    按 reducer（messages 用 add_messages）把 {"messages":[HumanMessage, AIMessage]}
+    正确分发到 messages channel —— 实测 aget_state 能读到且追加正确（2 条→4 条）。
+    """
     try:
         from langchain_core.messages import HumanMessage, AIMessage
+        from langgraph.graph import START
         from agents.analyst.agent import get_main_agent
         agent = await get_main_agent()
         config = {"configurable": {"thread_id": thread_id}}
-        await agent.aupdate_state(config, {"messages": [  # type: ignore[attr-defined]
-            HumanMessage(content="盘前研报热度"),
-            AIMessage(content=txt_content),
-        ]})
+        await agent.aupdate_state(  # type: ignore[attr-defined]
+            config,
+            {"messages": [
+                HumanMessage(content=user_label),
+                AIMessage(content=txt_content),
+            ]},
+            as_node=START,
+        )
         # 同步写入记忆管理（该条为高优关键决策）
         try:
             from agents.reasoning.memory_manager import get_memory_manager
@@ -487,7 +507,14 @@ async def _run_zsxq_analysis(thread_id: str, emit_to_frontend: bool = True) -> s
            但避免阶段1的独立结果提前把气泡写乱对话流）；
         4) 返回 txt 给编排上层。
     """
-    txt_content = await _fetch_zsxq_txt_summary(thread_id)
+    # single-flight（2026-09-09）：跨会话并发触发时共享同一次 runner 计算
+    # （Playwright 抓取 + Ollama qwen3:8b 分析），消除"当天 txt 检查与生成之间的双跑竞态"；
+    # 推送/落库不在 flight 内——由各调用者按自己的 thread 执行（下方 emit 分支）。
+    from shared.utils.single_flight import run_single_flight, today_key
+    txt_content = await run_single_flight(
+        today_key("zsxq_runner"),
+        lambda: _fetch_zsxq_txt_summary(thread_id),
+    )
     if not txt_content.strip():
         return ""
     if emit_to_frontend:

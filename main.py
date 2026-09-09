@@ -441,7 +441,10 @@ def cmd_server(args) -> int:
         # uvicorn stubs 未声明kwargs透传，老版本自动忽略；TypeError 兜底分支在下
         _extra_run_kwargs: dict = {
             "socket_options": sock_opts,
-            "reuse_port": (os.name != "nt"), 
+            "reuse_port": (os.name != "nt"),
+            # Ctrl+C 后 uvicorn 默认【无限等待】WS/活动请求关闭——前端页面开着就永远
+            # 卡住不退出（终端无提示符，须重开窗口）。8s 后强制断开继续 lifespan 关停。
+            "timeout_graceful_shutdown": 8,
         }
         uvicorn.run(
             "interfaces.api.server:app",
@@ -452,15 +455,33 @@ def cmd_server(args) -> int:
             **_extra_run_kwargs,
         )
     except TypeError:
+        # 老版本 uvicorn：逐级降级（去掉 socket_options/reuse_port，保留 graceful 超时）
         print("ℹ️  当前 uvicorn 版本不支持 socket_options 参数，跳过 SO_REUSEADDR 注入。",
               file=sys.stderr)
-        uvicorn.run(
-            "interfaces.api.server:app",
-            host=host,
-            port=port,
-            reload=bool(args.reload),
-            log_level=args.log_level,
-        )
+        try:
+            uvicorn.run(
+                "interfaces.api.server:app",
+                host=host,
+                port=port,
+                reload=bool(args.reload),
+                log_level=args.log_level,
+                timeout_graceful_shutdown=8,
+            )
+        except TypeError:
+            print("ℹ️  当前 uvicorn 版本不支持 timeout_graceful_shutdown，"
+                  "Ctrl+C 后请先关闭前端页面再停服。", file=sys.stderr)
+            uvicorn.run(
+                "interfaces.api.server:app",
+                host=host,
+                port=port,
+                reload=bool(args.reload),
+                log_level=args.log_level,
+            )
+    # Windows 兜底（2026-09-09）：CTRL+C 时忽略信号的不肖子进程（zsxq runner/Playwright）
+    # 会孤儿化并霸占控制台输入缓冲，导致终端无提示符——连同本进程整树强杀，确保终端释放。
+    import subprocess as _sp_tree
+    _sp_tree.run(["taskkill", "/F", "/T", "/PID", str(os.getpid())],
+                 capture_output=True, check=False)
     return 0
 
 

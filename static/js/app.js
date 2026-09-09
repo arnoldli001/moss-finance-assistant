@@ -241,6 +241,68 @@ document.addEventListener('DOMContentLoaded', () => {
   card.addEventListener('mouseleave', () => { _citationHideCard(); });
 });
 let currentTaskType = 'normal'; // 'normal' | 'zsxq'，控制 task_result 靠左/靠右显示
+// ===== TaskManager：统一在飞任务管理器（2026-09-09）=====
+// 所有快捷按钮（盘前新闻/盘前研报热度/复盘预测/未来新增按钮）的运行状态统一由它管理：
+//   start(sid,label,taskType)  请求受理后登记
+//   finish(sid)                完成/失败/手动停止时清除
+//   resumeIfRunning(sid)       switchSession 拉完历史后调用，恢复"后台运行中"提示
+//   _poll()                    30s 轮询兜底：任务结果已落库但 WS 推送丢失（完成时用户
+//                              不在该会话/连接异常）时，检测当前会话历史增长并提示，
+//                              杜绝"任务完成了前端永远看不到"。
+// 【新增按钮接入清单】① fetch 成功后 TaskManager.start(当前会话,标签,taskType)
+//   ② task_result/error/停止/SSE 结束四个终点调 TaskManager.finish  ③ switchSession 无需改。
+const TaskManager = {
+  map: new Map(), // sid -> {label, taskType, startTime, lastCount}
+  STALE_MS: 950000, // 超过视为已完成（后端最长预算 900s + 缓冲）
+  POLL_MS: 30000,
+  _timer: null,
+  start(sid, label, taskType) {
+    if (!sid) return;
+    this.map.set(sid, { label: label || '任务', taskType: taskType || 'normal',
+                        startTime: Date.now(), lastCount: null });
+    if (!this._timer) this._timer = setInterval(() => this._poll(), this.POLL_MS);
+  },
+  finish(sid) {
+    if (sid) this.map.delete(sid);
+    if (this.map.size === 0 && this._timer) { clearInterval(this._timer); this._timer = null; }
+  },
+  resumeIfRunning(sid) {
+    const info = this.map.get(sid);
+    if (!info) return;
+    if (Date.now() - info.startTime > this.STALE_MS) { this.finish(sid); return; }
+    // 【2026-09-09 修复】用户输入气泡（"复盘预测"/"盘前研报热度"等）是发送时本地渲染的
+    // 瞬时 UI，任务未完成前 checkpointer 里没有对应记录，切走再切回会随历史拉取清空。
+    // 这里按登记恢复用户气泡（含"（关注：xxx）"等完整 displayLabel），输入内容不丢失。
+    pendingTurnIndex += 1;
+    appendMessage('user', info.label, { turnIndex: pendingTurnIndex });
+    currentTaskType = info.taskType; // 恢复结果渲染的靠左/靠右语义（zsxq 靠右）
+    const mins = Math.max(1, Math.round((Date.now() - info.startTime) / 60000));
+    appendMessage('system',
+      `⏳ 本会话的「${info.label}」任务仍在后台运行（已约 ${mins} 分钟），` +
+      `完成后结果会自动显示；期间可点击 ⏹ 停止，也可先切换其他会话。`);
+    setRunning(true, info.taskType); // 恢复 stop 按钮，超时保护计时器同步重启
+  },
+  async _poll() {
+    for (const [sid, info] of Array.from(this.map)) {
+      if (Date.now() - info.startTime > this.STALE_MS) { this.finish(sid); continue; }
+      if (sid !== currentSessionId) continue; // 只需兜底用户正在看的会话
+      try {
+        const r = await fetch(`/api/sessions/${sid}/history`);
+        if (!r.ok) continue;
+        const data = await r.json();
+        const n = (data.messages || []).length;
+        if (info.lastCount == null) { info.lastCount = n; continue; } // 首轮记基线
+        if (n > info.lastCount) {
+          info.lastCount = n; // 更新基线，多阶段任务（复盘预测）每个阶段落库只提示一次
+          appendMessage('system',
+            `📥 「${info.label}」任务有新结果已写入本会话历史（共 ${n} 条消息），` +
+            `切换离开再切回本会话即可查看完整内容。`);
+        }
+      } catch (e) { /* 网络抖动，下一轮重试 */ }
+    }
+    if (this.map.size === 0 && this._timer) { clearInterval(this._timer); this._timer = null; }
+  }
+};
 let wsReconnectCount = 0;
 let _wsReconnectMsg = null;  // 重连提示消息元素（复用，避免多条）
 let wsHeartbeatTimer = null;
@@ -310,8 +372,40 @@ window.addEventListener('load', async () => {
     }
     // 常驻监听：账号切换（登录/登出）时同步身份
     window.addEventListener('moss:user-changed', (ev) => {
-      if (ev.detail && ev.detail.user_id) _syncUidFromAuth();
-      else if (!ev.detail) { currentSessionId = null; }
+      // ===== 账号切换/登出：断旧 WS + 清聊天区（2026-09-09 修复跨账号消息串台） =====
+      // 旧账号的在飞任务（盘前研报热度 ~5-10min / 复盘预测）完成后，task_result 会
+      // 推送到仍存活的旧会话 WS；若不断开，结果会渲染进新账号的聊天区。
+      // 同时复位运行状态，避免新账号登录后按钮被旧任务的超时保护卡住。
+      if (ws) {
+        ws.onclose = null; ws.onerror = null; ws.onmessage = null; ws.onopen = null;
+        try { ws.close(); } catch (e) {}
+        ws = null;
+      }
+      clearHeartbeat();
+      isRunning = false;
+      if (runningTimeoutTimer) { clearTimeout(runningTimeoutTimer); runningTimeoutTimer = null; }
+      clearThinkingTimer();
+      if (ev.detail && ev.detail.user_id) {
+        // 切换账号：清空聊天区 + 会话选择复位（历史由 _startSessionFlow 重新加载）
+        currentSessionId = null;
+        const chatEl = $('chat');
+        if (chatEl) chatEl.innerHTML = '';
+        const titleEl = $('session-title');
+        if (titleEl) titleEl.textContent = '未选择会话';
+        _syncUidFromAuth();
+      } else if (!ev.detail) {
+        // 登出：清空聊天区 + 会话列表 + 标题（与 index.html 登出分支一致）
+        currentUserId = '';
+        currentSessionId = null;
+        const inp = $('user-id-input');
+        if (inp) { inp.value = ''; inp.removeAttribute('readonly'); inp.title = ''; }
+        const listEl = $('session-list');
+        if (listEl) listEl.innerHTML = '';
+        const titleEl2 = $('session-title');
+        if (titleEl2) titleEl2.textContent = '未选择会话';
+        const chatEl2 = $('chat');
+        if (chatEl2) chatEl2.innerHTML = '';
+      }
     });
   } else {
     // 非 AUTH 模式（旧行为）：自造游客 ID + 旧明文登录
@@ -647,9 +741,12 @@ async function switchSession(sid, title) {
   $('send-btn').disabled = false;
   // 切换会话时重置运行状态：旧任务在后端继续跑，结果存 checkpointer，刷新历史可见
   // 这样用户可以在不同会话间快速切换并立即发新任务（支持多标签页/多会话并发）
-  isRunning = false;
+  // 【2026-09-09 修复】必须用 setRunning(false) 完整复位：旧实现只改 isRunning 变量 +
+  // 手动解 send-btn，快捷按钮（盘前新闻/盘前研报热度/复盘预测）的 disabled 是
+  // setRunning(true) 设置的 DOM 属性，不调 setRunning(false) 就永远不会恢复，
+  // 导致切会话后功能键全部点不了（要等 8 分钟超时或切回原会话等任务结束）。
+  setRunning(false);
   wsReconnectCount = 0;
-  if (runningTimeoutTimer) { clearTimeout(runningTimeoutTimer); runningTimeoutTimer = null; }
   clearThinkingTimer();
   if (_wsReconnectMsg) { _wsReconnectMsg.remove(); _wsReconnectMsg = null; }
   // 高亮当前会话
@@ -688,6 +785,9 @@ async function switchSession(sid, title) {
     if ((data.messages || []).length === 0) {
       appendMessage('system', '会话已就绪，输入问题开始对话。');
     }
+    // ===== 切回会话时恢复"任务仍在后台运行"提示（2026-09-09）=====
+    // 旧实现：切走再切回时运行中状态丢失，聊天区空白，用户误以为任务丢失。
+    TaskManager.resumeIfRunning(sid);
   } catch (e) {
     $('chat').innerHTML = `<div class="msg error">加载历史失败: ${e.message}</div>`;
   }
@@ -877,12 +977,14 @@ function handleWSMessage(p) {
       appendMessage(resultRole, result,
         pendingTurnIndex >= 1 ? { turnIndex: pendingTurnIndex } : {});
       setRunning(false);
+      TaskManager.finish(currentSessionId); // 任务完成，清登记
       // 刷新会话列表（标题可能已更新）
       loadSessions();
     } else if (ev === 'error') {
       clearThinkingTimer();
       appendMessage('error', '❌ ' + msg);
       setRunning(false);
+      TaskManager.finish(currentSessionId); // 任务失败，清登记
     } else {
       appendMessage('event', msg);
     }
@@ -996,30 +1098,43 @@ function _renderMarkdown(text) {
     tableBuf = [];
   }
 
+  // 块边界必须先闭合列表：否则后续标题/新列表会嵌套进上一个 <ul>，
+  // 浏览器按嵌套列表逐级缩进（●→○→■），导致复盘预测等输出层层右移
+  function closeList() {
+    if (inList) { out.push('</ul>'); inList = false; }
+  }
+
   for (const rawLine of lines) {
     const line = rawLine.replace(/\s+$/, '');
     const trimmed = line.trim();
     if (trimmed.startsWith('|') && trimmed.endsWith('|') && trimmed.length > 3) {
+      closeList();
       tableBuf.push(trimmed);
-      inList = false;
       continue;
     }
     if (tableBuf.length) flushTable();
 
-    if (trimmed === '') { out.push('<br>'); inList = false; continue; }
-    const h3 = line.match(/^###\s+(.+)$/);
-    if (h3) { out.push('<div class="md-h3">' + _inlineMd(h3[1]) + '</div>'); inList = false; continue; }
-    const li = line.match(/^[-*]\s+(.+)$/);
+    if (trimmed === '') { closeList(); out.push('<br>'); continue; }
+    // 水平分隔线 --- / *** / ___：渲染为 <hr>，不做纯文本
+    if (/^(?:-{3,}|\*{3,}|_{3,})$/.test(trimmed.replace(/\s/g, ''))) {
+      closeList(); out.push('<hr class="md-hr">'); continue;
+    }
+    if (/^📅/.test(trimmed)) { closeList(); out.push('<div class="md-meta">' + _inlineMd(trimmed) + '</div>'); continue; }
+    // 三级及以上标题（兼容模型输出 ###/####，统一左对齐）
+    const h = trimmed.match(/^#{3,6}\s+(.+)$/);
+    if (h) { closeList(); out.push('<div class="md-h3">' + _inlineMd(h[1]) + '</div>'); continue; }
+    // 列表项：按 trimmed 匹配——模型输出的缩进/嵌套行扁平化为同一级，全部左对齐
+    const li = trimmed.match(/^[-*]\s+(.+)$/);
     if (li) {
       if (!inList) { out.push('<ul class="md-list">'); inList = true; }
       out.push('<li>' + _inlineMd(li[1]) + '</li>');
       continue;
     }
-    if (inList) { out.push('</ul>'); inList = false; }
-    out.push('<div>' + _inlineMd(line) + '</div>');
+    closeList();
+    out.push('<div>' + _inlineMd(trimmed) + '</div>');
   }
   if (tableBuf.length) flushTable();
-  if (inList) out.push('</ul>');
+  closeList();
   return out.join('');
 }
 
@@ -1214,6 +1329,8 @@ function _streamClearState(disposeBuf) {
   _streamOpenAt = 0;
   _streamFirstDeltaAt = 0;
   _retrievalResetAll();
+  // SSE 流结束（完成/中止/异常），清在飞任务登记（未登记时 delete 无害）
+  if (currentSessionId) TaskManager.finish(currentSessionId);
 }
 
 
@@ -1533,12 +1650,14 @@ async function sendPreMarketNews() {
 
   if (SSE_STREAM_ENABLED) {
     // SSE 分支：走 /api/task/stream，打字机 + 来源引用 + 推理面板
+    TaskManager.start(currentSessionId, '盘前新闻', 'normal');
     try {
       await _streamRun(fullQuery, '盘前新闻', { taskType: 'normal' });
     } catch (e) {
       appendMessage('error', '发送失败: ' + e.message);
       setRunning(false);
       _streamClearState(true);
+      TaskManager.finish(currentSessionId);
     }
     return;
   }
@@ -1566,6 +1685,7 @@ async function sendPreMarketNews() {
       body: JSON.stringify({query: fullQuery, thread_id: currentSessionId, user_id: currentUserId})
     });
     if (!r.ok) throw new Error('请求失败 ' + r.status);
+    TaskManager.start(currentSessionId, '盘前新闻', 'normal');
   } catch (e) {
     appendMessage('error', '发送失败: ' + e.message);
     setRunning(false);
@@ -1601,6 +1721,7 @@ async function sendZsxqHotNews() {
       body: JSON.stringify({thread_id: currentSessionId, user_id: currentUserId})
     });
     if (!r.ok) throw new Error('请求失败 ' + r.status);
+    TaskManager.start(currentSessionId, '盘前研报热度', 'zsxq');
     // 结果通过 WebSocket 的 task_result 事件推送，由 handleWSMessage 统一处理
   } catch (e) {
     appendMessage('error', '发送失败: ' + e.message);
@@ -1646,10 +1767,12 @@ async function sendReviewPrediction() {
       })
     });
     if (!r.ok) throw new Error('请求失败 ' + r.status);
+    TaskManager.start(currentSessionId, displayLabel, 'normal');
     // 结果通过 WebSocket 的 task_result 事件推送，由 handleWSMessage 统一处理
   } catch (e) {
     appendMessage('error', '发送失败: ' + e.message);
     setRunning(false);
+    TaskManager.finish(currentSessionId);
   }
 }
 
@@ -1722,6 +1845,7 @@ async function stopCurrentTask() {
     appendMessage('error', '停止任务失败: ' + e.message);
   } finally {
     // 无论后端是否成功，前端都解锁，允许用户再次输入
+    TaskManager.finish(tid); // 手动停止，清登记
     setRunning(false);
   }
 }
