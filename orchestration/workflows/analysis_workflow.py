@@ -634,14 +634,14 @@ async def run_analysis_workflow(
             _wf_r(title="📭 盘前新闻：6h 缓存未命中",
                   content=(
                       f"时间窗口：{_china_market_search_window_tip()}\n"
-                      "启动 8 路并发搜索（Tavily 站点定向 + 专项）：\n"
-                      "  ① 雪球（xueqiu.com）：7x24 快讯 / 热股榜 / 热门话题\n"
-                      "  ② 东方财富股吧（guba.eastmoney.com）：热门个股 / 热门概念 / 热门话题\n"
-                      "  ③ 同花顺（10jqka.com.cn）：头条 / 热榜 / 投资日历 / 快讯 / 公告\n"
-                      "  ④ 财联社（cls.cn）：A股头条 / 热门文章排行 / 热门个股\n"
-                      "  ⑤ 百度人气榜（baidu.com）：今日股票人气排行榜\n"
-                      "  ⑥ 韭研公社（jiuyangongshe.com）：公社热榜关键词前 10 股票\n"
-                      "  ⑦ 美股涨跌（可自定义查询：https://finance.sina.com.cn/stock/usstock/sector.shtml）：美光科技公司(MU)/SK海力士(000660.KS)/谷歌(GOOGL)/应用光电(AAOI)/康宁(GLW)/英伟达(NVDA) 盘前盘中涨跌\n"
+                      "启动 8 路并发搜索(Tavily 站点定向 + 专项）：\n"
+                      "  ① 雪球(xueqiu.com)：7x24 快讯 / 热股榜 / 热门话题\n"
+                      "  ② 东方财富股吧(guba.eastmoney.com)：热门个股 / 热门概念 / 热门话题\n"
+                      "  ③ 同花顺(10jqka.com.cn)：头条 / 热榜 / 投资日历 / 快讯 / 公告\n"
+                      "  ④ 财联社(cls.cn)：A股头条 / 热门文章排行 / 热门个股\n"
+                      "  ⑤ 百度人气榜(baidu.com)：今日股票人气排行榜\n"
+                      "  ⑥ 韭研公社(jiuyangongshe.com)：公社热榜关键词前 10 股票\n"
+                      "  ⑦ 美股涨跌(baidu.com)：美光科技公司(MU)/SK海力士(000660.KS)/谷歌(GOOGL)/应用光电(AAOI)/康宁(GLW)/英伟达(NVDA)等热门美股最新盘前/盘中涨跌幅、最新相关新闻\n"
                       "  ⑧ 知识星球（盘前研报热度）\n"
                       "⏱ 预计联网阶段约 20-40s；之后云端 DeepSeek-V4-Flash 综合作答约 30-60s。"
                   ), stage="cache")
@@ -656,7 +656,16 @@ async def run_analysis_workflow(
                 _run_site_search(label=_lbl, query=_q, domains=_dom, max_results=8)
                 for _lbl, _q, _dom in _PREMARKET_SITE_SEARCHES
             ]
-            us_task = _run_web_search(query=_us_q, max_results=8)
+            # 2026-09-10：美股路由 topic="news" 通用搜索改为站点定向——通用 news 索引对
+            # 中英混合长查询返回陈旧不相关条目（Hecla/Simpson 等无关票），综答只能填「无」；
+            # 定向白名单实测命中「谷歌盘前涨近4%」「康宁获Meta订单」等可用盘前行情。
+            us_task = _run_site_search(
+                label="美股",
+                query=_us_q,
+                domains=["baidu.com", "futunn.com", "tradingkey.com", "finance.sina.com.cn",
+                         "cn.investing.com", "wallstreetcn.com", "eastmoney.com"],
+                max_results=8,
+            )
             zsxq_task = _run_zsxq("盘前新闻 今日 小作文 公告", stock_names=[], stock_codes=[], limit=3)
             _wf_p(stage="盘前新闻：6 平台定向 + 美股夜盘 + 知识星球 并发检索中", percent=35,
                   detail="8 个异步任务并行（单路 45s 超时墙），等待 gather 返回 ...")
