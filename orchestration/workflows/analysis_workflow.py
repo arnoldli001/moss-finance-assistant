@@ -51,7 +51,7 @@ from shared.aggregator import Aggregator, get_aggregator
 from config.constants import (
     PREMARKET_FINAL_MODEL_TIMEOUT_SEC, PREMARKET_FINAL_RETRY_TIMEOUT_SEC,
     PREMARKET_FINAL_PROMPT_CONTEXT_CHARS, PREMARKET_DOM_CONTEXT_CHARS,
-    PREMARKET_US_CONTEXT_CHARS,
+    PREMARKET_US_CONTEXT_CHARS, PREMARKET_DOM_ITEM_CONTENT_CHARS,
 )
 
 # 盘前缓存目录 & TTL（规则1严格按设计）
@@ -696,6 +696,13 @@ async def run_analysis_workflow(
             _dom_items: List[Any] = []
             for _sr in site_res:
                 _dom_items.extend(_sr.items)
+            # 国内条目正文截断（2026-09-10）：热榜关键信息（股名/事件/平台）几乎都在
+            # 标题+首段，表格仅需 ≤30 字事件简述；[:250] 使总 prompt ~8400→~6300 字，
+            # 拥堵 prefill 省 5-15s，120s 首试墙余量 ~5-40s→~20-55s（压墙是超时兜底
+            # 文案的直接诱因）。省出的预算不扩条目、不动 9500 截断线，全转化为安全边际。
+            for _dit in _dom_items:
+                if isinstance(_dit, dict):
+                    _dit["content"] = str(_dit.get("content") or "")[:PREMARKET_DOM_ITEM_CONTENT_CHARS]
             ag_dom = agg.aggregate(_dom_items + list(zsxq_res.items), thread_id=thread_id,
                                    append_to_shared_pool=True,
                                    context_max_chars=PREMARKET_DOM_CONTEXT_CHARS)

@@ -241,6 +241,9 @@ CONTEXT_DEDUP_SIMILARITY_THRESHOLD: float = 0.4
 PREMARKET_FINAL_PROMPT_CONTEXT_CHARS: int = 9500
 PREMARKET_DOM_CONTEXT_CHARS: int = 5800
 PREMARKET_US_CONTEXT_CHARS: int = 2600
+# 国内条目正文截断：热榜关键信息在标题+首段，[:250] 使总 prompt ~8400→~6300 字，
+# 全部转化为 120s 首试墙安全边际（不扩条目、不动截断线）。
+PREMARKET_DOM_ITEM_CONTENT_CHARS: int = 250
 
 # Context Engineer 专用常量（与 AGENTS.md 规范对齐）
 # 上下文总字符硬上限（2000字精简裁剪阈值）
@@ -841,7 +844,7 @@ OLLAMA_NUM_PREDICT: int = 1280
 # 2026-09-08 基准实测（105 条真实研报）：6 批 7.7k-9.0k 字符均衡负载，162s 全量，6/6 JSON OK，40 只股票。
 OLLAMA_ZSXQ_BATCH_TARGET_CHARS: int = 9000   # 每批研报总字符软目标（中文约 1 token/字）
 OLLAMA_ZSXQ_BATCH_MAX_ITEMS: int = 30        # 单批最多条数（短研报封顶）
-OLLAMA_ZSXQ_BATCH_HARD_CHARS: int = 14000    # 字符硬上限（超过立即切批，防撑爆上下文）
+OLLAMA_ZSXQ_BATCH_HARD_CHARS: int = 9000    # 字符硬上限（超过立即切批，防撑爆上下文）
 
 # zsxq_analysis_runner.py 调用 zsxq-cli 子进程：超时（秒）
 TEST_ZSXQ_CLI_TIMEOUT_SEC: int = 600
