@@ -233,6 +233,15 @@ CONTEXT_DEDUP_KEEP_RECENT: int = 2
 # 相似资讯去重：Jaccard 相似度阈值，超过则视为相似归为同组
 CONTEXT_DEDUP_SIMILARITY_THRESHOLD: float = 0.4
 
+# 盘前新闻综答上下文分池预算（2026-09-10 分池截断修复配套）。
+# 终态 prompt 硬截断 9500 字（≈6500 token）：拥堵 prefill 20-40s + 生成 50-75s，
+# 对 120s 首试墙（PREMARKET_FINAL_MODEL_TIMEOUT_SEC）余量 ~5-40s——
+# 2026-09-08 实测拥堵 + 7800 字上下文即压线超时，9500 为该墙下可压线的上限，
+# 再调大必须联动上调首试超时。国内块 + 美股块 + 状态行 ≈ 8750 落在此线内。
+PREMARKET_FINAL_PROMPT_CONTEXT_CHARS: int = 9500
+PREMARKET_DOM_CONTEXT_CHARS: int = 5800
+PREMARKET_US_CONTEXT_CHARS: int = 2600
+
 # Context Engineer 专用常量（与 AGENTS.md 规范对齐）
 # 上下文总字符硬上限（2000字精简裁剪阈值）
 CE_TOTAL_MAX_CHARS: int = 2000

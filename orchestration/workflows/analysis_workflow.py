@@ -50,6 +50,8 @@ from shared.models import RouterDecision, RouteBranch, RetrievalItem, SourceReli
 from shared.aggregator import Aggregator, get_aggregator
 from config.constants import (
     PREMARKET_FINAL_MODEL_TIMEOUT_SEC, PREMARKET_FINAL_RETRY_TIMEOUT_SEC,
+    PREMARKET_FINAL_PROMPT_CONTEXT_CHARS, PREMARKET_DOM_CONTEXT_CHARS,
+    PREMARKET_US_CONTEXT_CHARS,
 )
 
 # 盘前缓存目录 & TTL（规则1严格按设计）
@@ -685,17 +687,21 @@ async def run_analysis_workflow(
                     # 已含涨跌幅关键信息，长摘要多为模板化导语，只会挤占条目数）。
                     _uit["content"] = str(_uit.get("content") or "")[:200]
             # 2026-09-10：美股与国内平台分池聚合（混排截断故障修复）。
-            # 实测混排（45 条输入）：终态 prompt 在 _fin_prompt 处 [:9000] 硬截断，
-            # 国内长正文条目（每条≤500字）占满前段，美股 8 条仅 1 条进入 prompt，
-            # 综答美股表格只能填「无」；单纯调大聚合预算无效（块越长被截越深）。
-            # 分池后：国内块 5800 + 美股块 2600（条目正文截 200 字）≈ 8400 + 状态行，全落 9000 线内。
+            # 实测混排（45 条输入）：终态 prompt 在 _fin_prompt 处硬截断（9500 字，
+            # 常量 PREMARKET_FINAL_PROMPT_CONTEXT_CHARS），国内长正文条目（每条≤500字）
+            # 占满前段，美股 8 条仅 1 条进入 prompt，综答美股表格只能填「无」；
+            # 单纯调大聚合预算无效（块越长被截越深）。
+            # 分池：国内块/美股块预算常量化于 config/constants.py CONTEXT_ENGINEER 分组，
+            # 两块之和 ~8400 + 状态行，全落截断线内。
             _dom_items: List[Any] = []
             for _sr in site_res:
                 _dom_items.extend(_sr.items)
             ag_dom = agg.aggregate(_dom_items + list(zsxq_res.items), thread_id=thread_id,
-                                   append_to_shared_pool=True, context_max_chars=5800)
+                                   append_to_shared_pool=True,
+                                   context_max_chars=PREMARKET_DOM_CONTEXT_CHARS)
             ag_us = agg.aggregate(list(us_res.items), thread_id=thread_id,
-                                  append_to_shared_pool=True, context_max_chars=2600)
+                                  append_to_shared_pool=True,
+                                  context_max_chars=PREMARKET_US_CONTEXT_CHARS)
             _us_block = ag_us.prompt_context_block.replace(
                 "【检索结果汇总（已去重+可靠性标注）】",
                 "【美股盘前/盘中行情检索结果（channel=美股，供表格②填涨跌幅与新闻）】", 1)
@@ -751,7 +757,7 @@ async def run_analysis_workflow(
                 "你是一名金融信息分析师。以下是 6 大财经平台站点定向搜索"
                 "（雪球/东方财富股吧/同花顺/财联社/百度人气榜/韭研公社，每条结果的 channel 字段即来源平台）"
                 " + 美股 + 知识星球聚合的搜索结果。\n\n"
-                f"【搜索结果】\n{str(aggregated_prompt_context)[:9000]}\n\n"
+                f"【搜索结果】\n{str(aggregated_prompt_context)[:PREMARKET_FINAL_PROMPT_CONTEXT_CHARS]}\n\n"
                 "【输出结构（必须严格按以下三段 markdown 格式输出，禁止增减段落、禁止用 HTML 标签）】\n"
                 "\n"
                 "### 1. 平台热点总结（热门个股/事件）\n"
