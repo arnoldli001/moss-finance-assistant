@@ -2,8 +2,8 @@
 """盘前研报热度分析子路由（从 interfaces/api/server.py P1-F 拆分出来）。
 
 拆分范围（原 server.py L1782-L2226 块）：
-  - 6 个 zsxq/ollama 辅助函数：
-      _find_latest_today_txt / _save_zsxq_to_history /
+  - zsxq/ollama 辅助函数：
+      _save_zsxq_to_history /
       _probe_ollama / _find_ollama_exe / _ollama_models_list / _ensure_ollama_ready /
       _fetch_zsxq_txt_summary / _push_zsxq_summary_via_ws
   - 1 个编排函数：_run_zsxq_analysis（仍作为 server.py 内调度器/复盘预测的共享编排层，保持原签名零破坏）
@@ -28,7 +28,6 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
-from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter
@@ -54,7 +53,6 @@ __all__ = [
     "_run_zsxq_analysis",
     "_save_zsxq_to_history",
     "install_server_helpers",
-    "_find_latest_today_txt",
     "_probe_ollama",
     "_find_ollama_exe",
     "_ensure_ollama_ready",
@@ -95,20 +93,7 @@ def install_server_helpers(*, run_with_ctx, register_background_task, default_bg
 
 
 # ===========================================================
-# 辅助函数 1/8：查找当天最新的 txt 总结文件
-# ===========================================================
-def _find_latest_today_txt(news_dir: Path, today_prefix: str):
-    """查找当天最新的 txt 总结文件（文件名以 YYYYMMDD 开头，精确到秒命名）"""
-    candidates = sorted(
-        [f for f in news_dir.glob(f"{today_prefix}*.txt") if f.is_file()],
-        key=lambda f: f.name,
-        reverse=True,
-    )
-    return candidates[0] if candidates else None
-
-
-# ===========================================================
-# 辅助函数 2/8：把 zsxq txt 结果写入会话历史 + 记忆管理
+# 辅助函数 1/7：把 zsxq txt 结果写入会话历史 + 记忆管理
 # ===========================================================
 async def _save_zsxq_to_history(thread_id: str, txt_content: str, *, user_label: str = "盘前研报热度"):
     """把盘前研报热度的用户消息和结果存入会话历史（checkpointer），刷新后可恢复。
@@ -391,7 +376,7 @@ async def _ensure_ollama_ready(
 
 
 # ===========================================================
-# 辅助函数 7/8：抓取 + 返回 zsxq txt 总结（server 端薄适配层）
+# 辅助函数 6/7：抓取 + 返回 zsxq txt 总结（server 端薄适配层）
 # ===========================================================
 async def _fetch_zsxq_txt_summary(thread_id: str) -> str:
     """
@@ -463,7 +448,7 @@ async def _fetch_zsxq_txt_summary(thread_id: str) -> str:
 
 
 # ===========================================================
-# 辅助函数 8/8：WS 推送 txt 总结 + 写会话历史
+# 辅助函数 7/7：WS 推送 txt 总结 + 写会话历史
 # ===========================================================
 async def _push_zsxq_summary_via_ws(thread_id: str, txt_content: str) -> None:
     """
