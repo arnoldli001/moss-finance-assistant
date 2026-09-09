@@ -49,9 +49,9 @@ from typing import Any, Dict, List, Optional
 from shared.models import RouterDecision, RouteBranch, RetrievalItem, SourceReliability
 from shared.aggregator import Aggregator, get_aggregator
 from config.constants import (
-    PREMARKET_FINAL_TTFT_GUARD_SEC, PREMARKET_FINAL_GEN_SEC,
-    PREMARKET_FINAL_RETRY_BACKOFF_SEC, PREMARKET_FINAL_RETRY_TTFT_SEC,
-    PREMARKET_FINAL_RETRY_GEN_SEC,
+    PREMARKET_FINAL_ATTEMPT_TOTAL_SEC, PREMARKET_FINAL_ATTEMPTS,
+    PREMARKET_FINAL_STALL_SEC, PREMARKET_FINAL_RETRY_BACKOFF_SEC,
+    ANALYSIS_DAG_MAX_TIMEOUT_SEC,
     PREMARKET_FINAL_PROMPT_CONTEXT_CHARS, PREMARKET_DOM_CONTEXT_CHARS,
     PREMARKET_US_CONTEXT_CHARS, PREMARKET_DOM_ITEM_CONTENT_CHARS,
 )
@@ -67,7 +67,8 @@ STOCK_CACHE_TTL_DAYS = 7
 # 4 源总硬超时（重构.md：单任务 150s，这里 4 源 DAG 设 180s 留余量给 Agent）
 FOUR_SOURCE_DAG_TIMEOUT_SEC = 180.0
 TWO_SOURCE_DAG_TIMEOUT_SEC = 120.0
-ANALYSIS_DAG_MAX_TIMEOUT = 180.0  # 整个工作流外层 shield 超时
+# 整个工作流外层 shield 超时已常量化到 config/constants.ANALYSIS_DAG_MAX_TIMEOUT_SEC（180s），
+# 盘前新闻分支可由调用方经 dag_timeout_sec 参数放宽（见 run_analysis_workflow）。
 RISK_DISCLAIMER = (
     "⚠️ 以上信息来自互联网公开资料，仅供参考，不构成投资建议。"
     "投资有风险，入市需谨慎，盈亏自负。"
@@ -476,10 +477,11 @@ async def run_analysis_workflow(
     preferred_agent_override: Optional[str] = None,
     bus: Any = None,
     quiet: bool = False,
+    dag_timeout_sec: Optional[float] = None,
     _premarket_in_flight: bool = False,
 ) -> WorkflowResult:
     """
-    主工作流入口（显式 DAG + 180s 超时硬墙 + 部分成功照样聚合）。
+    主工作流入口（显式 DAG + 超时硬墙 + 部分成功照样聚合）。
 
     参数:
         query: 用户原始 query（可以是快捷按钮文本）
@@ -490,6 +492,8 @@ async def run_analysis_workflow(
         preferred_agent_override: 强制覆盖最终分析 Agent（测试用）
         bus: StreamBus 实例（可选，用于 ev_retrieve_result 桥接）
         quiet: 是否跳过中间事件（False=广播进度；True=静默，用于批处理）
+        dag_timeout_sec: 最外层 shield 硬墙覆盖（None=默认 ANALYSIS_DAG_MAX_TIMEOUT_SEC=180s；
+            盘前新闻分支传 PREMARKET_TASK_TIMEOUT_SEC=300s，给三发综答留足预算）
         _premarket_in_flight: 内部参数——True 表示本调用已在 single-flight 内执行
             （重入），跳过 PRE_MARKET_NEWS 分支的并发去重拦截。外部调用方勿传。
     """
@@ -608,6 +612,7 @@ async def run_analysis_workflow(
                         enable_gemma4_router=enable_gemma4_router,
                         preferred_agent_override=preferred_agent_override,
                         bus=bus, quiet=quiet,
+                        dag_timeout_sec=dag_timeout_sec,
                         _premarket_in_flight=True,
                     ),
                     on_follow=_notify_follower,
@@ -790,53 +795,85 @@ async def run_analysis_workflow(
             )
             final_answer = ""
             try:
-                from shared.llm_client.deepseek_client import _base_model
+                # 专用实例：read 超时 75s（默认 60s 会在深拥堵 TTFT 60-103s 时掐死请求，哨兵等不到首 token）
+                from shared.llm_client.deepseek_client import _premarket_final_model as _fin_model
                 from langchain_core.messages import HumanMessage as _HM
 
-                async def _afin_invoke(_prompt: str, _ttft: float, _gen: float) -> str:
-                    """流式综答 + TTFT 哨兵。2026-09-10 实测：DeepSeek 半拥堵时 TTFT 排队
-                    0-90s 波动（同期直连 8.4s 与 103.3s 并存），而首 token 后生成 1200 字
-                    仅 10-30s——ainvoke 傻等整墙会把排队当生成耗尽预算。改为：首 token
-                    _ttft 秒未到即判拥堵断流重试；首 token 到后只限生成总长 _gen 秒。
-                    最坏 40+60+30+40=170s < 177s 预算（守 180s DAG 外墙）。"""
-                    _ait = _base_model.astream([_HM(content=_prompt)]).__aiter__()
+                async def _afin_invoke(_prompt: str, _total: float, _stall: float) -> str:
+                    """流式综答 + 流停滞检测。2026-09-10 凌晨根因定位后重构：模型对复杂 prompt
+                    会先"暗推理" ~100s——期间持续流出空 delta（~120个/s，content 全空），推理
+                    完成后 ~4s 内喷出全文。故：任何 chunk（含空 delta）都算流存活，仅连续
+                    _stall 秒无任何 chunk 才判流死；单发总时长不超 _total 秒（含暗推理+生成）。"""
+                    import time as _t_mod
+                    _t0 = _t_mod.monotonic()
+                    _last_chunk = _t0
+                    _diag: Dict[str, Any] = {"chunks": 0, "empty_chunks": 0, "first_content_at": None}
+                    _ait = _fin_model.astream([_HM(content=_prompt)]).__aiter__()
+                    _parts: List[str] = []
 
-                    async def _first_token():
-                        while True:
-                            _ch = await _ait.__anext__()
-                            if str(getattr(_ch, "content", "") or "").strip():
-                                return _ch
+                    while True:
+                        _remain = _total - (_t_mod.monotonic() - _t0)
+                        if _remain <= 0:
+                            break  # 单发总预算耗尽（流可能仍健康，跳出走重试/返回已有内容）
+                        try:
+                            _ch = await asyncio.wait_for(_ait.__anext__(), timeout=min(_stall, _remain))
+                            _diag["chunks"] += 1
+                            _last_chunk = _t_mod.monotonic()
+                            _c = str(getattr(_ch, "content", "") or "")
+                            if _c.strip():
+                                if _diag["first_content_at"] is None:
+                                    _diag["first_content_at"] = round(_last_chunk - _t0, 1)
+                                _parts.append(_c)
+                            else:
+                                _diag["empty_chunks"] += 1
+                        except asyncio.TimeoutError:
+                            _el = _t_mod.monotonic() - _t0
+                            if _el < _total and (_t_mod.monotonic() - _last_chunk) >= _stall:
+                                raise RuntimeError(
+                                    f"流停滞超{_stall}s无任何chunk（chunks={_diag['chunks']} "
+                                    f"空={_diag['empty_chunks']} 首@{_diag['first_content_at']}s "
+                                    f"elapsed={_el:.0f}s）") from None
+                            break  # 单发总预算耗尽（min(_stall,_remain) 命中 _remain 边界）
+                        except StopAsyncIteration:
+                            break  # 流正常结束
 
-                    await asyncio.wait_for(_first_token(), timeout=_ttft)
+                    if not _parts:
+                        raise RuntimeError(
+                            f"零内容流（chunks={_diag['chunks']} 空={_diag['empty_chunks']} "
+                            f"首@{_diag['first_content_at']}s 总耗时={_t_mod.monotonic()-_t0:.1f}s）")
+                    return "".join(_parts)
 
-                    async def _collect() -> str:
-                        _parts: List[str] = []
-                        async for _ch in _ait:
-                            _parts.append(str(getattr(_ch, "content", "") or ""))
-                        return "".join(_parts)
-
-                    return await asyncio.wait_for(_collect(), timeout=_gen)
-
-                # 首试 + 快速重试（DeepSeek 拥堵是分钟级波动，TTFT 哨兵快速判死后二发常能命中通畅窗口）
+                # 发数×单发预算（常量联动守 300s 外墙：2×120 + 退避20 = 260s + 14s 开销）
                 _fin_err_first: "Exception | None" = None
-                for _attempt, (_ttft, _gen) in enumerate(
-                    ((PREMARKET_FINAL_TTFT_GUARD_SEC, PREMARKET_FINAL_GEN_SEC),
-                     (PREMARKET_FINAL_RETRY_TTFT_SEC, PREMARKET_FINAL_RETRY_GEN_SEC)), 1,
-                ):
+                _attempt_budgets = [
+                    (PREMARKET_FINAL_ATTEMPT_TOTAL_SEC, PREMARKET_FINAL_STALL_SEC)
+                    for _ in range(PREMARKET_FINAL_ATTEMPTS)
+                ]
+                for _attempt, (_total, _stall) in enumerate(_attempt_budgets, 1):
                     try:
-                        if _attempt == 2:
-                            print(f"[盘前新闻] 综答首试失败({_fin_err_first!r})，退避 {PREMARKET_FINAL_RETRY_BACKOFF_SEC}s 后重试 ...")
-                            _wf_p(stage="盘前新闻：综答首试超时，退避后自动重试", percent=95,
-                                  detail=f"云端模型繁忙，{int(PREMARKET_FINAL_RETRY_BACKOFF_SEC)}s 后自动重试 ...")
+                        if _attempt >= 2:
+                            print(f"[盘前新闻] 综答第{_attempt - 1}发失败({_fin_err_first!r})，"
+                                  f"退避 {PREMARKET_FINAL_RETRY_BACKOFF_SEC}s 后第{_attempt}次尝试 ...")
+                            _wf_p(stage=f"盘前新闻：综答第{_attempt - 1}发超时，退避后自动重试", percent=95,
+                                  detail=f"云端模型繁忙，{int(PREMARKET_FINAL_RETRY_BACKOFF_SEC)}s 后自动重试（第 {_attempt}/{len(_attempt_budgets)} 次）...")
                             await asyncio.sleep(PREMARKET_FINAL_RETRY_BACKOFF_SEC)
-                        final_answer = (await _afin_invoke(_fin_prompt, _ttft, _gen)).strip()
-                        trace["final_model"] = "cloud:DEEPSEEK_V4_FLASH" + ("(retry)" if _attempt == 2 else "")
+                        final_answer = (await _afin_invoke(_fin_prompt, _total, _stall)).strip()
+                        trace["final_model"] = "cloud:DEEPSEEK_V4_FLASH" + (f"(attempt{_attempt})" if _attempt >= 2 else "")
                         break
                     except Exception as _fin_err:
-                        if _attempt == 1:
+                        if _attempt < len(_attempt_budgets):
                             _fin_err_first = _fin_err
                             continue
                         print(f"[盘前新闻] 直连综合作答失败（含重试）: {_fin_err!r}")
+                        print(f"[盘前新闻] {_attempt}发全灭诊断: model={os.getenv('DEEPSEEK_V4_FLASH')} "
+                              f"base_url={os.getenv('OPENAI_BASE_URL') or '官方默认'} "
+                              f"prompt_len={len(_fin_prompt)} "
+                              f"prompt_head={_fin_prompt[:150]!r}")
+                        try:
+                            (Path(_PROJECT_ROOT) / "benchmarks/results/_last_fin_prompt.txt"
+                             ).write_text(_fin_prompt, encoding="utf-8")
+                        except Exception:
+                            pass
                         trace["final_model_error"] = f"{type(_fin_err).__name__}: {_fin_err}"
                         final_answer = ""
             except Exception as _fin_err:
@@ -1093,13 +1130,14 @@ async def run_analysis_workflow(
         return WorkflowResult(router_decision=router, final_answer=final_answer,
                               branch_trace=trace, aggregator_stats=aggregator_stats)
 
-    # 最外层 SLO 硬超时（任何分支超 ANALYSIS_DAG_MAX_TIMEOUT 秒直接降级）
+    # 最外层 SLO 硬超时（任何分支超墙即直接降级；盘前分支可经 dag_timeout_sec 放宽）
+    _dag_wall = dag_timeout_sec or ANALYSIS_DAG_MAX_TIMEOUT_SEC
     try:
-        return await asyncio.wait_for(_run_inner(), timeout=ANALYSIS_DAG_MAX_TIMEOUT)
+        return await asyncio.wait_for(_run_inner(), timeout=_dag_wall)
     except asyncio.TimeoutError:
         trace["workflow_timeout"] = True
         summary = (
-            f"⏱️ 工作流执行超时（{ANALYSIS_DAG_MAX_TIMEOUT}s 硬上限）。\n"
+            f"⏱️ 工作流执行超时（{_dag_wall}s 硬上限）。\n"
             f"路由决策：{router.branch.value}（{router.reason}）\n"
             f"共享信息池条目数：{len(list(agg._shared_pool.get(thread_id or '', [])))}（可稍后重试）\n"
         )

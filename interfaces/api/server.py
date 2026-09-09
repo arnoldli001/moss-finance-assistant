@@ -117,6 +117,7 @@ from agent.request_context import (
 from config.constants import (
     DEFAULT_AGENT_TIMEOUT_SEC,
     DEFAULT_BACKGROUND_TIMEOUT_SEC,
+    PREMARKET_TASK_TIMEOUT_SEC,
     REVIEW_PREDICTION_BG_TIMEOUT_SEC,
     REVIEW_STAGE3_DEEPSEEK_TIMEOUT_SEC,
     SCHEDULER_STARTUP_WAIT_SEC,
@@ -169,6 +170,8 @@ def _ensure_zsxq_router_installed_once() -> None:
 # 默认超时：Agent 主流程 180s，后台分析 360s（知识星球抓取+分析较耗时）
 _DEFAULT_AGENT_TIMEOUT: float = DEFAULT_AGENT_TIMEOUT_SEC
 _DEFAULT_BG_TIMEOUT: float = DEFAULT_BACKGROUND_TIMEOUT_SEC
+# 盘前新闻按钮 / 9:15 定时任务专用外墙（早高峰深拥堵下 180s 内三发综答放不下，成功后写 6h 缓存）
+_PREMARKET_TASK_TIMEOUT: float = PREMARKET_TASK_TIMEOUT_SEC
 
 
 # ---- 流式输出：延迟载入（避免 server 启动导入链变重）----
@@ -417,12 +420,15 @@ async def _try_run_workflow_push_events(
         run_analysis_workflow, RISK_DISCLAIMER,
     )
     # 跑工作流 DAG（内部 Router 判定 + 缓存命中短路 + 源并发聚合 + 最终推理）
+    # 盘前新闻分支放宽 DAG 内墙到 300s（默认 180s 会把三发综答整体击杀，见 2026-09-10 事故）
     result = await run_analysis_workflow(
         query, thread_id, user_id,
         has_visual_input=has_visual_input,
         enable_gemma4_router=True,
         bus=bus,
         quiet=quiet,
+        dag_timeout_sec=(PREMARKET_TASK_TIMEOUT_SEC
+                         if _is_premarket_news_query(query) else None),
     )
     final_answer = result.final_answer or ""
     # 风险声明双保险（盘前缓存 md 自带；其他分支 workflow._final_analyst_answer 已兜底；
@@ -813,9 +819,10 @@ async def lifespan(app: FastAPI):
             )
 
         # 盘前新闻回调：调用主 Agent 搜索盘前新闻（后台静默）
+        # 9:15 触发正值早高峰，用盘前专用 300s 外墙保住缓存预热（180s 内三发综答放不下）
         async def _news_callback():
             await _run_with_ctx(
-                "scheduler_news_auto", "system", None, _DEFAULT_AGENT_TIMEOUT,
+                "scheduler_news_auto", "system", None, _PREMARKET_TASK_TIMEOUT,
                 _run_news_scheduler_callback,
                 quiet=True,
             )
@@ -1491,7 +1498,7 @@ async def run_task(request: TaskRequest, current: CurrentUser = _Depends(get_cur
                 thread_id,
                 effective_user_id,
                 None,
-                _DEFAULT_AGENT_TIMEOUT,
+                _PREMARKET_TASK_TIMEOUT if _is_news_btn else _DEFAULT_AGENT_TIMEOUT,
                 _run_coro_with_workflow_priority,   # 【方案一】替换：原 run_deep_agent → 新包装优先 workflow
                 _effective_query,
                 thread_id,

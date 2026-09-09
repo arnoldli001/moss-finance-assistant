@@ -17,6 +17,24 @@ _base_model = init_chat_model(
     max_retries=2,
 )
 
+# 盘前新闻终态综答专用实例（2026-09-10）：默认客户端 read 超时 60s 会在深拥堵
+# TTFT（实测 60-103s）尚未出首 token 时直接掐断流式请求，TTFT 哨兵形同虚设。
+# 本实例放宽 read 超时（常量见 config/constants.py），让流式哨兵机制真正生效。
+# 🚨 2026-09-10 根治：DeepSeek V4 思考模式【默认开启且 effort=high】（官方文档
+# api-docs.deepseek.com/guides/thinking_mode），对 ~8K 结构化 prompt 暗推理 100-120s+
+# （流式表现为全空 delta ~122个/s），是"综合推理超时"的根源。综答是给定搜索结果的
+# 结构化汇总，无需深度推理——此处显式关闭思考模式，响应从 ~104s 降至数十秒。
+# 注意：OpenAI SDK 须走 extra_body；reasoning_effort="none" 不被接受（400）。
+from config.constants import PREMARKET_FINAL_LLM_CLIENT_TIMEOUT_SEC
+
+_premarket_final_model = init_chat_model(
+    model=os.getenv("DEEPSEEK_V4_FLASH"),
+    model_provider="openai",
+    timeout=PREMARKET_FINAL_LLM_CLIENT_TIMEOUT_SEC,
+    max_retries=2,
+    extra_body={"thinking": {"type": "disabled"}},
+)
+
 # ======================================================================
 # 渐进式工具披露（Progressive Tool Disclosure）Runnable 包装
 # ======================================================================

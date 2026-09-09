@@ -46,22 +46,49 @@ def main():
         src = (Path(__file__).parent.parent / rel).read_text(encoding="utf-8")
         check(f"{rel} 已启用 include_answer=True", "include_answer=True" in src)
 
-    # 4) 综答流式 + TTFT 哨兵常量（2026-09-10：替代原 ainvoke 120s+50s 整墙傻等）
-    from orchestration.workflows.analysis_workflow import (
-        PREMARKET_FINAL_TTFT_GUARD_SEC, PREMARKET_FINAL_GEN_SEC,
-        PREMARKET_FINAL_RETRY_BACKOFF_SEC, PREMARKET_FINAL_RETRY_TTFT_SEC,
-        PREMARKET_FINAL_RETRY_GEN_SEC,
+    # 4) 综答流式 + 流停滞检测 + N发重试 + 300s 专用外墙（2026-09-10：暗推理根因定位后的最终方案）
+    from config.constants import (
+        PREMARKET_TASK_TIMEOUT_SEC, PREMARKET_FINAL_LLM_CLIENT_TIMEOUT_SEC,
+        PREMARKET_FINAL_ATTEMPT_TOTAL_SEC, PREMARKET_FINAL_ATTEMPTS,
+        PREMARKET_FINAL_STALL_SEC, PREMARKET_FINAL_RETRY_BACKOFF_SEC,
     )
-    _worst = (PREMARKET_FINAL_TTFT_GUARD_SEC + PREMARKET_FINAL_RETRY_BACKOFF_SEC
-              + PREMARKET_FINAL_RETRY_TTFT_SEC + PREMARKET_FINAL_RETRY_GEN_SEC)
-    check("综答 TTFT 哨兵+退避预算 40+60+30+40=170s（含搜索 ~7s 守 180s 外墙）",
-          PREMARKET_FINAL_TTFT_GUARD_SEC == 40.0 and PREMARKET_FINAL_GEN_SEC == 60.0
-          and PREMARKET_FINAL_RETRY_BACKOFF_SEC == 60.0
-          and PREMARKET_FINAL_RETRY_TTFT_SEC == 30.0 and PREMARKET_FINAL_RETRY_GEN_SEC == 40.0
-          and _worst + 7.0 <= 180.0)
-    check("综答已改流式 asteam 哨兵（_afin_invoke 定义）",
-          "_afin_invoke" in (Path(__file__).parent.parent /
-                             "orchestration/workflows/analysis_workflow.py").read_text(encoding="utf-8"))
+    check("盘前专用外墙 300s + 专用客户端 read 超时 75s（>暗推理窗口，破 60s 硬顶）",
+          PREMARKET_TASK_TIMEOUT_SEC == 300.0 and PREMARKET_FINAL_LLM_CLIENT_TIMEOUT_SEC == 75)
+    _all_fail = (PREMARKET_FINAL_ATTEMPTS * PREMARKET_FINAL_ATTEMPT_TOTAL_SEC
+                 + (PREMARKET_FINAL_ATTEMPTS - 1) * PREMARKET_FINAL_RETRY_BACKOFF_SEC)
+    check(f"综答预算 {PREMARKET_FINAL_ATTEMPTS:.0f}发×{PREMARKET_FINAL_ATTEMPT_TOTAL_SEC:.0f}s"
+          f"+退避{PREMARKET_FINAL_RETRY_BACKOFF_SEC:.0f}s（全灭{_all_fail:.0f}s +17s 开销 ≤ 300s 外墙）",
+          PREMARKET_FINAL_ATTEMPTS == 2 and PREMARKET_FINAL_ATTEMPT_TOTAL_SEC == 120.0
+          and PREMARKET_FINAL_STALL_SEC == 30.0 and PREMARKET_FINAL_RETRY_BACKOFF_SEC == 20.0
+          and _all_fail + 17.0 <= PREMARKET_TASK_TIMEOUT_SEC)
+    _wf_src = (Path(__file__).parent.parent /
+               "orchestration/workflows/analysis_workflow.py").read_text(encoding="utf-8")
+    check("综答使用专用模型实例 + 流停滞检测（_fin_model/_afin_invoke/_last_chunk）",
+          "_premarket_final_model as _fin_model" in _wf_src
+          and "_afin_invoke" in _wf_src and "_last_chunk" in _wf_src
+          and "流停滞" in _wf_src)
+    check("旧 TTFT 哨兵已彻底移除（防 IDE 缓冲回刷复发）",
+          "TTFT超" not in _wf_src and "PREMARKET_FINAL_TTFT_GUARD_SEC" not in _wf_src)
+    check("deepseek_client 已有盘前综答专用实例",
+          "_premarket_final_model = init_chat_model" in
+          (Path(__file__).parent.parent / "shared/llm_client/deepseek_client.py").read_text(encoding="utf-8"))
+    _ds_src = (Path(__file__).parent.parent /
+               "shared/llm_client/deepseek_client.py").read_text(encoding="utf-8")
+    check("盘前综答实例已关闭思考模式（thinking disabled，暗推理根治）",
+          '_premarket_final_model' in _ds_src
+          and '"thinking": {"type": "disabled"}' in _ds_src)
+    check("server.py 按钮/定时任务接入 300s 外墙",
+          "_PREMARKET_TASK_TIMEOUT if _is_news_btn else _DEFAULT_AGENT_TIMEOUT" in server_src
+          and '"scheduler_news_auto", "system", None, _PREMARKET_TASK_TIMEOUT' in server_src)
+    # 5) DAG 内墙参数化（2026-09-10 事故：workflow 内部 180s shield 把三发综答整体击杀，
+    #    server 端 300s 形同虚设——内墙必须能被盘前分支放宽）
+    check("workflow DAG 内墙已参数化（dag_timeout_sec + _dag_wall 兜底 180s 常量）",
+          "dag_timeout_sec: Optional[float] = None" in _wf_src
+          and "_dag_wall = dag_timeout_sec or ANALYSIS_DAG_MAX_TIMEOUT_SEC" in _wf_src
+          and "dag_timeout_sec=dag_timeout_sec" in _wf_src)
+    check("server 盘前分支传 dag_timeout_sec=300（非盘前走默认 180s）",
+          "dag_timeout_sec=(PREMARKET_TASK_TIMEOUT_SEC" in server_src
+          and "if _is_premarket_news_query(query) else None" in server_src)
 
     print()
     if failures:

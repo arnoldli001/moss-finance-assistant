@@ -49,15 +49,32 @@ DEFAULT_BACKGROUND_TIMEOUT_SEC: float = 360.0
 REVIEW_PREDICTION_BG_TIMEOUT_SEC: float = 450.0
 REVIEW_STAGE3_DEEPSEEK_TIMEOUT_SEC: float = 150.0
 
-# 盘前新闻终态综答（直连 DEEPSEEK_V4_FLASH）：搜索 ~5-7s + 首试哨兵 40 + 退避 60 + 重试 30+40 = 177s < 180s DAG 外墙。
-# （2026-09-10 E2E 实测：DeepSeek 半拥堵时 TTFT 排队 0-90s 波动，首 token 后生成 1200 字仅 10-30s；
-#   故综答改流式 + TTFT 哨兵——首 token 超哨兵值即判拥堵断流，退避后再试（拥堵为分钟级波动，立即二发必撞同一窗口）。
-#   历史教训：ainvoke 整墙傻等（120s）会把排队当生成，半拥堵下双发全灭（即"综合推理超时"）。）
-PREMARKET_FINAL_TTFT_GUARD_SEC: float = 40.0   # 首试：首 token 哨兵
-PREMARKET_FINAL_GEN_SEC: float = 60.0          # 首试：首 token 后生成总长上限
-PREMARKET_FINAL_RETRY_BACKOFF_SEC: float = 60.0  # 重试前退避：拥堵为分钟级波动，立即二发必撞同一窗口
-PREMARKET_FINAL_RETRY_TTFT_SEC: float = 30.0   # 重试：首 token 哨兵
-PREMARKET_FINAL_RETRY_GEN_SEC: float = 40.0    # 重试：首 token 后生成总长上限
+# 分析工作流最外层 shield 硬墙（analysis_workflow.run_analysis_workflow 全 DAG 包裹）。
+# 默认 180s；盘前新闻分支由 server 传入 PREMARKET_TASK_TIMEOUT_SEC(300s) 覆盖
+# （2026-09-10 事故：该内墙曾把三发综答在 180s 处整体击杀，server 端 300s 形同虚设）。
+ANALYSIS_DAG_MAX_TIMEOUT_SEC: float = 180.0
+
+# 盘前新闻按钮 / 9:15 定时任务专用外墙：替换该分支的 DEFAULT_AGENT_TIMEOUT_SEC(180s)。
+# 2026-09-10 早高峰 E2E 实测：两发（40s+退避60s+30s 哨兵）全灭于深拥堵——180s 预算下
+# 无第三次机会，且 60s 客户端 read 硬顶掐死 >60s 的 TTFT。故本分支单独放宽外墙到 300s
+# （对齐 REVIEW_PREDICTION_BG_TIMEOUT_SEC=450 的"按钮专用更长超时"先例），
+# 成功后写 6h 缓存，后续请求秒回；最坏失败路径 ~287s 仍留 13s 余量。
+PREMARKET_TASK_TIMEOUT_SEC: float = 300.0
+
+# 盘前新闻综答专用模型客户端 read 超时：默认 LLM_CHAT_DEFAULT_TIMEOUT_SEC=60 会在深拥堵
+# TTFT（实测 60-103s）未出首 token 时直接掐断流式请求，TTFT 哨兵永远等不到。专用实例放宽。
+PREMARKET_FINAL_LLM_CLIENT_TIMEOUT_SEC: int = 75
+
+# 盘前新闻终态综答（直连 DEEPSEEK_V4_FLASH 专用实例）超时参数。
+# ✅ 根因已根治（2026-09-10）：DeepSeek V4 思考模式默认开启且 effort=high，对 ~8K 结构化
+# prompt 暗推理 100-120s+（流式表现为全空 delta ~122个/s），曾致"综合推理超时"。
+# deepseek_client._premarket_final_model 已显式 extra_body={"thinking":{"type":"disabled"}}
+# 关闭思考——实测首内容 chunk 0.7s、总耗时 5.0s（原 99.5s/103.4s）。
+# 以下参数降级为防御性兜底（API 行为回退/极端拥堵时仍守 300s 外墙）：
+PREMARKET_FINAL_ATTEMPT_TOTAL_SEC: float = 120.0  # 单发总预算（原暗推理场景的继承值，现绰绰有余）
+PREMARKET_FINAL_ATTEMPTS: int = 2                 # 发数：2×120 + 退避20 = 260s，+14s 开销 < 300s 外墙
+PREMARKET_FINAL_STALL_SEC: float = 30.0           # 连续无任何 chunk 超此值判流死，立即重试
+PREMARKET_FINAL_RETRY_BACKOFF_SEC: float = 20.0   # 重试前退避
 
 # HTTP 请求类短超时（Ollama 预检、ngrok 隧道 API 读取、探针等）
 SHORT_HTTP_TIMEOUT_SEC: float = 2.0
@@ -84,8 +101,8 @@ SHUTDOWN_PROC_KILL_WAIT_SEC: float = 5.0
 SHUTDOWN_STEP_HARD_TIMEOUT_SEC: float = 10.0
 
 # ===== 多用户并发闸（2026-09-09 方案3）：稀缺资源全局并发上限 =====
-# Tavily：套餐级并发限制（免费档约 5 路并发，超出触发 429/限流）——按实际套餐调整。
-TAVILY_MAX_CONCURRENCY: int = int(os.environ.get("TAVILY_MAX_CONCURRENCY", "5"))
+# Tavily：套餐级并发限制（免费档约 10路并发，超出触发 429/限流）——按实际套餐调整。
+TAVILY_MAX_CONCURRENCY: int = int(os.environ.get("TAVILY_MAX_CONCURRENCY", "10"))
 # 本地 Ollama：单 GPU 请求内部串行，多请求并发只互相拖慢——闸在主进程只包长推理段
 # （单股推演），Prompt 注入分类器/Model Router 兜底有意不纳闸（安全检查与路由必须低延迟）。
 OLLAMA_MAX_CONCURRENCY: int = int(os.environ.get("OLLAMA_MAX_CONCURRENCY", "1"))
@@ -238,10 +255,10 @@ CONTEXT_DEDUP_KEEP_RECENT: int = 2
 CONTEXT_DEDUP_SIMILARITY_THRESHOLD: float = 0.4
 
 # 盘前新闻综答上下文分池预算（2026-09-10 分池截断修复配套）。
-# 终态 prompt 硬截断 9500 字（≈6500 token）：拥堵 prefill 20-40s + 生成 50-75s，
-# 对 TTFT 哨兵+生成上限的综答预算余量 ~40s——
+# 终态 prompt 硬截断 9500 字（≈6500 token）：拥堵 prefill 20-40s + 暗推理 ~100s，
+# 单发总预算 PREMARKET_FINAL_ATTEMPT_TOTAL_SEC(120s) 覆盖，流停滞 30s 判死兜底——
 # 2026-09-08 实测拥堵 + 7800 字上下文即压线超时，9500 为该墙下可压线的上限，
-# 再调大必须联动上调首试超时。国内块 + 美股块 + 状态行 ≈ 8750 落在此线内。
+# 再调大必须联动上调单发总预算。国内块 + 美股块 + 状态行 ≈ 8750 落在此线内。
 PREMARKET_FINAL_PROMPT_CONTEXT_CHARS: int = 9500
 PREMARKET_DOM_CONTEXT_CHARS: int = 5800
 PREMARKET_US_CONTEXT_CHARS: int = 2600

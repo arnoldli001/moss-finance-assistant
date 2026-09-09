@@ -127,11 +127,12 @@ async def _save_zsxq_to_history(thread_id: str, txt_content: str, *, user_label:
             ]},
             as_node=START,
         )
-        # 同步写入记忆管理（该条为高优关键决策）
+        # 同步写入记忆管理（该条为高优关键决策）；标签随 user_label 走，
+        # 避免盘前新闻结果在记忆里被误标为"盘前研报热度分析"
         try:
             from agents.reasoning.memory_manager import get_memory_manager
             mm = get_memory_manager()
-            await mm.add_turn(thread_id, "盘前研报热度分析", txt_content)
+            await mm.add_turn(thread_id, user_label or "盘前研报热度分析", txt_content)
         except Exception as mm_err:
             print(f"[ZSXQ分析] 写入记忆管理失败（不致命）: {mm_err}")
     except Exception as e:
