@@ -49,11 +49,15 @@ DEFAULT_BACKGROUND_TIMEOUT_SEC: float = 360.0
 REVIEW_PREDICTION_BG_TIMEOUT_SEC: float = 450.0
 REVIEW_STAGE3_DEEPSEEK_TIMEOUT_SEC: float = 150.0
 
-# 盘前新闻终态综答（直连 DEEPSEEK_V4_FLASH）：搜索 ~7s + 首试 120s + 失败重试 50s ≈ 177s < 180s DAG 外墙。
-# （2026-09-08 实测：拥堵 + 7800 字上下文时 120s 会超时；150s 单发改 120s+50s 双发——
-#   DeepSeek 拥堵为分钟级波动，超时后立即快速重试一次的总体成功率高于单发 150s。）
-PREMARKET_FINAL_MODEL_TIMEOUT_SEC: float = 120.0
-PREMARKET_FINAL_RETRY_TIMEOUT_SEC: float = 50.0
+# 盘前新闻终态综答（直连 DEEPSEEK_V4_FLASH）：搜索 ~5-7s + 首试哨兵 40 + 退避 60 + 重试 30+40 = 177s < 180s DAG 外墙。
+# （2026-09-10 E2E 实测：DeepSeek 半拥堵时 TTFT 排队 0-90s 波动，首 token 后生成 1200 字仅 10-30s；
+#   故综答改流式 + TTFT 哨兵——首 token 超哨兵值即判拥堵断流，退避后再试（拥堵为分钟级波动，立即二发必撞同一窗口）。
+#   历史教训：ainvoke 整墙傻等（120s）会把排队当生成，半拥堵下双发全灭（即"综合推理超时"）。）
+PREMARKET_FINAL_TTFT_GUARD_SEC: float = 40.0   # 首试：首 token 哨兵
+PREMARKET_FINAL_GEN_SEC: float = 60.0          # 首试：首 token 后生成总长上限
+PREMARKET_FINAL_RETRY_BACKOFF_SEC: float = 60.0  # 重试前退避：拥堵为分钟级波动，立即二发必撞同一窗口
+PREMARKET_FINAL_RETRY_TTFT_SEC: float = 30.0   # 重试：首 token 哨兵
+PREMARKET_FINAL_RETRY_GEN_SEC: float = 40.0    # 重试：首 token 后生成总长上限
 
 # HTTP 请求类短超时（Ollama 预检、ngrok 隧道 API 读取、探针等）
 SHORT_HTTP_TIMEOUT_SEC: float = 2.0
@@ -235,7 +239,7 @@ CONTEXT_DEDUP_SIMILARITY_THRESHOLD: float = 0.4
 
 # 盘前新闻综答上下文分池预算（2026-09-10 分池截断修复配套）。
 # 终态 prompt 硬截断 9500 字（≈6500 token）：拥堵 prefill 20-40s + 生成 50-75s，
-# 对 120s 首试墙（PREMARKET_FINAL_MODEL_TIMEOUT_SEC）余量 ~5-40s——
+# 对 TTFT 哨兵+生成上限的综答预算余量 ~40s——
 # 2026-09-08 实测拥堵 + 7800 字上下文即压线超时，9500 为该墙下可压线的上限，
 # 再调大必须联动上调首试超时。国内块 + 美股块 + 状态行 ≈ 8750 落在此线内。
 PREMARKET_FINAL_PROMPT_CONTEXT_CHARS: int = 9500

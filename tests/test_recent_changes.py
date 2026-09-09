@@ -46,13 +46,22 @@ def main():
         src = (Path(__file__).parent.parent / rel).read_text(encoding="utf-8")
         check(f"{rel} 已启用 include_answer=True", "include_answer=True" in src)
 
-    # 4) 综答双发重试常量
+    # 4) 综答流式 + TTFT 哨兵常量（2026-09-10：替代原 ainvoke 120s+50s 整墙傻等）
     from orchestration.workflows.analysis_workflow import (
-        PREMARKET_FINAL_MODEL_TIMEOUT_SEC, PREMARKET_FINAL_RETRY_TIMEOUT_SEC,
+        PREMARKET_FINAL_TTFT_GUARD_SEC, PREMARKET_FINAL_GEN_SEC,
+        PREMARKET_FINAL_RETRY_BACKOFF_SEC, PREMARKET_FINAL_RETRY_TTFT_SEC,
+        PREMARKET_FINAL_RETRY_GEN_SEC,
     )
-    check("综答首试 120s + 重试 50s（总预算守 180s 外墙）",
-          PREMARKET_FINAL_MODEL_TIMEOUT_SEC == 120.0 and
-          PREMARKET_FINAL_RETRY_TIMEOUT_SEC == 50.0)
+    _worst = (PREMARKET_FINAL_TTFT_GUARD_SEC + PREMARKET_FINAL_RETRY_BACKOFF_SEC
+              + PREMARKET_FINAL_RETRY_TTFT_SEC + PREMARKET_FINAL_RETRY_GEN_SEC)
+    check("综答 TTFT 哨兵+退避预算 40+60+30+40=170s（含搜索 ~7s 守 180s 外墙）",
+          PREMARKET_FINAL_TTFT_GUARD_SEC == 40.0 and PREMARKET_FINAL_GEN_SEC == 60.0
+          and PREMARKET_FINAL_RETRY_BACKOFF_SEC == 60.0
+          and PREMARKET_FINAL_RETRY_TTFT_SEC == 30.0 and PREMARKET_FINAL_RETRY_GEN_SEC == 40.0
+          and _worst + 7.0 <= 180.0)
+    check("综答已改流式 asteam 哨兵（_afin_invoke 定义）",
+          "_afin_invoke" in (Path(__file__).parent.parent /
+                             "orchestration/workflows/analysis_workflow.py").read_text(encoding="utf-8"))
 
     print()
     if failures:

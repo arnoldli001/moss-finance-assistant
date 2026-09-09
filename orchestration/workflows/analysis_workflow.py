@@ -49,7 +49,9 @@ from typing import Any, Dict, List, Optional
 from shared.models import RouterDecision, RouteBranch, RetrievalItem, SourceReliability
 from shared.aggregator import Aggregator, get_aggregator
 from config.constants import (
-    PREMARKET_FINAL_MODEL_TIMEOUT_SEC, PREMARKET_FINAL_RETRY_TIMEOUT_SEC,
+    PREMARKET_FINAL_TTFT_GUARD_SEC, PREMARKET_FINAL_GEN_SEC,
+    PREMARKET_FINAL_RETRY_BACKOFF_SEC, PREMARKET_FINAL_RETRY_TTFT_SEC,
+    PREMARKET_FINAL_RETRY_GEN_SEC,
     PREMARKET_FINAL_PROMPT_CONTEXT_CHARS, PREMARKET_DOM_CONTEXT_CHARS,
     PREMARKET_US_CONTEXT_CHARS, PREMARKET_DOM_ITEM_CONTENT_CHARS,
 )
@@ -790,21 +792,44 @@ async def run_analysis_workflow(
             try:
                 from shared.llm_client.deepseek_client import _base_model
                 from langchain_core.messages import HumanMessage as _HM
-                # 首试 + 快速重试（DeepSeek 拥堵是分钟级波动，超时后立即二发常能命中）
+
+                async def _afin_invoke(_prompt: str, _ttft: float, _gen: float) -> str:
+                    """流式综答 + TTFT 哨兵。2026-09-10 实测：DeepSeek 半拥堵时 TTFT 排队
+                    0-90s 波动（同期直连 8.4s 与 103.3s 并存），而首 token 后生成 1200 字
+                    仅 10-30s——ainvoke 傻等整墙会把排队当生成耗尽预算。改为：首 token
+                    _ttft 秒未到即判拥堵断流重试；首 token 到后只限生成总长 _gen 秒。
+                    最坏 40+60+30+40=170s < 177s 预算（守 180s DAG 外墙）。"""
+                    _ait = _base_model.astream([_HM(content=_prompt)]).__aiter__()
+
+                    async def _first_token():
+                        while True:
+                            _ch = await _ait.__anext__()
+                            if str(getattr(_ch, "content", "") or "").strip():
+                                return _ch
+
+                    await asyncio.wait_for(_first_token(), timeout=_ttft)
+
+                    async def _collect() -> str:
+                        _parts: List[str] = []
+                        async for _ch in _ait:
+                            _parts.append(str(getattr(_ch, "content", "") or ""))
+                        return "".join(_parts)
+
+                    return await asyncio.wait_for(_collect(), timeout=_gen)
+
+                # 首试 + 快速重试（DeepSeek 拥堵是分钟级波动，TTFT 哨兵快速判死后二发常能命中通畅窗口）
                 _fin_err_first: "Exception | None" = None
-                for _attempt, _tmo in enumerate(
-                    (PREMARKET_FINAL_MODEL_TIMEOUT_SEC, PREMARKET_FINAL_RETRY_TIMEOUT_SEC), 1,
+                for _attempt, (_ttft, _gen) in enumerate(
+                    ((PREMARKET_FINAL_TTFT_GUARD_SEC, PREMARKET_FINAL_GEN_SEC),
+                     (PREMARKET_FINAL_RETRY_TTFT_SEC, PREMARKET_FINAL_RETRY_GEN_SEC)), 1,
                 ):
                     try:
                         if _attempt == 2:
-                            print(f"[盘前新闻] 综答首试失败({_fin_err_first!r})，{int(_tmo)}s 快速重试 ...")
-                            _wf_p(stage="盘前新闻：综答首试超时，自动重试", percent=95,
-                                  detail="云端模型繁忙，正在第二次尝试生成简报 ...")
-                        _fin_resp = await asyncio.wait_for(
-                            _base_model.ainvoke([_HM(content=_fin_prompt)]),
-                            timeout=_tmo,
-                        )
-                        final_answer = (_fin_resp.content or "").strip() if hasattr(_fin_resp, "content") else str(_fin_resp)
+                            print(f"[盘前新闻] 综答首试失败({_fin_err_first!r})，退避 {PREMARKET_FINAL_RETRY_BACKOFF_SEC}s 后重试 ...")
+                            _wf_p(stage="盘前新闻：综答首试超时，退避后自动重试", percent=95,
+                                  detail=f"云端模型繁忙，{int(PREMARKET_FINAL_RETRY_BACKOFF_SEC)}s 后自动重试 ...")
+                            await asyncio.sleep(PREMARKET_FINAL_RETRY_BACKOFF_SEC)
+                        final_answer = (await _afin_invoke(_fin_prompt, _ttft, _gen)).strip()
                         trace["final_model"] = "cloud:DEEPSEEK_V4_FLASH" + ("(retry)" if _attempt == 2 else "")
                         break
                     except Exception as _fin_err:
