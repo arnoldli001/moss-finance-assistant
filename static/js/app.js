@@ -252,51 +252,121 @@ let currentTaskType = 'normal'; // 'normal' | 'zsxq'，控制 task_result 靠左
 // 【新增按钮接入清单】① fetch 成功后 TaskManager.start(当前会话,标签,taskType)
 //   ② task_result/error/停止/SSE 结束四个终点调 TaskManager.finish  ③ switchSession 无需改。
 const TaskManager = {
-  map: new Map(), // sid -> {label, taskType, startTime, lastCount}
+  map: new Map(), // sid -> {label, taskType, startTime, baseCount}
   STALE_MS: 950000, // 超过视为已完成（后端最长预算 900s + 缓冲）
   POLL_MS: 30000,
   _timer: null,
   start(sid, label, taskType) {
     if (!sid) return;
-    this.map.set(sid, { label: label || '任务', taskType: taskType || 'normal',
-                        startTime: Date.now(), lastCount: null });
+    const info = { label: label || '任务', taskType: taskType || 'normal',
+                   startTime: Date.now(), baseCount: null };
+    this.map.set(sid, info);
     if (!this._timer) this._timer = setInterval(() => this._poll(), this.POLL_MS);
+    // 登记时记录历史消息基线（异步不阻塞）：切回时历史增长 = 结果已落库
+    this._fetchCount(sid).then(n => { if (n != null) info.baseCount = n; }).catch(() => {});
   },
   finish(sid) {
     if (sid) this.map.delete(sid);
     if (this.map.size === 0 && this._timer) { clearInterval(this._timer); this._timer = null; }
   },
-  resumeIfRunning(sid) {
+  async _fetchCount(sid) {
+    const uid = encodeURIComponent(currentUserId || '');
+    const r = await fetch(`/api/sessions/${sid}/history?user_id=${uid}`);
+    if (!r.ok) return null;
+    const data = await r.json();
+    return (data.messages || []).length;
+  },
+  // 权威任务状态：后端 SessionRegistryActor 是否仍登记该会话的任务。
+  // 历史消息数增长不能当完成信号——复盘预测阶段1 的小作文热度中间结果会先落库，
+  // 那时任务还在跑（2026-09-10 复盘 11 分钟无输出 bug 的收尾环节）。
+  async _fetchRunning(sid) {
+    const r = await fetch(`/api/task/status?thread_id=${encodeURIComponent(sid)}`);
+    if (!r.ok) return null;
+    const data = await r.json();
+    return data.running === true;
+  },
+  // 任务登记过期/结果已落库但前端运行态未复位：清登记 + 解锁按钮
+  _unlock(sid) {
+    const viewing = sid === currentSessionId;
+    this.finish(sid);
+    if (viewing) {
+      setRunning(false);
+      appendMessage('system', 'ℹ️ 后台任务已结束，如未看到结果请重新点击按钮发起。');
+    }
+  },
+  async resumeIfRunning(sid) {
     const info = this.map.get(sid);
     if (!info) return;
-    if (Date.now() - info.startTime > this.STALE_MS) { this.finish(sid); return; }
-    // 【2026-09-09 修复】用户输入气泡（"复盘预测"/"盘前研报热度"等）是发送时本地渲染的
-    // 瞬时 UI，任务未完成前 checkpointer 里没有对应记录，切走再切回会随历史拉取清空。
-    // 这里按登记恢复用户气泡（含"（关注：xxx）"等完整 displayLabel），输入内容不丢失。
-    pendingTurnIndex += 1;
-    appendMessage('user', info.label, { turnIndex: pendingTurnIndex });
-    currentTaskType = info.taskType; // 恢复结果渲染的靠左/靠右语义（zsxq 靠右）
-    const mins = Math.max(1, Math.round((Date.now() - info.startTime) / 60000));
-    appendMessage('system',
-      `⏳ 本会话的「${info.label}」任务仍在后台运行（已约 ${mins} 分钟）`);
-    setRunning(true, info.taskType); // 恢复 stop 按钮，超时保护计时器同步重启
+    if (Date.now() - info.startTime > this.STALE_MS) { this._unlock(sid); return; }
+    // 【关键】切回前先问后端任务是否还活着。任务在结果落库之后才注销，
+    // running=false 时结果必然已在历史里；running=true 才恢复"运行中"界面。
+    // 注意：只查状态（1 个请求）——游客限流 10 QPM，历史数仅在结束时查一次。
+    let running = null;
+    try { running = await this._fetchRunning(sid); } catch (e) { running = null; }
+    // await 期间用户可能又切走了：不再操作 DOM
+    if (sid !== currentSessionId) return;
+    if (running === true) {
+      // 任务确实还在跑：恢复用户气泡（"复盘预测（关注：xxx）"等完整 displayLabel）
+      // + 后台运行提示 + stop 按钮
+      pendingTurnIndex += 1;
+      appendMessage('user', info.label, { turnIndex: pendingTurnIndex });
+      currentTaskType = info.taskType; // 恢复结果渲染的靠左/靠右语义（zsxq 靠右）
+      const mins = Math.max(1, Math.round((Date.now() - info.startTime) / 60000));
+      appendMessage('system',
+        `⏳ 本会话的「${info.label}」任务仍在后台运行（已约 ${mins} 分钟）`);
+      setRunning(true, info.taskType); // 恢复 stop 按钮，超时保护计时器同步重启
+      return;
+    }
+    // 任务已结束（running=false）：结果落库先于注销。历史刚由 switchSession 渲染过，
+    // 这里只需处理"历史快照早于落库一个网络往返"的窄竞态 → 最多复查两次
+    this.finish(sid);
+    if (running === false) {
+      let grew = false, n = null;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        n = await this._fetchCount(sid).catch(() => null);
+        if (sid !== currentSessionId) return;
+        grew = (n != null && (info.baseCount == null || n > info.baseCount));
+        if (grew) break;
+        await new Promise(r => setTimeout(r, 2000));
+        if (sid !== currentSessionId) return;
+      }
+      appendMessage('system', grew
+        ? `✅ 「${info.label}」任务已在后台完成，结果见上方对话记录。`
+        : `ℹ️ 「${info.label}」任务已结束，但未产生结果，请重新点击按钮发起。`);
+    } else {
+      // 状态查询失败（旧服务端/网络抖动/429 限流）：保守恢复运行态，交给 30s 轮询兜底
+      pendingTurnIndex += 1;
+      appendMessage('user', info.label, { turnIndex: pendingTurnIndex });
+      currentTaskType = info.taskType;
+      const mins = Math.max(1, Math.round((Date.now() - info.startTime) / 60000));
+      appendMessage('system',
+        `⏳ 本会话的「${info.label}」任务可能仍在后台运行（已约 ${mins} 分钟）`);
+      setRunning(true, info.taskType);
+    }
   },
   async _poll() {
     for (const [sid, info] of Array.from(this.map)) {
-      if (Date.now() - info.startTime > this.STALE_MS) { this.finish(sid); continue; }
+      if (Date.now() - info.startTime > this.STALE_MS) { this._unlock(sid); continue; }
       if (sid !== currentSessionId) continue; // 只需兜底用户正在看的会话
       try {
-        const r = await fetch(`/api/sessions/${sid}/history`);
-        if (!r.ok) continue;
-        const data = await r.json();
-        const n = (data.messages || []).length;
-        if (info.lastCount == null) { info.lastCount = n; continue; } // 首轮记基线
-        if (n > info.lastCount) {
-          info.lastCount = n; // 更新基线，多阶段任务（复盘预测）每个阶段落库只提示一次
-          appendMessage('system',
-            `📥 「${info.label}」任务有新结果已写入本会话历史（共 ${n} 条消息），` +
-            `切换离开再切回本会话即可查看完整内容。`);
+        // 轮询只查任务状态（省请求：游客 10 QPM 限流，历史接口不跟着轮）
+        const running = await this._fetchRunning(sid);
+        if (sid !== currentSessionId) continue; // await 期间切走了
+        if (running === true) continue;         // 仍在跑
+        if (running === false) {
+          // 任务刚结束（WS 完成事件丢失时的兜底）：查一次历史确认结果已落库 → 解锁提示
+          const n = await this._fetchCount(sid).catch(() => null);
+          if (sid !== currentSessionId) continue;
+          this.finish(sid);
+          setRunning(false);
+          const grew = (n != null && (info.baseCount == null || n > info.baseCount));
+          appendMessage('system', grew
+            ? `✅ 「${info.label}」任务已完成，结果已写入本会话历史。` +
+              `如上方未显示，切换到其他会话再切回本会话即可查看。`
+            : `ℹ️ 「${info.label}」任务已结束，如未看到结果请重新点击按钮发起。`);
+          continue;
         }
+        // running === null（429/网络抖动）：保持轮询下轮重试（不解锁、不误报）
       } catch (e) { /* 网络抖动，下一轮重试 */ }
     }
     if (this.map.size === 0 && this._timer) { clearInterval(this._timer); this._timer = null; }
@@ -752,17 +822,28 @@ async function switchSession(sid, title) {
   document.querySelectorAll('.session-item').forEach(el => el.classList.remove('active'));
   // 清空聊天区
   $('chat').innerHTML = '<div class="msg system">正在加载历史记录...</div>';
-  // 加载历史
+  // 加载历史（429 限流/5xx 自动重试 3 次：游客 10 QPM，切会话+状态轮询同窗口可能打满）
   try {
     // 用户隔离校验：带上 user_id 防止越权读取他人对话
     const uid = encodeURIComponent(currentUserId);
-    const r = await fetch(`/api/sessions/${sid}/history?user_id=${uid}`);
+    let r = null, data = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      r = await fetch(`/api/sessions/${sid}/history?user_id=${uid}`);
+      if (r.ok) { data = await r.json(); break; }
+      if (r.status === 429 || r.status >= 500) {
+        await new Promise(res => setTimeout(res, 1500));
+        continue;
+      }
+      break; // 4xx（403/404 等）不重试
+    }
     if (!r.ok) {
-      const data = await r.json().catch(() => ({}));
-      $('chat').innerHTML = `<div class="msg error">加载历史失败: ${data.detail || r.statusText}</div>`;
+      const errData = await r.json().catch(() => ({}));
+      const detail = (errData && typeof errData.detail === 'string')
+        ? errData.detail : r.statusText;
+      $('chat').innerHTML = `<div class="msg error">加载历史失败: ${detail}` +
+        `（可稍后重新切换本会话重试）</div>`;
       return;
     }
-    const data = await r.json();
     $('chat').innerHTML = '';
     let currentTurn = 0;
     (data.messages || []).forEach(m => {

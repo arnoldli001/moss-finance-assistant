@@ -205,11 +205,14 @@ class SessionRegistryActor(Actor[_RegistryState]):
             return new_state, {"removed": False, "reason": "not_self"}
 
         # ==============================================================
-        # 4. STOP_AND_REMOVE_TASK —— 用户点停止按钮
+        # 4. STOP_AND_REMOVE_TASK —— 用户点停止按钮 / WS 断开清理
+        #    payload.keep_bg=True：WS 断开场景只停交互式聊天任务，
+        #    fire-and-forget 后台任务（复盘预测等）脱离连接生命周期，保留继续跑。
         # ==============================================================
         if msg == SRMsg.STOP_AND_REMOVE_TASK:
             thread_id = p["thread_id"]
-            # 聊天任务优先停止；后台任务也尝试停止
+            keep_bg = bool(p.get("keep_bg", False))
+            # 聊天任务优先停止；后台任务也尝试停止（keep_bg 时跳过）
             stopped_any = False
 
             new_agent = dict(state.active_agent_tasks)
@@ -225,7 +228,7 @@ class SessionRegistryActor(Actor[_RegistryState]):
                 del new_agent[thread_id]
 
             t2 = new_bg.get(thread_id)
-            if t2 is not None:
+            if t2 is not None and not keep_bg:
                 if not t2.done():
                     t2.cancel()
                     stopped_any = True

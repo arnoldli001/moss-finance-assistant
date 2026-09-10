@@ -39,7 +39,7 @@ def main():
     check("dedup 入口先查 3h 存档（命中即 report_task_result）",
           "monitor.report_task_result(_cached)" in server_src)
     check("存档命中后写会话历史",
-          "await _save_zsxq_to_history(thread_id, _cached)" in server_src)
+          "await _save_zsxq_to_history(thread_id, _cached, user_label=\"复盘预测\")" in server_src)
 
     # 3) Tavily include_answer（两份实现同步）
     for rel in ("shared/data_sources/web_search.py", "tools/tavily_tool.py"):
@@ -105,6 +105,58 @@ def main():
     check("server 盘前分支传 dag_timeout_sec=300（非盘前走默认 180s）",
           "dag_timeout_sec=(PREMARKET_TASK_TIMEOUT_SEC" in server_src
           and "if _is_premarket_news_query(query) else None" in server_src)
+
+    # 5) 个股检索上下文落库修复（2026-09-10：注入长文曾作为 HumanMessage 落 checkpointer，
+    #    历史恢复时撑爆用户气泡、无排版，且事后补落的原话气泡顺序颠倒）
+    import inspect as _inspect
+    from agents.analyst.agent import run_deep_agent as _rda
+    _agent_src = (Path(__file__).parent.parent / "agents" / "analyst" / "agent.py"
+                  ).read_text(encoding="utf-8")
+    check("run_deep_agent 支持 injected_context（检索上下文走 SystemMessage）",
+          "injected_context" in _inspect.signature(_rda).parameters
+          and '"role": "system"' in _agent_src
+          and "_astream_msgs" in _agent_src)
+    check("workflow 不再把检索上下文拼进 user query（最终用户问题拼接已移除）",
+          "最终用户问题" not in _wf_src
+          and "已注入的外部检索与本地缓存上下文（若已充分" not in _wf_src
+          and "injected_context=_injected" in _wf_src)
+    _zsxq_route_src = (Path(__file__).parent.parent / "interfaces" / "api" / "routes" / "zsxq.py"
+                       ).read_text(encoding="utf-8")
+    _appjs = (Path(__file__).parent.parent / "static" / "js" / "app.js"
+              ).read_text(encoding="utf-8")
+    check("_save_zsxq_to_history 落库幂等（agent 已落库时不重复追加气泡）",
+          "_already_saved" in _zsxq_route_src and "aget_state" in _zsxq_route_src)
+    check("StructuredTool 数据源经 _ainvoke_toolish 调用（修 'StructuredTool' is not callable）",
+          "_ainvoke_toolish(search_knowledge_base" in _wf_src
+          and "_ainvoke_toolish(list_sql_tables)" in _wf_src
+          and "_ainvoke_toolish(get_table_data, tbl)" in _wf_src)
+
+    # 6) 后台任务脱离 WS 生命周期（2026-09-10：切会话关闭 WS 曾双杀复盘预测等
+    #    fire-and-forget 后台任务——token 取消 + task.cancel——任务没落库就死，
+    #    前端切回后永久"AI 正在思考中"）
+    _ctx_src = (Path(__file__).parent.parent / "agent" / "request_context.py"
+                ).read_text(encoding="utf-8")
+    _reg_src = (Path(__file__).parent.parent / "shared" / "actors" / "session_registry_actor.py"
+                ).read_text(encoding="utf-8")
+    check("CancellationToken 支持 detached（后台任务 WS 断开不级联取消）",
+          "detached" in _ctx_src
+          and 'tok.detached and "disconnect" in reason' in _ctx_src
+          and "skipped" in _ctx_src)
+    check("STOP_AND_REMOVE_TASK 支持 keep_bg（WS 断开只清理聊天任务）",
+          'keep_bg = bool(p.get("keep_bg", False))' in _reg_src
+          and "t2 is not None and not keep_bg" in _reg_src)
+    check("复盘预测/盘前研报热度后台任务以 detached=True 启动，WS 断开传 keep_bg",
+          "detached=True" in server_src
+          and '"keep_bg": True' in server_src
+          and "user_label=\"复盘预测\"" in server_src)
+    check("GET /api/task/status 暴露任务存活权威信号（结果落库后才注销）",
+          '@app.get("/api/task/status")' in server_src
+          and "SRMsg.GET_TASK_INFO" in server_src)
+    check("前端 TaskManager 以任务存活状态为准（复盘阶段1 中间结果先落库，"
+          "历史增长不可靠）",
+          "_fetchRunning" in _appjs and "/api/task/status" in _appjs
+          and "resumeIfRunning" in _appjs
+          and "任务已在后台完成" in _appjs)
 
     print()
     if failures:

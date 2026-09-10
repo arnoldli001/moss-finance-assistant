@@ -191,6 +191,7 @@ async def _run_with_ctx(
     corofn,
     *args,
     quiet: bool = False,
+    detached: bool = False,
     **kwargs,
 ):
     """
@@ -199,7 +200,9 @@ async def _run_with_ctx(
     2) 绑定到 ContextVar（这样在任何调用深度 check_cancelled() 都能拿到）；
     3) 注册当前 Task 为令牌的子任务 → 令牌 cancel 时 → task.cancel() 触发 CancelledError（双重保险）；
     4) 若 quiet=True，则开启 main_agent 的静默模式，避免控制台刷冗长结果；
-    5) finally 中 unbind + dispose + 恢复 quiet。
+    5) detached=True：fire-and-forget 后台任务，WS 断开（切会话/关页面）不级联取消，
+       任务跑到完成/自身超时，结果落 checkpointer；显式停止按钮仍可取消；
+    6) finally 中 unbind + dispose + 恢复 quiet。
     """
     ctx: Optional[RequestContext] = None
     bind_tok = None
@@ -215,6 +218,7 @@ async def _run_with_ctx(
             session_dir=session_dir,
             timeout_sec=timeout_sec,
             extras={"entry": f"{corofn.__name__}" if hasattr(corofn, "__name__") else "unknown", "quiet": quiet},
+            detached=detached,
         )
         bind_tok = bind_request_context(ctx)
         # 登记当前运行的 Task：一旦 CancellationToken.cancel()，Task.cancel() 也会被触发
@@ -598,12 +602,16 @@ async def _try_run_workflow_push_events(
 
     # (6) 落库：workflow 直连路径只推 SSE 不写 checkpointer 会导致切会话后历史丢失，
     #     故必须在 ev_done 之前 await 完成（见函数 docstring 的竞态说明）。
+    #     若本轮经 run_deep_agent 执行（persisted_by_agent），agent 已落 Human(原话)+
+    #     AI(答案)，此处只写记忆、不重复追加气泡，否则历史出现双份且顺序颠倒。
     if user_label:
         try:
             _fa_save = final_answer.strip()
             if _fa_save:
                 from interfaces.api.routes.zsxq import _save_zsxq_to_history
-                await _save_zsxq_to_history(thread_id, _fa_save, user_label=user_label)
+                _persisted = bool(result.branch_trace.get("persisted_by_agent"))
+                await _save_zsxq_to_history(thread_id, _fa_save, user_label=user_label,
+                                            append_messages=not _persisted)
         except Exception as _save_err:
             print(f"[SSE-WF] workflow 结果落库失败（不致命）: {_save_err}")
 
@@ -2307,6 +2315,32 @@ async def stop_task(request: Request, current: CurrentUser = _Depends(get_curren
     }
 
 
+@app.get("/api/task/status")
+async def task_status(thread_id: str,
+                      current: CurrentUser = _Depends(get_current_user)):
+    """查询某会话是否仍有任务在跑（后台快捷任务 或 交互式聊天任务）。
+
+    前端切回会话/轮询时的**权威**信号：SessionRegistryActor 里任务登记
+    在"结果落库之后"才随 done 回调注销，因此 running=false 时结果必然已写历史。
+    不能用"历史消息数增长"代替——复盘预测阶段1 会把小作文热度中间结果先落库，
+    任务其实还在跑。P0 行级校验同 /api/task/stop。
+    """
+    if not thread_id:
+        raise HTTPException(status_code=400, detail="缺少 thread_id")
+    sess = storage.get_session(thread_id)
+    if sess and sess.get("user_id"):
+        current_user_id_must_match(current, sess["user_id"])
+    sa = _session_actor
+    if sa is None:
+        return {"thread_id": thread_id, "running": False}
+    info = await sa.ask(SRMsg.GET_TASK_INFO, {"thread_id": thread_id})
+    running = bool(
+        (info.get("has_bg_task") and not info.get("bg_done"))
+        or (info.get("has_agent_task") and not info.get("agent_done"))
+    )
+    return {"thread_id": thread_id, "running": running}
+
+
 async def _register_background_task(thread_id: str, task: asyncio.Task) -> None:
     """
     注册后台任务：改由 SessionRegistryActor 串行执行，
@@ -2557,7 +2591,7 @@ async def _run_review_prediction(thread_id: str, user_id: Optional[str] = None, 
 
         # ===== 保存到会话历史 =====
         try:
-            await _save_zsxq_to_history(thread_id, analysis_result)
+            await _save_zsxq_to_history(thread_id, analysis_result, user_label="复盘预测")
         except Exception as e:
             print(f"[ReviewPrediction] 保存历史失败（不致命）: {e}")
 
@@ -2661,7 +2695,7 @@ async def _run_review_prediction_dedup(thread_id: str, user_id: Optional[str] = 
                         )
                         monitor.report_task_result(_cached)
                         try:
-                            await _save_zsxq_to_history(thread_id, _cached)
+                            await _save_zsxq_to_history(thread_id, _cached, user_label="复盘预测")
                         except Exception as e:
                             print(f"[ReviewPrediction] 存档命中后写历史失败（不致命）: {e}")
                         return _cached
@@ -2726,7 +2760,7 @@ async def _run_review_prediction_dedup(thread_id: str, user_id: Optional[str] = 
             return result
         monitor.report_task_result(result)
         try:
-            await _save_zsxq_to_history(thread_id, result)
+            await _save_zsxq_to_history(thread_id, result, user_label="复盘预测")
         except Exception as e:
             print(f"[ReviewPrediction] 跟随者保存历史失败（不致命）: {e}")
         return result
@@ -2751,7 +2785,8 @@ async def run_review_prediction(req: ReviewPredictionRequest,
         current_user_id_must_match(current, sess.get("user_id"))
         if sess.get("user_id"):
             effective_user_id = sess["user_id"]
-    # 复盘预测 = 快捷按钮，控制台静默
+    # 复盘预测 = 快捷按钮，控制台静默；detached=True：切会话/关页面不杀任务，
+    # 结果落 checkpointer，用户切回即可见（显式"停止"按钮仍可取消）
     task = asyncio.create_task(
         _run_with_ctx(
             thread_id,
@@ -2763,6 +2798,7 @@ async def run_review_prediction(req: ReviewPredictionRequest,
             effective_user_id,
             req.user_query or "",
             quiet=True,
+            detached=True,
         )
     )
     await _register_background_task(thread_id, task)  # 防止同会话重复触发
@@ -3354,11 +3390,14 @@ async def websocket_endpoint(websocket: WebSocket, thread_id: str):
         #   (2) STOP_AND_REMOVE_TASK：asyncio.Task.cancel()（异步 await 点生效）；
         #   (3) 最后才从 ConnectionManager 中移除 WebSocket 登记（不会再有新发送者）。
         try:
-            # (1) 令牌级取消
+            # (1) 令牌级取消（detached 后台任务令牌在"连接断开"原因下自动跳过：
+            #     复盘预测/盘前研报热度等 fire-and-forget 任务切会话不杀，结果落库后切回可见）
             await cancel_by_thread_id(thread_id, "websocket_disconnected")
             # (2) asyncio.Task 级取消（SessionRegistryActor 串行保证原子性）
+            #     keep_bg=True：后台任务脱离连接生命周期，只清理交互式聊天任务
             if _session_actor is not None:
-                await _session_actor.send(SRMsg.STOP_AND_REMOVE_TASK, {"thread_id": thread_id})
+                await _session_actor.send(SRMsg.STOP_AND_REMOVE_TASK,
+                                          {"thread_id": thread_id, "keep_bg": True})
         except Exception:
             pass
         # (3) 最后才从连接管理器移除

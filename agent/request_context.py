@@ -56,11 +56,12 @@ class CancellationToken:
         "_callbacks",
         "_deadline_at",
         "_created_at",
+        "_detached",
         "_lock",  # 用于保护回调/子任务注册与取消触发的顺序（不保护 _cancelled，它用原子读）
         "__weakref__",
     )
 
-    def __init__(self, timeout_sec: Optional[float] = None) -> None:
+    def __init__(self, timeout_sec: Optional[float] = None, *, detached: bool = False) -> None:
         loop = asyncio.get_event_loop() if asyncio.get_event_loop_policy() else None
         self._id: str = uuid.uuid4().hex[:12]
         self._cancelled: bool = False
@@ -70,10 +71,14 @@ class CancellationToken:
         self._child_tokens: "weakref.WeakSet[CancellationToken]" = weakref.WeakSet()
         self._callbacks: List[Callable[["CancellationToken"], Any]] = []
         self._created_at: float = time.monotonic()
+        # detached=True：fire-and-forget 后台任务（复盘预测/盘前研报热度等快捷按钮）。
+        # 这类任务设计上脱离连接生命周期——用户切会话/关页面导致 WS 断开时不应被杀，
+        # 结果落 checkpointer，用户切回即可见；显式"停止"按钮与自身超时墙仍正常取消。
+        self._detached: bool = detached
         self._deadline_at: Optional[float] = (
             self._created_at + timeout_sec if timeout_sec is not None and timeout_sec > 0 else None
         )
-        # 注意：这里不创建 threading.Lock，因为 CancellationToken 的使用域是单线程 async 模型；
+        # 这里不创建 threading.Lock，因为 CancellationToken 的使用域是单线程 async 模型；
         # 真实的并发取消（跨线程发 cancel）只写 _cancelled = True + set()，两者本身在 CPython GIL 下原子。
         self._lock: Optional[asyncio.Lock] = None  # 惰性创建，减少开销
 
@@ -105,6 +110,11 @@ class CancellationToken:
     @property
     def age_sec(self) -> float:
         return time.monotonic() - self._created_at
+
+    @property
+    def detached(self) -> bool:
+        """是否为脱离连接生命周期的后台任务令牌（WS 断开不级联取消）。"""
+        return self._detached
 
     # ------------------------------------------------------------------
     # 取消触发
@@ -350,12 +360,15 @@ def create_request_context(
     timeout_sec: Optional[float] = None,
     request_id: Optional[str] = None,
     extras: Optional[Dict[str, Any]] = None,
+    detached: bool = False,
 ) -> RequestContext:
     """创建一份新的 RequestContext，并登记 thread_id → token 反向索引。
     注意：创建后必须 **立即** 调用 bind_request_context(ctx) 绑定到当前协程，
     且在 finally 块中 unbind + dispose。
+
+    detached=True：fire-and-forget 后台任务令牌，WS 断开（切会话/关页面）不级联取消。
     """
-    token = CancellationToken(timeout_sec=timeout_sec)
+    token = CancellationToken(timeout_sec=timeout_sec, detached=detached)
     ctx = RequestContext(
         token=token,
         request_id=request_id or uuid.uuid4().hex,
@@ -462,8 +475,13 @@ def cancel_current_token_with_reason(reason: str) -> bool:
 async def cancel_by_thread_id(thread_id: str, reason: str = "cancelled") -> Dict[str, Any]:
     """根据 thread_id 找令牌并触发取消（供 WebSocket DISCONNECT、STOP 接口使用）。
 
+    detached 令牌（fire-and-forget 后台任务）在"连接断开"类原因下跳过取消：
+    用户切会话/关页面不应杀掉复盘预测等后台任务（结果落 checkpointer，切回可见）；
+    显式停止（user_stop_clicked）与任务自身超时墙不受影响。
+
     返回：
       {"found": True,  "token_id": "...", "reason": "...", "already_cancelled": bool}
+      {"found": True,  "skipped": "detached", ...}  # detached 令牌在连接断开时被跳过
       或
       {"found": False}
     """
@@ -477,6 +495,14 @@ async def cancel_by_thread_id(thread_id: str, reason: str = "cancelled") -> Dict
             # 弱引用已失效 → 清理陈旧条目
             _thread_index.pop(thread_id, None)
             return {"found": False}
+    # detached 后台任务：仅"连接断开"类原因跳过；显式停止/超时照常取消
+    if tok.detached and "disconnect" in reason:
+        return {
+            "found": True,
+            "skipped": "detached",
+            "token_id": tok.token_id,
+            "reason": reason,
+        }
     # 真正的 cancel 在锁外执行（防止回调/子任务级联取消阻塞 index 操作）
     already = tok.is_cancelled
     ok = tok.cancel(reason)  # ok=True 表示首次触发；False 表示本来就已取消

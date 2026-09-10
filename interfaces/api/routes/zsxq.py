@@ -83,23 +83,17 @@ def install_server_helpers(*, run_with_ctx, register_background_task, default_bg
 # ===========================================================
 # 辅助函数 1/7：把 zsxq txt 结果写入会话历史 + 记忆管理
 # ===========================================================
-async def _save_zsxq_to_history(thread_id: str, txt_content: str, *, user_label: str = "盘前研报热度"):
-    """把盘前研报热度的用户消息和结果存入会话历史（checkpointer），刷新后可恢复。
-    同时写入 Context Engineering 记忆管理，供后续摘要压缩和关键决策检索。
+async def _save_zsxq_to_history(thread_id: str, txt_content: str, *,
+                                user_label: str = "盘前研报热度",
+                                append_messages: bool = True):
+    """把结果写入记忆管理，并按需把用户气泡+结果追加到 checkpointer（刷新可恢复）。
 
-    user_label：写入 checkpointer 的用户气泡文案（快捷按钮场景传用户真实输入，
-    如"盘前新闻"——供 switchSession 恢复历史时还原交互现场）。
+    user_label：写入 checkpointer 的用户气泡文案（快捷按钮场景传用户真实输入）。
+    append_messages：本轮若经 run_deep_agent 执行，agent 已把 Human(原话)+AI(答案)
+        落库，调用方传 False 跳过追加，只写记忆，避免重复气泡/顺序颠倒。
 
-    实现说明（2026-09-09 修复）：
-    deepagents graph 的 input_channels 是 '__start__'（str）而非 ['messages']（list），
-    aupdate_state(as_node=None) 在已有会话上会走 "最后更新节点" 推断逻辑，
-    但 deepagents 多层 middleware（TodoListMiddleware/PatchToolCallsMiddleware 等）
-    会让 versions_seen 出现多个节点同时更新，推断为 ambiguous → 只创建空 checkpoint
-    （writes_count=0，messages 完全没写入）。表现为快捷按钮结果不进历史，刷新即丢。
-
-    修复：显式传 as_node=START（"__start__"）。START 节点是 graph 入口，其 writers 会
-    按 reducer（messages 用 add_messages）把 {"messages":[HumanMessage, AIMessage]}
-    正确分发到 messages channel —— 实测 aget_state 能读到且追加正确（2 条→4 条）。
+    落库实现：deepagents graph 入口为 START("__start__")，必须 as_node=START 显式
+    指定写入节点，否则多层 middleware 会让更新节点推断 ambiguous，只建空 checkpoint。
     """
     try:
         from langchain_core.messages import HumanMessage, AIMessage
@@ -107,14 +101,48 @@ async def _save_zsxq_to_history(thread_id: str, txt_content: str, *, user_label:
         from agents.analyst.agent import get_main_agent
         agent = await get_main_agent()
         config = {"configurable": {"thread_id": thread_id}}
-        await agent.aupdate_state(  # type: ignore[attr-defined]
-            config,
-            {"messages": [
-                HumanMessage(content=user_label),
-                AIMessage(content=txt_content),
-            ]},
-            as_node=START,
-        )
+
+        # 幂等兜底：末尾已是同一对消息时也跳过追加（记忆仍照常写入）
+        def _norm(s: str) -> str:
+            return "".join(str(s).split())
+
+        def _same(a: str, b: str) -> bool:
+            na, nb = _norm(a), _norm(b)
+            if not na or not nb:
+                return False
+            if na == nb:
+                return True
+            long, short = (na, nb) if len(na) >= len(nb) else (nb, na)
+            # 容忍末尾风险声明等小段差异（≤300 字）且短串完整包含于长串
+            return len(long) - len(short) <= 300 and short in long
+
+        _already_saved = False
+        if append_messages:
+            try:
+                _state = await agent.aget_state(config)  # type: ignore[attr-defined]
+                _msgs = (_state.values or {}).get("messages", []) if _state else []
+                _last_h = next((m for m in reversed(_msgs)
+                                if type(m).__name__ == "HumanMessage"), None)
+                _last_a = next((m for m in reversed(_msgs)
+                                if type(m).__name__ == "AIMessage"
+                                and not getattr(m, "tool_calls", None)), None)
+                _already_saved = (
+                    _last_h is not None and _last_a is not None
+                    and _same(getattr(_last_h, "content", ""), user_label)
+                    and _same(getattr(_last_a, "content", ""), txt_content)
+                )
+            except Exception as _pe:
+                print(f"[ZSXQ分析] 落库幂等检查失败（按未保存处理）: {_pe}")
+
+        if append_messages and not _already_saved:
+            await agent.aupdate_state(  # type: ignore[attr-defined]
+                config,
+                {"messages": [
+                    HumanMessage(content=user_label),
+                    AIMessage(content=txt_content),
+                ]},
+                as_node=START,
+            )
         # 同步写入记忆管理（该条为高优关键决策）；标签随 user_label 走，
         # 避免盘前新闻结果在记忆里被误标为"盘前研报热度分析"
         try:
@@ -521,7 +549,9 @@ async def run_zsxq_analysis(req: ZsxqAnalysisRequest):
             "请在 server.py startup 阶段调用 interfaces.api.routes.zsxq.install_server_helpers(...)。"
         )
     thread_id = req.thread_id
-    # 后台异步执行，不阻塞响应；附带 CancellationToken（480s 超时 + STOP/DISCONNECT 级联取消）
+    # 后台异步执行，不阻塞响应；附带 CancellationToken（480s 超时 + STOP 级联取消）
+    # detached=True：切会话/关页面（WS 断开）不杀任务——fire-and-forget 快捷按钮，
+    # 结果落 checkpointer，用户切回即可见；显式"停止"按钮仍可取消。
     # 实测 runner 全流程 ~286s（抓取 259s + Ollama 分析 27s），加 Ollama 预检/调度开销
     # 会逼近原 300s 上限，故单独放宽到 480s 与 _ZSXQ_RUNNER_TOTAL_TIMEOUT_SEC 对齐；
     # 前端 ZSXQ_RUNNING_TIMEOUT_MS 同步设为 480s，普通聊天仍 300s。
@@ -534,6 +564,7 @@ async def run_zsxq_analysis(req: ZsxqAnalysisRequest):
             _run_zsxq_analysis,
             thread_id,
             quiet=True,
+            detached=True,
         )
     )
     await _SERVER_REGISTER_BG_TASK(thread_id, task)  # 防止同会话重复触发
