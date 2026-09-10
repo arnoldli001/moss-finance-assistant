@@ -54,11 +54,11 @@
 
     // 维度关键词映射（中文词 → 维度key），长词优先
     const dimMap = [
-      { words: ['品牌', '客户与品牌', '客户集中度'], key: 'brand' },
-      { words: ['技术', '研发', '专利', '创新', '芯片架构', '制程'], key: 'technology' },
+      { words: ['品牌', '客户与品牌', '国酒', '品牌价值', '品牌力', '中科院', '国产替代'], key: 'brand' },
+      { words: ['技术', '研发', '专利', '创新', '芯片架构', '制程', '算力'], key: 'technology' },
       { words: ['成本', '毛利率', '规模效应', '供应链'], key: 'cost' },
       { words: ['网络效应', '网络', '平台效应', '生态', '软件生态', '开发者生态'], key: 'network' },
-      { words: ['转换成本', '转换', '用户粘性', '客户锁定', '忠诚度', '粘性'], key: 'switching' },
+      { words: ['转换成本', '转换', '用户粘性', '客户锁定', '忠诚度', '粘性', '客户集中度', '深度绑定', '绑定', '迁移成本', '迁移'], key: 'switching' },
     ];
 
     // 文字评级 → 分数映射（长词优先）
@@ -72,7 +72,7 @@
     const scoreWords = Object.keys(scoreWordMap).sort(function(a,b){return b.length-a.length;});
 
     // 正面/负面关键词（用于段落描述推断评分）
-    const positiveWords = ['领先', '优势', '极强', '强大', '显著', '深厚', '第一梯队', '高', '强', '突出', '明显', '领先', '国产维度领先'];
+    const positiveWords = ['领先', '优势', '极强', '强大', '显著', '深厚', '第一梯队', '高', '强', '突出', '明显', '领先', '国产维度领先', '中科院', '国产替代', '自主可控'];
     const negativeWords = ['劣势', '受限', '差距悬殊', '代差', '暴跌', '断供', '依赖', '无优势', '薄弱', '缺失', '低', '弱', '有限', '不明显', '差距'];
 
     function inferScoreFromSegment(segment) {
@@ -120,25 +120,26 @@
         // 截到换行
         var nlIdx = segment.indexOf('\\n');
         if (nlIdx > 0) segment = segment.substring(0, nlIdx);
-        // 截到下一个维度标题（要求前面有换行或冒号，避免"迁移成本"误匹配）
+        // 优先按句号截断（同一句话内的维度词不截断，避免"客户集中度"把品牌段切开）
+        var periodIdx = segment.indexOf('。');
+        if (periodIdx > 0) {
+          return segment.substring(0, periodIdx + 1);
+        }
+        // 没有句号时，截到下一个维度标题（要求前面有换行或冒号）
         var nextDimIdx = segment.length;
         dimMap.forEach(function(d) {
           if (d.key === currentKey) return;
           d.words.forEach(function(w) {
-            if (w.length < 2) return; // 跳过单字词如"成本"、"技术"
+            if (w.length < 2) return;
             var p = segment.indexOf(w);
-            // 只在词前面是换行、冒号、或段首时才当作维度标题
             if (p > 0) {
               var before = segment.charAt(p - 1);
-              if (before === '\\n' || before === '：' || before === ':' || before === ' ' || before === '（' || before === '(') {
+              if (before === '\n' || before === '：' || before === ':' || before === ' ' || before === '（' || before === '(') {
                 if (p < nextDimIdx) nextDimIdx = p;
               }
             }
           });
         });
-        // 截到句号
-        var periodIdx = segment.indexOf('。');
-        if (periodIdx > 0 && periodIdx < nextDimIdx) nextDimIdx = Math.min(nextDimIdx, periodIdx + 1);
         return segment.substring(0, nextDimIdx);
       }
       return '';
