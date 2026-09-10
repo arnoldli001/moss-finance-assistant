@@ -44,41 +44,132 @@
   }
 
   // 从文本中解析五维度评分
-  // 支持格式："品牌：5/5"、"品牌(5分)"、"品牌：极强"、"品牌 5分" 等
+  // 支持格式：
+  //   1. 数字评分："品牌：5/5"、"品牌(4分)"、"品牌 5"
+  //   2. 文字评级："品牌：极强"、"品牌(强)"
+  //   3. 段落描述："技术维度（国产第一梯队，但对国际巨头存在代差）"
   function parseMoatScores(text) {
     if (!text) return null;
     const scores = {};
-    let found = false;
 
-    // 维度关键词映射
-    const dimMap = {
-      '品牌': 'brand', 'brand': 'brand',
-      '技术': 'technology', 'technology': 'technology', '研发': 'technology',
-      '成本': 'cost', 'cost': 'cost', '成本优势': 'cost',
-      '网络效应': 'network', 'network': 'network', '网络': 'network',
-      '转换成本': 'switching', 'switching': 'switching', '转换': 'switching',
+    // 维度关键词映射（中文词 → 维度key），长词优先
+    const dimMap = [
+      { words: ['品牌', '客户与品牌', '客户集中度'], key: 'brand' },
+      { words: ['技术', '研发', '专利', '创新', '芯片架构', '制程'], key: 'technology' },
+      { words: ['成本', '毛利率', '规模效应', '供应链'], key: 'cost' },
+      { words: ['网络效应', '网络', '平台效应', '生态', '软件生态', '开发者生态'], key: 'network' },
+      { words: ['转换成本', '转换', '用户粘性', '客户锁定', '忠诚度', '粘性'], key: 'switching' },
+    ];
+
+    // 文字评级 → 分数映射（长词优先）
+    const scoreWordMap = {
+      '极宽': 5, '极强': 5, '极高': 5, '非常强': 5, '显著': 5, '深厚': 5, '强大': 5, '第一梯队': 5,
+      '宽': 4, '强': 4, '高': 4, '较高': 4, '较强': 4, '明显': 4, '突出': 4, '领先': 4, '优势': 4,
+      '中等': 3, '中': 3, '一般': 3, '适中': 3, '尚可': 3, '追赶': 3,
+      '窄': 2, '弱': 2, '低': 2, '较低': 2, '较弱': 2, '有限': 2, '不明显': 2, '差距悬殊': 2, '受限': 2,
+      '无': 0, '极低': 0, '没有': 0, '缺失': 0, '无优势': 0, '薄弱': 1, '劣势': 1,
     };
+    const scoreWords = Object.keys(scoreWordMap).sort(function(a,b){return b.length-a.length;});
 
-    // 匹配 "维度：X分" 或 "维度 X/5" 或 "维度：极强/强/中/弱"
-    const scoreWordMap = { '极宽': 5, '极强': 5, '宽': 4, '强': 4, '中等': 3, '中': 3, '窄': 2, '弱': 1, '无': 0, '极低': 0 };
+    // 正面/负面关键词（用于段落描述推断评分）
+    const positiveWords = ['领先', '优势', '极强', '强大', '显著', '深厚', '第一梯队', '高', '强', '突出', '明显', '领先', '国产维度领先'];
+    const negativeWords = ['劣势', '受限', '差距悬殊', '代差', '暴跌', '断供', '依赖', '无优势', '薄弱', '缺失', '低', '弱', '有限', '不明显', '差距'];
 
-    for (const [word, dim] of Object.entries(dimMap)) {
-      // 匹配数字评分：品牌：4分、品牌(4/5)、品牌 4
-      const numRegex = new RegExp(word + '[:：\\s]*\\(?([0-5])(?:\\s*[/／]\\s*5)?\\)?\\s*分?', 'i');
-      const numMatch = text.match(numRegex);
-      if (numMatch) {
-        scores[dim] = parseInt(numMatch[1], 10);
-        found = true;
-        continue;
+    function inferScoreFromSegment(segment) {
+      // 先找评级词，但要处理否定形式（如"无优势"、"没有优势"）
+      for (var i = 0; i < scoreWords.length; i++) {
+        var w = scoreWords[i];
+        var idx = segment.indexOf(w);
+        if (idx === -1) continue;
+        // 检查前面2个字符内是否有否定词
+        var before = segment.substring(Math.max(0, idx - 3), idx);
+        var hasNegation = before.indexOf('无') !== -1 || before.indexOf('没有') !== -1 ||
+                          before.indexOf('不') !== -1 || before.indexOf('缺乏') !== -1;
+        if (hasNegation) {
+          // 否定形式：高分词变低分
+          var orig = scoreWordMap[w];
+          return orig >= 4 ? 1 : (orig >= 3 ? 2 : orig);
+        }
+        return scoreWordMap[w];
       }
-      // 匹配文字评级：品牌：极强、品牌(强)
-      const wordRegex = new RegExp(word + '[:：\\s]*\\(?(' + Object.keys(scoreWordMap).join('|') + ')\\)?', 'i');
-      const wordMatch = text.match(wordRegex);
-      if (wordMatch) {
-        scores[dim] = scoreWordMap[wordMatch[1]];
-        found = true;
-      }
+      // 再用正面/负面关键词推断
+      var posCount = 0, negCount = 0;
+      positiveWords.forEach(function(w) {
+        // 同样检查否定形式
+        var idx = segment.indexOf(w);
+        if (idx === -1) return;
+        var before = segment.substring(Math.max(0, idx - 3), idx);
+        var hasNeg = before.indexOf('无') !== -1 || before.indexOf('没有') !== -1 || before.indexOf('不') !== -1;
+        if (hasNeg) negCount++; else posCount++;
+      });
+      negativeWords.forEach(function(w) { if (segment.indexOf(w) !== -1) negCount++; });
+      if (posCount > 0 && negCount === 0) return 4;
+      if (posCount > 0 && negCount > 0) return 3;
+      if (posCount === 0 && negCount > 0) return 1;
+      return -1; // 无法推断
     }
+
+    function extractSegment(text, dimWords, currentKey) {
+      // 找到维度关键词后面的段落（到换行或下一个明确的维度标题）
+      for (var i = 0; i < dimWords.length; i++) {
+        var word = dimWords[i];
+        var idx = text.indexOf(word);
+        if (idx === -1) continue;
+        var start = idx + word.length;
+        var segment = text.substring(start, start + 200);
+        // 截到换行
+        var nlIdx = segment.indexOf('\\n');
+        if (nlIdx > 0) segment = segment.substring(0, nlIdx);
+        // 截到下一个维度标题（要求前面有换行或冒号，避免"迁移成本"误匹配）
+        var nextDimIdx = segment.length;
+        dimMap.forEach(function(d) {
+          if (d.key === currentKey) return;
+          d.words.forEach(function(w) {
+            if (w.length < 2) return; // 跳过单字词如"成本"、"技术"
+            var p = segment.indexOf(w);
+            // 只在词前面是换行、冒号、或段首时才当作维度标题
+            if (p > 0) {
+              var before = segment.charAt(p - 1);
+              if (before === '\\n' || before === '：' || before === ':' || before === ' ' || before === '（' || before === '(') {
+                if (p < nextDimIdx) nextDimIdx = p;
+              }
+            }
+          });
+        });
+        // 截到句号
+        var periodIdx = segment.indexOf('。');
+        if (periodIdx > 0 && periodIdx < nextDimIdx) nextDimIdx = Math.min(nextDimIdx, periodIdx + 1);
+        return segment.substring(0, nextDimIdx);
+      }
+      return '';
+    }
+
+    var found = false;
+    dimMap.forEach(function(dim) {
+      if (scores[dim.key] !== undefined) return;
+
+      // 1) 先尝试数字评分：品牌：4/5、品牌(4分)
+      for (var i = 0; i < dim.words.length; i++) {
+        var word = dim.words[i];
+        var numRegex = new RegExp(word + '[^0-9]{0,8}([0-5](?:\\.\\d)?)(?:\\s*[/／]\\s*5)?\\s*分?', 'i');
+        var numMatch = text.match(numRegex);
+        if (numMatch) {
+          scores[dim.key] = Math.round(parseFloat(numMatch[1]));
+          found = true;
+          return;
+        }
+      }
+
+      // 2) 提取该维度的描述段落，从中推断评分
+      var segment = extractSegment(text, dim.words, dim.key);
+      if (segment) {
+        var score = inferScoreFromSegment(segment);
+        if (score >= 0) {
+          scores[dim.key] = score;
+          found = true;
+        }
+      }
+    });
 
     return found ? scores : null;
   }
@@ -155,18 +246,22 @@
 
     useEffect(function () {
       function scanMessages() {
-        var msgs = document.querySelectorAll('.msg.assistant, .assistant-msg, [data-role="assistant"]');
-        for (var i = 0; i < msgs.length; i++) {
-          var msg = msgs[i];
-          var text = msg.textContent || '';
+        // 助手消息结构：.msg-wrap.ai-msg[data-role=assistant] > .msg.assistant
+        // 从外层 wrap 取 data-msg-id 做去重，内层取文本内容
+        var wraps = document.querySelectorAll('.msg-wrap.ai-msg');
+        for (var i = 0; i < wraps.length; i++) {
+          var wrap = wraps[i];
+          var inner = wrap.querySelector('.msg.assistant');
+          if (!inner) continue;
+          var text = inner.textContent || '';
           // 检查是否包含护城河关键词
-          if (text.indexOf('护城河') !== -1 || text.indexOf('品牌') !== -1 && text.indexOf('转换成本') !== -1) {
-            var msgId = msg.getAttribute('data-msg-id') || msg.id || ('msg_' + i);
+          if (text.indexOf('护城河') !== -1 ||
+              (text.indexOf('品牌') !== -1 && text.indexOf('转换成本') !== -1)) {
+            var msgId = wrap.getAttribute('data-msg-id') || wrap.id || ('wrap_' + i);
             if (processedRef.current.has(msgId)) continue;
             var scores = parseMoatScores(text);
             if (scores) {
               processedRef.current.add(msgId);
-              // 提取股票名（尝试从消息中找）
               setMoatData({ scores: scores, stockName: '' });
             }
           }
