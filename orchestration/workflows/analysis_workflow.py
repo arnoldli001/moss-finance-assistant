@@ -75,6 +75,93 @@ RISK_DISCLAIMER = (
 )
 
 
+def _normalize_premarket_markdown(text: str) -> str:
+    """盘前简报 markdown 标题规范化（2026-09-10，low-effort 模型格式偷懒的确定性兜底）。
+
+    实测 low effort 下模型高频出现：
+      ① 「###2.美股…」# 号后漏空格——CommonMark 不认，整行被渲染成纯文本；
+      ② 标题与表头拼行：「###2.美股表现|股票 |涨跌幅 |新闻 |」；
+      ③ 标题与正文拼行：「###3.推理分析与预测**利好 A股…**」。
+    prompt 骨架+铁律约束后仍偶发，故输出侧确定性修复：
+      - 标题行 # 后补空格；
+      - 标题行内含管道符 | 或加粗符 ** 时，在首个该字符处断为「标题 / 空行 / 剩余内容」。
+    仅处理 # 开头的标题行，正文与表格行不受影响。
+    """
+    import re as _re
+    out: List[str] = []
+    for _line in text.split("\n"):
+        _m = _re.match(r"^(#{1,6})\s*(.*)$", _line)
+        if not _m:
+            out.append(_line)
+            continue
+        _hashes, _rest = _m.group(1), _m.group(2)
+        _cuts = [i for i in (_rest.find("|"), _rest.find("**")) if i >= 0]
+        if _cuts:
+            _cut = min(_cuts)
+            _title = _rest[:_cut].rstrip()
+            _tail = _rest[_cut:].lstrip()
+            out.append(f"{_hashes} {_title}")
+            out.append("")
+            out.append(_tail)
+        else:
+            out.append(f"{_hashes} {_rest.lstrip()}")
+    return "\n".join(out)
+
+
+# 美股隔夜行情：新浪 gb_ 实时接口（国内直连/免 key/GBK），韩股 SK海力士 yfinance 兜底。
+# 2026-09-10：新闻搜索对美股个股隔夜涨跌幅的召回是碎片化三态（旧闻/矛盾/缺失），
+# low-effort 模型在"填旧数据 vs 全填无"之间反复横跳；改由实时行情接口提供权威涨跌幅
+# 注入 prompt，表格②直接照抄，新闻搜索只负责新闻列。
+_US_QUOTE_SINA = [
+    ("gb_mu", "美光", "MU"), ("gb_googl", "谷歌", "GOOGL"),
+    ("gb_meta", "Meta", "META"), ("gb_aaoi", "应用光电", "AAOI"),
+    ("gb_glw", "康宁", "GLW"), ("gb_nvda", "英伟达", "NVDA"),
+]
+
+
+def _fetch_us_quotes_block_sync() -> str:
+    """同步拉取美股隔夜收盘行情（新浪 gb_ 接口 6 股 + yfinance 韩股 SK海力士）。
+    返回注入 prompt 的文本块；任何异常/全空返回 ""（调用方降级为纯搜索素材）。"""
+    import urllib.request as _u
+    rows = []
+    try:
+        _url = "https://hq.sinajs.cn/list=" + ",".join(_s for _s, _, _ in _US_QUOTE_SINA)
+        _req = _u.Request(_url, headers={"Referer": "https://finance.sina.com.cn",
+                                         "User-Agent": "Mozilla/5.0"})
+        _raw = _u.urlopen(_req, timeout=6).read().decode("gbk", errors="replace")
+        for _sym, _cn, _code in _US_QUOTE_SINA:
+            _m = re.search(r'var hq_str_%s="([^"]*)"' % _sym, _raw)
+            if not _m or not _m.group(1):
+                continue
+            _f = _m.group(1).split(",")
+            try:
+                rows.append((_cn, _code, float(_f[2]), _f[1], _f[3]))  # 名/码/涨跌幅%/最新价/时间
+            except (ValueError, IndexError):
+                continue
+    except Exception:
+        pass
+    # SK海力士（韩股，新浪 gb_ 不覆盖）：yfinance 兜底；Yahoo 网络不通时静默跳过
+    try:
+        import yfinance as _yf
+        _h = _yf.Ticker("000660.KS").history(period="5d")
+        if len(_h) >= 2:
+            _prev = float(_h["Close"].iloc[-2])
+            _last = float(_h["Close"].iloc[-1])
+            rows.append(("SK海力士", "000660.KS", round((_last - _prev) / _prev * 100, 2),
+                         f"{_last:.2f}", ""))
+    except Exception:
+        pass
+    if not rows:
+        return ""
+    _ts = next((r[4] for r in rows if r[4]), "")
+    _lines = [f"【美股隔夜收盘实时行情（新浪财经实时接口，{_ts} 北京时间；"
+              f"以下涨跌幅为权威数据，表格②对应股票必须照抄，禁止改写或填「无」）】"]
+    for _cn, _code, _pct, _price, _ in rows:
+        _sign = "+" if _pct >= 0 else ""
+        _lines.append(f"- {_cn}({_code})：{_sign}{_pct}%，最新价 {_price} 美元")
+    return "\n".join(_lines)
+
+
 # ======================================================================
 # 工具函数：中国时区 now / 文件名
 # ======================================================================
@@ -659,7 +746,11 @@ async def run_analysis_workflow(
             # Tavily 不做站点定向、拆分器只按股票拆，导致各平台热榜内容一条都搜不到。
             # 注意：不把用户 fullQuery 原文喂给美股搜索——StockMatcher 会把「海力士/应用光电」
             # 误匹配成 A 股（海力风电/光电股份）；美股词用「SK海力士/AAOI」写法避开误匹配。
-            _us_q = "美股 MU美光、SK海力士、谷歌、Meta、AAOI、康宁、英伟达等科技股最新涨跌幅及新闻"
+            # 2026-09-10 二次修复：query 加「隔夜收盘/盘前」时段词——旧 query「最新涨跌幅」
+            # 太泛，凌晨/早高峰实测召回的是 3 月旧闻与互相矛盾的历史涨跌，模型只能填「无」；
+            # 盘前新闻是晨间场景（北京 8-9 点 = 美东隔夜收盘/盘前），时段词显著提升实时行情召回。
+            _us_q = ("美股隔夜收盘/盘前行情 美光MU、SK海力士、谷歌GOOGL、Meta、"
+                     "AAOI、康宁GLW、英伟达NVDA 涨跌幅 最新")
             win_tip = _china_market_search_window_tip()
             site_tasks = [
                 _run_site_search(label=_lbl, query=_q, domains=_dom, max_results=8)
@@ -676,12 +767,16 @@ async def run_analysis_workflow(
                 max_results=8,
             )
             zsxq_task = _run_zsxq("盘前新闻 今日 小作文 公告", stock_names=[], stock_codes=[], limit=3)
-            _wf_p(stage="盘前新闻：6 平台定向 + 美股夜盘 + 知识星球 并发检索中", percent=35,
-                  detail="8 个异步任务并行（单路 45s 超时墙），等待 gather 返回 ...")
-            _gathered = await asyncio.gather(*site_tasks, us_task, zsxq_task, return_exceptions=False)
+            # 美股隔夜实时行情（新浪接口，to_thread 不阻塞事件循环；内部全异常兜底）
+            _quotes_task = asyncio.to_thread(_fetch_us_quotes_block_sync)
+            _wf_p(stage="盘前新闻：6 平台定向 + 美股夜盘 + 实时行情 + 知识星球 并发检索中", percent=35,
+                  detail="9 个异步任务并行（单路 45s 超时墙），等待 gather 返回 ...")
+            _gathered = await asyncio.gather(*site_tasks, us_task, zsxq_task, _quotes_task,
+                                             return_exceptions=False)
             site_res = list(_gathered[:len(_PREMARKET_SITE_SEARCHES)])
             us_res = _gathered[len(_PREMARKET_SITE_SEARCHES)]
             zsxq_res = _gathered[len(_PREMARKET_SITE_SEARCHES) + 1]
+            _us_quotes_block = str(_gathered[len(_PREMARKET_SITE_SEARCHES) + 2] or "")
             # 美股夜盘条目同样补 channel 标签 + 当天日期：
             # topic=news 命中的富途/tradingkey 快讯含真实涨跌幅但无日期，不补会在聚合排序中沉底被截断。
             _today_us = _now_cn().strftime("%Y-%m-%d")
@@ -772,19 +867,43 @@ async def run_analysis_workflow(
                 "（雪球/东方财富股吧/同花顺/财联社/百度人气榜/韭研公社，每条结果的 channel 字段即来源平台）"
                 " + 美股 + 知识星球聚合的搜索结果。\n\n"
                 f"【搜索结果】\n{str(aggregated_prompt_context)[:PREMARKET_FINAL_PROMPT_CONTEXT_CHARS]}\n\n"
-                "【输出结构（必须严格按以下三段 markdown 格式输出，禁止增减段落、禁止用 HTML 标签）】\n"
+                + (f"{_us_quotes_block}\n\n" if _us_quotes_block else "")
+                + "【输出结构（必须严格按以下骨架填充。标题格式铁律：「### 」后必须带空格、"
+                "每个标题独占一行且该行禁止出现管道符 | 或星号 *；标题与下方表格/正文之间"
+                "必须空一行；禁止增减段落、禁止用 HTML 标签）】\n"
                 "\n"
                 "### 1. 平台热点总结（热门个股/事件）\n"
-                "以 markdown 表格输出，表头固定为：| 股票/板块 | 事件 | 提及的平台 |\n"
-                "（最多 10 行，按重要度排序，跨平台去重后择要；事件列简述热点事件≤30字；提及的平台列填 channel 字段对应的平台名，多平台用顿号分隔）\n"
+                "\n"
+                "| 股票/板块 | 事件 | 提及的平台 |\n"
+                "| --- | --- | --- |\n"
+                "（最多 10 行，按重要度排序，跨平台去重后择要；事件列简述热点事件≤30字；"
+                "提及的平台列填 channel 字段对应的平台名，多平台用顿号分隔）\n"
                 "\n"
                 "### 2. 美股相关科技股盘前/盘中表现\n"
-                "以 markdown 表格输出，表头固定为：| 股票 | 涨跌幅 | 新闻 |\n"
-                "（股票固定为：美光、SK海力士、谷歌、Meta、应用光电、康宁、英伟达；涨跌幅有数据填百分比如+5%/-2.3%，无则填「无」；新闻列简述当日要点，无则填「搜索结果未提供相关行情/新闻」）\n"
+                "\n"
+                "| 股票 | 涨跌幅 | 新闻 |\n"
+                "| --- | --- | --- |\n"
+                "| 美光 |  |  |\n"
+                "| SK海力士 |  |  |\n"
+                "| 谷歌 |  |  |\n"
+                "| Meta |  |  |\n"
+                "| 应用光电 |  |  |\n"
+                "| 康宁 |  |  |\n"
+                "| 英伟达 |  |  |\n"
+                "（严格按以上 7 行顺序逐行填充。涨跌幅列：若上方有【美股隔夜收盘实时行情】块，"
+                "其中股票的涨跌幅必须原样照抄（如 +2.75%、-3.25%），禁止改写、四舍五入或填「无」；"
+                "该块未覆盖的股票，才依据搜索素材提取——素材正文/标题中以「今晨/隔夜/盘前/最新」"
+                "措辞描述、或不带明确日期的涨跌幅，提取为百分比；仅当完全无任何涨跌信息时才填「无」。"
+                "新闻列：简述素材中该公司当日要点（可结合行情块的价格），无则填「搜索结果未提供相关行情/新闻」。\n"
+                "⚠️ 时效铁律：以下素材均为今晨实时检索。搜索素材若仅提供带明确旧日期"
+                "（如「3月31日」「5月1日」）的历史涨跌，禁止将其当作当日涨跌幅：该格以实时行情块为准"
+                "（行情块无此股时填「无」），可在新闻列以「近期动态：…」简述。）\n"
                 "\n"
                 "### 3. 推理分析与预测\n"
+                "\n"
                 "**利好 A股概念/个股：**\n"
                 "- 板块/概念：简述利好逻辑，可列具体 A股个股名（需标注「需自选验证」），最多 3 条。\n"
+                "\n"
                 "**利空 A股概念/个股：**\n"
                 "- 板块/概念：简述利空逻辑，最多 3 条。\n"
                 "\n"
@@ -857,7 +976,8 @@ async def run_analysis_workflow(
                             _wf_p(stage=f"盘前新闻：综答第{_attempt - 1}发超时，退避后自动重试", percent=95,
                                   detail=f"云端模型繁忙，{int(PREMARKET_FINAL_RETRY_BACKOFF_SEC)}s 后自动重试（第 {_attempt}/{len(_attempt_budgets)} 次）...")
                             await asyncio.sleep(PREMARKET_FINAL_RETRY_BACKOFF_SEC)
-                        final_answer = (await _afin_invoke(_fin_prompt, _total, _stall)).strip()
+                        final_answer = _normalize_premarket_markdown(
+                            (await _afin_invoke(_fin_prompt, _total, _stall)).strip())
                         trace["final_model"] = "cloud:DEEPSEEK_V4_FLASH" + (f"(attempt{_attempt})" if _attempt >= 2 else "")
                         break
                     except Exception as _fin_err:

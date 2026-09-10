@@ -66,12 +66,13 @@ PREMARKET_TASK_TIMEOUT_SEC: float = 300.0
 PREMARKET_FINAL_LLM_CLIENT_TIMEOUT_SEC: int = 75
 
 # 盘前新闻终态综答（直连 DEEPSEEK_V4_FLASH 专用实例）超时参数。
-# ✅ 根因已根治（2026-09-10）：DeepSeek V4 思考模式默认开启且 effort=high，对 ~8K 结构化
-# prompt 暗推理 100-120s+（流式表现为全空 delta ~122个/s），曾致"综合推理超时"。
-# deepseek_client._premarket_final_model 已显式 extra_body={"thinking":{"type":"disabled"}}
-# 关闭思考——实测首内容 chunk 0.7s、总耗时 5.0s（原 99.5s/103.4s）。
-# 以下参数降级为防御性兜底（API 行为回退/极端拥堵时仍守 300s 外墙）：
-PREMARKET_FINAL_ATTEMPT_TOTAL_SEC: float = 120.0  # 单发总预算（原暗推理场景的继承值，现绰绰有余）
+# 思考模式调优历程（2026-09-10）：V4 思考默认开启 effort=high，~8K 结构化 prompt
+# 暗推理 100-120s+（流式表现为全空 delta ~122个/s），曾致"综合推理超时"；
+# 完全关闭（thinking disabled）虽 0.7s 出字但矫枉过正——模型丧失跨条目整合力，
+# 美股表格把当日涨跌当"历史新闻"拒填；最终方案 reasoning_effort="low"——
+# 对照探针实测首内容 4.2s/总 9.3s（与 disabled 几乎同速）且保留数据提取推理。
+# 以下超时参数为防御性兜底（API 行为回退/极端拥堵时仍守 300s 外墙）：
+PREMARKET_FINAL_ATTEMPT_TOTAL_SEC: float = 120.0  # 单发总预算（low-effort 正常 5-15s，余量充足）
 PREMARKET_FINAL_ATTEMPTS: int = 2                 # 发数：2×120 + 退避20 = 260s，+14s 开销 < 300s 外墙
 PREMARKET_FINAL_STALL_SEC: float = 30.0           # 连续无任何 chunk 超此值判流死，立即重试
 PREMARKET_FINAL_RETRY_BACKOFF_SEC: float = 20.0   # 重试前退避
@@ -1227,7 +1228,7 @@ STOCK_CACHE_WARMUP_SOURCES: tuple = (
 # 缓存文件 TTL（秒）：用于『当小时未结束，但用户换了更准确的股票名后仍能刷新』——
 # 实际判断按『当日已存在的"时"粒度文件』优先级；当日 08 时缓存 → 20 时自动降级为旧数据，不覆盖新
 STOCK_CACHE_DEFAULT_TTL_SEC: int = int(os.getenv("STOCK_CACHE_DEFAULT_TTL_SEC",
-                                                  str(6 * 3600)))  # 默认 6 小时
+                                                  str(2 * 3600)))  # 默认 6 小时
 # 文件最大字节（保护磁盘 + 防止 warmup 产出 10M+ 垃圾）
 STOCK_CACHE_MAX_BYTES: int = int(os.getenv("STOCK_CACHE_MAX_BYTES", str(512 * 1024)))  # 512KB
 # 总缓存文件上限：超过后按 mtime 删除最旧文件

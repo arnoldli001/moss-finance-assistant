@@ -69,14 +69,30 @@ def main():
           and "流停滞" in _wf_src)
     check("旧 TTFT 哨兵已彻底移除（防 IDE 缓冲回刷复发）",
           "TTFT超" not in _wf_src and "PREMARKET_FINAL_TTFT_GUARD_SEC" not in _wf_src)
+    check("美股表格固定 7 行骨架 + 时效铁律（根治表头挤行/当日数据被拒填）",
+          "| 美光 |  |  |" in _wf_src and "| 英伟达 |  |  |" in _wf_src
+          and "时效铁律" in _wf_src and "隔夜收盘/盘前行情" in _wf_src)
+    # markdown 标题规范化后处理（low-effort 模型吞换行的确定性兜底）
+    from orchestration.workflows.analysis_workflow import _normalize_premarket_markdown
+    _fixed = _normalize_premarket_markdown(
+        "###2.美股表现|股票 |涨跌幅 |新闻 |\n\n###3.推理与预测**利好：**\n")
+    check("标题规范化兜底（拼行拆分 + # 后补空格）",
+          "### 2.美股表现\n\n|股票 |涨跌幅 |新闻 |" in _fixed
+          and "### 3.推理与预测\n\n**利好：**" in _fixed)
+    check("美股隔夜实时行情注入（新浪 gb_ 接口，权威涨跌幅替代新闻搜索）",
+          "_fetch_us_quotes_block_sync" in _wf_src
+          and "hq.sinajs.cn/list=" in _wf_src
+          and "美股隔夜收盘实时行情" in _wf_src
+          and "_quotes_task" in _wf_src)
     check("deepseek_client 已有盘前综答专用实例",
           "_premarket_final_model = init_chat_model" in
           (Path(__file__).parent.parent / "shared/llm_client/deepseek_client.py").read_text(encoding="utf-8"))
     _ds_src = (Path(__file__).parent.parent /
                "shared/llm_client/deepseek_client.py").read_text(encoding="utf-8")
-    check("盘前综答实例已关闭思考模式（thinking disabled，暗推理根治）",
+    check("盘前综答实例思考强度=low（防回退 high 暗推理超时 / disabled 整合力丧失）",
           '_premarket_final_model' in _ds_src
-          and '"thinking": {"type": "disabled"}' in _ds_src)
+          and 'reasoning_effort="low"' in _ds_src
+          and '"thinking": {"type": "disabled"}' not in _ds_src)
     check("server.py 按钮/定时任务接入 300s 外墙",
           "_PREMARKET_TASK_TIMEOUT if _is_news_btn else _DEFAULT_AGENT_TIMEOUT" in server_src
           and '"scheduler_news_auto", "system", None, _PREMARKET_TASK_TIMEOUT' in server_src)
