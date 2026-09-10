@@ -506,13 +506,14 @@ def _emit_model_cot_and_normalize_citations(
         "⚠️ 以上信息来自互联网公开资料，仅供参考，不构成投资建议。"
         "投资有风险，入市需谨慎，盈亏自负。"
     )
-    if _RISK_WARN not in final_content_out:
-        if final_content_out.strip() and not final_content_out.rstrip().endswith(("。", "！", "？", "\n", ".")):
-            final_content_out += "。"
-        if final_content_out.strip():
-            final_content_out = final_content_out.rstrip() + "\n\n" + _RISK_WARN
-        else:
-            final_content_out = _RISK_WARN
+    # 先剥离正文中已有的风险声明（可能被模型放在中间），再统一追加到末尾
+    final_content_out = final_content_out.replace(_RISK_WARN, "").strip()
+    if final_content_out and not final_content_out.rstrip().endswith(("。", "！", "？", "\n", ".")):
+        final_content_out += "。"
+    if final_content_out:
+        final_content_out = final_content_out.rstrip() + "\n\n" + _RISK_WARN
+    else:
+        final_content_out = _RISK_WARN
 
     # ----- 7. 注册 citation_meta（用于"悬停卡片"）并下发一次 citation_meta + delta（最终文本整段） -----
     # 7.1 给 bus.set_citation_meta 的"聚焦 snippet 中心窗口"提供答案命中句 hint

@@ -242,13 +242,14 @@
   // 监听聊天区新消息，自动识别护城河分析
   function MoatDetector() {
     const [moatData, setMoatData] = useState(null);
-    const processedRef = useRef(new Set());
+    const bestRef = useRef(null); // 保留解析维度最多的结果
 
     useEffect(function () {
       function scanMessages() {
-        // 助手消息结构：.msg-wrap.ai-msg[data-role=assistant] > .msg.assistant
-        // 从外层 wrap 取 data-msg-id 做去重，内层取文本内容
+        // 助手消息结构：.msg-wrap.ai-msg > .msg.assistant
         var wraps = document.querySelectorAll('.msg-wrap.ai-msg');
+        var bestScores = null;
+        var bestCount = 0;
         for (var i = 0; i < wraps.length; i++) {
           var wrap = wraps[i];
           var inner = wrap.querySelector('.msg.assistant');
@@ -257,14 +258,20 @@
           // 检查是否包含护城河关键词
           if (text.indexOf('护城河') !== -1 ||
               (text.indexOf('品牌') !== -1 && text.indexOf('转换成本') !== -1)) {
-            var msgId = wrap.getAttribute('data-msg-id') || wrap.id || ('wrap_' + i);
-            if (processedRef.current.has(msgId)) continue;
             var scores = parseMoatScores(text);
             if (scores) {
-              processedRef.current.add(msgId);
-              setMoatData({ scores: scores, stockName: '' });
+              var count = Object.keys(scores).length;
+              // 保留维度数最多的解析结果（流式过程中逐步完善）
+              if (count > bestCount) {
+                bestCount = count;
+                bestScores = scores;
+              }
             }
           }
+        }
+        if (bestScores && (!bestRef.current || Object.keys(bestScores).length > Object.keys(bestRef.current.scores).length)) {
+          bestRef.current = { scores: bestScores, stockName: '' };
+          setMoatData(bestRef.current);
         }
       }
 
@@ -389,21 +396,25 @@
   document.head.appendChild(styleEl);
 
   // 挂载（应用JS会重建#chat，需用MutationObserver保护挂载点）
+  // 挂载在 #chat 末尾，确保护城河卡片出现在所有消息下方
   var mount = document.createElement("div");
   mount.id = "react-moat-card-root";
 
   function ensureMoatMounted() {
-    if (!document.getElementById("react-moat-card-root")) {
-      var chat = document.getElementById("chat");
-      if (chat) {
-        var monitorRoot = document.getElementById("react-agent-monitor-root");
-        if (monitorRoot && monitorRoot.parentNode === chat) {
-          chat.insertBefore(mount, monitorRoot.nextSibling);
-        } else {
-          chat.insertBefore(mount, chat.firstChild);
-        }
-      } else {
+    var chat = document.getElementById("chat");
+    if (!chat) {
+      if (!document.getElementById("react-moat-card-root")) {
         document.body.appendChild(mount);
+      }
+      return;
+    }
+    // 若挂载点不在 chat 中，追加到末尾
+    if (mount.parentNode !== chat) {
+      chat.appendChild(mount);
+    } else {
+      // 若已在 chat 中但不是最后一个元素，移到末尾
+      if (chat.lastChild !== mount) {
+        chat.appendChild(mount);
       }
     }
   }
@@ -415,9 +426,7 @@
   var chatEl = document.getElementById("chat");
   if (chatEl) {
     var observer = new MutationObserver(function () {
-      if (!document.getElementById("react-moat-card-root")) {
-        ensureMoatMounted();
-      }
+      ensureMoatMounted();
     });
     observer.observe(chatEl, { childList: true });
   }
