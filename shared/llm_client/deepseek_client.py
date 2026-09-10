@@ -17,15 +17,9 @@ _base_model = init_chat_model(
     max_retries=2,
 )
 
-# 盘前新闻终态综答专用实例（2026-09-10）：默认客户端 read 超时 60s 会在深拥堵
-# TTFT（实测 60-103s）尚未出首 token 时直接掐断流式请求，TTFT 哨兵形同虚设。
-# 本实例放宽 read 超时（常量见 config/constants.py），让流式哨兵机制真正生效。
-# 🚨 2026-09-10 思考模式调优（DeepSeek V4 思考默认开启且 effort=high）：
-#   - high（默认）：~8K 结构化 prompt 暗推理 100-120s+，是"综合推理超时"根源；
-#   - disabled（thinking.type=disabled）：0.7s 首 token，但实测矫枉过正——模型丧失
-#     跨条目数据整合力，美股表格把"AAOI涨近9%"等当日数据当"历史新闻"拒填，自相矛盾；
-#   - low（reasoning_effort="low"，当前方案）：对照探针实测首内容 4.2s/总 9.3s，
-#     与 disabled 几乎同速，且保留低强度推理做数据提取与一致性判断。
+# 盘前新闻综答专用实例：放宽 read 超时（默认 60s 会在深拥堵暗推理期掐断流式请求）。
+# 思考强度用 reasoning_effort="low"：默认 high 暗推理 100s+ 致超时；完全关闭 disabled
+# 则丧失跨条目数据整合力；low 档几秒出字且保留数据提取推理。
 from config.constants import PREMARKET_FINAL_LLM_CLIENT_TIMEOUT_SEC
 
 _premarket_final_model = init_chat_model(

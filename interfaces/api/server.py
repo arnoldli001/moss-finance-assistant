@@ -170,7 +170,7 @@ def _ensure_zsxq_router_installed_once() -> None:
 # 默认超时：Agent 主流程 180s，后台分析 360s（知识星球抓取+分析较耗时）
 _DEFAULT_AGENT_TIMEOUT: float = DEFAULT_AGENT_TIMEOUT_SEC
 _DEFAULT_BG_TIMEOUT: float = DEFAULT_BACKGROUND_TIMEOUT_SEC
-# 盘前新闻按钮 / 9:15 定时任务专用外墙（早高峰深拥堵下 180s 内三发综答放不下，成功后写 2h 缓存）
+# 盘前新闻按钮 / 9:15 定时任务专用外墙（默认 180s 放不下综答重试预算，成功后写 2h 缓存）
 _PREMARKET_TASK_TIMEOUT: float = PREMARKET_TASK_TIMEOUT_SEC
 
 
@@ -420,7 +420,7 @@ async def _try_run_workflow_push_events(
         run_analysis_workflow, RISK_DISCLAIMER,
     )
     # 跑工作流 DAG（内部 Router 判定 + 缓存命中短路 + 源并发聚合 + 最终推理）
-    # 盘前新闻分支放宽 DAG 内墙到 300s（默认 180s 会把三发综答整体击杀，见 2026-09-10 事故）
+    # 盘前新闻分支放宽 DAG 内墙到 300s（默认 180s 会在综答重试途中整体击杀）
     result = await run_analysis_workflow(
         query, thread_id, user_id,
         has_visual_input=has_visual_input,
@@ -596,9 +596,8 @@ async def _try_run_workflow_push_events(
     #     旧 monitor.report_task_result 仅影响 WS 监控面板，不影响前端 SSE 展示。
     #     这里通过 ev_done(force_final_text=final_answer) 同时完成终态标记+全量文本。
 
-    # (6) 落库（2026-09-09）：workflow 直连路径此前只推 SSE 不写 checkpointer，
-    #     切会话再切回时历史为空（用户报告"盘前新闻交互内容消失"）。
-    #     必须在 ev_done 之前 await 完成（见函数 docstring 的竞态说明）。
+    # (6) 落库：workflow 直连路径只推 SSE 不写 checkpointer 会导致切会话后历史丢失，
+    #     故必须在 ev_done 之前 await 完成（见函数 docstring 的竞态说明）。
     if user_label:
         try:
             _fa_save = final_answer.strip()
@@ -641,11 +640,10 @@ async def _try_run_workflow_push_events(
 async def _fix_rewritten_human_label(thread_id: str, effective_query: str, raw_query: str) -> None:
     """把 checkpointer 里被 prompt 改写顶替的 Human 消息修正回用户原话。
 
-    背景（2026-09-09 用户报告）：盘前新闻短词会在服务端改写成完整任务 prompt
-    （_rewrite_premarket_query_if_shortcut）。workflow 直连成功时由 user_label
-    参数落库用户原话；但 fallback 到 run_deep_agent 时 agent.astream 会把
-    effective_query（长 prompt）作为 HumanMessage 自动落库——历史恢复时用户
-    气泡显示成长 prompt。本函数按消息 id 精确替换（add_messages 同 id upsert，
+    背景：盘前新闻短词会在服务端改写成完整任务 prompt（_rewrite_premarket_query_if_shortcut）。
+    workflow 直连成功时由 user_label 参数落库用户原话；但 fallback 到 run_deep_agent 时
+    agent.astream 会把 effective_query（长 prompt）作为 HumanMessage 自动落库——历史恢复时
+    用户气泡显示成长 prompt。本函数按消息 id 精确替换（add_messages 同 id upsert，
     不改变消息顺序），把最新一条匹配的 Human 修正回 raw_query。
     """
     if not raw_query or raw_query == effective_query:
@@ -819,7 +817,7 @@ async def lifespan(app: FastAPI):
             )
 
         # 盘前新闻回调：调用主 Agent 搜索盘前新闻（后台静默）
-        # 9:15 触发正值早高峰，用盘前专用 300s 外墙保住缓存预热（180s 内三发综答放不下）
+        # 9:15 正值早高峰，用盘前专用 300s 外墙保住缓存预热
         async def _news_callback():
             await _run_with_ctx(
                 "scheduler_news_auto", "system", None, _PREMARKET_TASK_TIMEOUT,
@@ -2368,12 +2366,11 @@ async def _run_review_prediction(thread_id: str, user_id: Optional[str] = None, 
         5. 推送最终预测结果到前端对话区（含推理逻辑）
 
     超时保护：阶段1+2 并行（wait_for+gather，任一段超时只取消自己的任务）+ 阶段3 单独 wait_for。
-    - 阶段1 盘前小作文热度：150s 上限（含 120s Ollama 预检 + 抓取分析余量，
-      且 runner 自身 240s 总上限 + 150s readline 超时在此之前会更早失败）。
-    - 阶段2 盘前新闻：180s 上限（复用"盘前新闻"按钮工作流：6h缓存→双源并发→聚合→综合作答）。
-    - 阶段3 DeepSeek 综合分析：REVIEW_STAGE3_DEEPSEEK_TIMEOUT_SEC=150s（实测 120.5s）。
-    并行段 max(150,180)=180 + 阶段3 150 = 330s 最坏，后台 REVIEW_PREDICTION_BG_TIMEOUT_SEC=390s 兜底；
-    任一段超时/异常都以清晰信息返回，避免到顶后显示"超时 xxx s 无工具调用"。
+    - 阶段1 盘前小作文热度：150s 上限。
+    - 阶段2 盘前新闻：180s 上限（复用"盘前新闻"按钮工作流：2h缓存→双源并发→聚合→综合作答）。
+    - 阶段3 DeepSeek 综合分析：REVIEW_STAGE3_DEEPSEEK_TIMEOUT_SEC=150s。
+    并行段最坏 180s + 阶段3 150s = 330s，由 REVIEW_PREDICTION_BG_TIMEOUT_SEC=450s 兜底；
+    任一段超时/异常都以清晰信息返回，避免到顶后显示无意义的超时报错。
     """
     from api.context import set_thread_context, reset_session_context
     from api.monitor import monitor
@@ -2639,7 +2636,7 @@ async def _run_review_prediction_dedup(thread_id: str, user_id: Optional[str] = 
     from api.monitor import monitor
     from shared.utils.single_flight import is_inflight, today_key
 
-    # ---- 3 小时内存档直接复用（2026-09-09 用户要求，类似盘前研报热度的存档读取）----
+    # ---- 3 小时内存档直接复用（类似盘前研报热度的存档读取）----
     # 找 output/Market_Recap_Outlook 下最新的 md；mtime 距今 <=3h → 命中：
     # 直接推送该存档 + 写会话历史，跳过全部推理（搜索+DeepSeek 都不用跑）。
     try:
@@ -2674,9 +2671,8 @@ async def _run_review_prediction_dedup(thread_id: str, user_id: Optional[str] = 
     except Exception as e:
         print(f"[ReviewPrediction] 存档读取失败（不致命，走正常推理）: {e}")
 
-    # 跨任务共享提示（2026-09-09）：复盘预测的阶段2 就是盘前新闻工作流——
-    # 若"盘前新闻"按钮的 workflow 计算正在飞，本请求的阶段2 会成为 follower
-    # 静默等待；这里主动探测并提示，避免用户以为无响应。
+    # 跨任务共享提示：复盘预测阶段2 就是盘前新闻工作流——若盘前新闻计算正在飞，
+    # 本请求阶段2 会作为 follower 静默等待；主动探测并提示，避免用户以为无响应。
     try:
         if is_inflight(today_key("premarket_news")):
             monitor._emit(

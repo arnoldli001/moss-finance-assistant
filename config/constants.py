@@ -40,41 +40,26 @@ DEFAULT_AGENT_TIMEOUT_SEC: float = 180.0
 # 后台任务默认超时（知识星球抓取+分析、盘前自动化等更耗时的任务）
 DEFAULT_BACKGROUND_TIMEOUT_SEC: float = 360.0
 
-# 复盘/盘前预测按钮专用：阶段1+2 并行（小作文150/新闻280 → max=280s）+ 阶段3 DeepSeek 150，
-# 最坏 430s，故后台上限须高于 DEFAULT_BACKGROUND_TIMEOUT_SEC，否则最坏情况会在
-# 阶段3 途中被后台超时整体击杀，用户连分段兜底文本都收不到。
-# 阶段2 构成：路由~5s + 双源并发≤120s + 直连综合作答≤120s（2026-09-06 实测 agent 循环
-# 综合作答在 DeepSeek 拥堵下自然结束返回空串，已改直连 _base_model.ainvoke）；
-# 阶段3 实测（deepseek-v4-flash，6.4K 字符 prompt，输出 2235 字）：120.5s → 150s 留 25% 余量
+# 复盘预测后台总上限：须高于各阶段之和（阶段1+2 并行 ≤180s + 阶段3 ≤150s ≈ 330s），
+# 否则阶段3 途中被后台超时击杀，用户连分段兜底都收不到。
 REVIEW_PREDICTION_BG_TIMEOUT_SEC: float = 450.0
 REVIEW_STAGE3_DEEPSEEK_TIMEOUT_SEC: float = 150.0
 
-# 分析工作流最外层 shield 硬墙（analysis_workflow.run_analysis_workflow 全 DAG 包裹）。
-# 默认 180s；盘前新闻分支由 server 传入 PREMARKET_TASK_TIMEOUT_SEC(300s) 覆盖
-# （2026-09-10 事故：该内墙曾把三发综答在 180s 处整体击杀，server 端 300s 形同虚设）。
+# 分析工作流最外层 DAG shield 硬墙。默认 180s；盘前新闻分支由 dag_timeout_sec 传 300s 覆盖。
 ANALYSIS_DAG_MAX_TIMEOUT_SEC: float = 180.0
 
-# 盘前新闻按钮 / 9:15 定时任务专用外墙：替换该分支的 DEFAULT_AGENT_TIMEOUT_SEC(180s)。
-# 2026-09-10 早高峰 E2E 实测：两发（40s+退避60s+30s 哨兵）全灭于深拥堵——180s 预算下
-# 无第三次机会，且 60s 客户端 read 硬顶掐死 >60s 的 TTFT。故本分支单独放宽外墙到 300s
-# （对齐 REVIEW_PREDICTION_BG_TIMEOUT_SEC=450 的"按钮专用更长超时"先例），
-# 成功后写 6h 缓存，后续请求秒回；最坏失败路径 ~287s 仍留 13s 余量。
+# 盘前新闻按钮 / 9:15 定时任务专用外墙（默认 180s 放不下综答重试预算，成功后写 2h 缓存）。
 PREMARKET_TASK_TIMEOUT_SEC: float = 300.0
 
-# 盘前新闻综答专用模型客户端 read 超时：默认 LLM_CHAT_DEFAULT_TIMEOUT_SEC=60 会在深拥堵
-# TTFT（实测 60-103s）未出首 token 时直接掐断流式请求，TTFT 哨兵永远等不到。专用实例放宽。
+# 盘前综答专用模型客户端 read 超时：默认 60s 会在深拥堵暗推理期掐断流式请求，需放宽。
 PREMARKET_FINAL_LLM_CLIENT_TIMEOUT_SEC: int = 75
 
-# 盘前新闻终态综答（直连 DEEPSEEK_V4_FLASH 专用实例）超时参数。
-# 思考模式调优历程（2026-09-10）：V4 思考默认开启 effort=high，~8K 结构化 prompt
-# 暗推理 100-120s+（流式表现为全空 delta ~122个/s），曾致"综合推理超时"；
-# 完全关闭（thinking disabled）虽 0.7s 出字但矫枉过正——模型丧失跨条目整合力，
-# 美股表格把当日涨跌当"历史新闻"拒填；最终方案 reasoning_effort="low"——
-# 对照探针实测首内容 4.2s/总 9.3s（与 disabled 几乎同速）且保留数据提取推理。
-# 以下超时参数为防御性兜底（API 行为回退/极端拥堵时仍守 300s 外墙）：
-PREMARKET_FINAL_ATTEMPT_TOTAL_SEC: float = 120.0  # 单发总预算（low-effort 正常 5-15s，余量充足）
-PREMARKET_FINAL_ATTEMPTS: int = 2                 # 发数：2×120 + 退避20 = 260s，+14s 开销 < 300s 外墙
-PREMARKET_FINAL_STALL_SEC: float = 30.0           # 连续无任何 chunk 超此值判流死，立即重试
+# 盘前综答重试参数（防御性兜底，守 300s 外墙）。
+# 根因：V4 思考默认 high 会暗推理 100s+ 致超时；disabled 完全关闭则丧失数据整合力；
+# 最终模型用 reasoning_effort="low"（4s 出字、保留整合），正常 5-15s，以下预算仅兜底。
+PREMARKET_FINAL_ATTEMPT_TOTAL_SEC: float = 120.0  # 单发总预算
+PREMARKET_FINAL_ATTEMPTS: int = 2                 # 发数：2×120+退避20=260s < 300s 外墙
+PREMARKET_FINAL_STALL_SEC: float = 30.0           # 连续无 chunk 超此值判流死
 PREMARKET_FINAL_RETRY_BACKOFF_SEC: float = 20.0   # 重试前退避
 
 # HTTP 请求类短超时（Ollama 预检、ngrok 隧道 API 读取、探针等）
@@ -95,17 +80,15 @@ SHUTDOWN_SESSION_TASKS_WAIT_SEC: float = 8.0
 # 关闭阶段：逐个树杀残留子进程的等待超时（单进程）
 SHUTDOWN_PROC_KILL_WAIT_SEC: float = 5.0
 
-# 关闭阶段：单个关闭步骤（调度器 stop/Ollama 关停/树杀/ActorSystem stop_all）的硬超时墙。
-# 背景（2026-09-09）：Ctrl+C 后 uvicorn 等 WS 关闭 + lifespan 各步 await 无墙，任一步
-# 卡死（子进程阻塞/Actor 邮箱挂起）→ 主进程不退出 → 终端无提示符无法继续输入。
-# 每步独立硬墙保证进程必然退出（总预算 ≈ uvicorn 8s graceful + 步数 × 本值）。
+# 关闭阶段单个步骤（调度器 stop/Ollama 关停/树杀/Actor stop_all）的硬超时墙：
+# 任一步卡死（子进程阻塞/Actor 邮箱挂起）都会导致主进程不退出，故每步独立硬墙。
 SHUTDOWN_STEP_HARD_TIMEOUT_SEC: float = 10.0
 
-# ===== 多用户并发闸（2026-09-09 方案3）：稀缺资源全局并发上限 =====
-# Tavily：套餐级并发限制（免费档约 10路并发，超出触发 429/限流）——按实际套餐调整。
+# ===== 多用户并发闸：稀缺资源全局并发上限 =====
+# Tavily：套餐级并发限制（超出触发 429/限流），按实际套餐调整。
 TAVILY_MAX_CONCURRENCY: int = int(os.environ.get("TAVILY_MAX_CONCURRENCY", "10"))
-# 本地 Ollama：单 GPU 请求内部串行，多请求并发只互相拖慢——闸在主进程只包长推理段
-# （单股推演），Prompt 注入分类器/Model Router 兜底有意不纳闸（安全检查与路由必须低延迟）。
+# 本地 Ollama：单 GPU 请求内部串行，并发只互相拖慢；闸只包长推理段（单股推演），
+# 安全检查/路由等低延迟路径有意不纳闸。
 OLLAMA_MAX_CONCURRENCY: int = int(os.environ.get("OLLAMA_MAX_CONCURRENCY", "1"))
 
 # 启动调度器后等待初始化日志打完的短等待
@@ -255,17 +238,12 @@ CONTEXT_DEDUP_KEEP_RECENT: int = 2
 # 相似资讯去重：Jaccard 相似度阈值，超过则视为相似归为同组
 CONTEXT_DEDUP_SIMILARITY_THRESHOLD: float = 0.4
 
-# 盘前新闻综答上下文分池预算（2026-09-10 分池截断修复配套）。
-# 终态 prompt 硬截断 9500 字（≈6500 token）：拥堵 prefill 20-40s + 暗推理 ~100s，
-# 单发总预算 PREMARKET_FINAL_ATTEMPT_TOTAL_SEC(120s) 覆盖，流停滞 30s 判死兜底——
-# 2026-09-08 实测拥堵 + 7800 字上下文即压线超时，9500 为该墙下可压线的上限，
-# 再调大必须联动上调单发总预算。国内块 + 美股块 + 状态行 ≈ 8750 落在此线内。
-PREMARKET_FINAL_PROMPT_CONTEXT_CHARS: int = 9500
-PREMARKET_DOM_CONTEXT_CHARS: int = 5800
-PREMARKET_US_CONTEXT_CHARS: int = 2600
-# 国内条目正文截断：热榜关键信息在标题+首段，[:250] 使总 prompt ~8400→~6300 字，
-# 全部转化为 120s 首试墙安全边际（不扩条目、不动截断线）。
-PREMARKET_DOM_ITEM_CONTENT_CHARS: int = 250
+# 盘前综答上下文分池预算：国内块 + 美股块 + 状态行需落在 prompt 硬截断线内，
+# 两池分开限额避免长正文互相挤占。硬截断线调大时须联动上调单发总预算。
+PREMARKET_FINAL_PROMPT_CONTEXT_CHARS: int = 9500  # prompt 上下文总截断线
+PREMARKET_DOM_CONTEXT_CHARS: int = 5800           # 国内平台块
+PREMARKET_US_CONTEXT_CHARS: int = 2600            # 美股块
+PREMARKET_DOM_ITEM_CONTENT_CHARS: int = 250       # 国内条目正文截断（关键信息在标题+首段）
 
 # Context Engineer 专用常量（与 AGENTS.md 规范对齐）
 # 上下文总字符硬上限（2000字精简裁剪阈值）
@@ -848,8 +826,7 @@ SCHEDULER_AFTER_MARKET_DEFAULT_MINUTE: int = 15
 # zsxq_analysis_runner.py 调用 Ollama 分析：单条内容截断字符（0=不截断，保留完整研报）
 TEST_ZSXQ_OLLAMA_ENTRY_TRUNCATE_CHARS: int = 20000
 
-# zsxq_analysis_runner.py 调用 Ollama 分析：模型名
-# 2026-09-07：llama3.2:3b 提取能力不足（循环重复、情绪全中性），换回 qwen3:8b
+# zsxq_analysis_runner.py 调用 Ollama 分析：模型名（用 qwen3:8b；llama3.2:3b 提取能力不足勿回退）
 OLLAMA_MODEL: str = os.environ.get("ZSXQ_OLLAMA_MODEL", "qwen3:8b")
 
 # zsxq_analysis_runner.py 调用 Ollama 分析：请求超时（秒）
@@ -861,9 +838,8 @@ OLLAMA_TEMPERATURE: float = 0.15
 # zsxq_analysis_runner.py 调用 Ollama /api/generate：num_predict（最大输出 token 数）
 OLLAMA_NUM_PREDICT: int = 1280
 
-# zsxq Ollama 盘前分析：动态智能分批参数（按研报字符预算贪心打包）
-# 推理时间主要取决于总 token 数而非条数：短研报(<500字)一批拼到 30 条，长研报(>1000字)自然降到 ~10 条。
-# 2026-09-08 基准实测（105 条真实研报）：6 批 7.7k-9.0k 字符均衡负载，162s 全量，6/6 JSON OK，40 只股票。
+# zsxq Ollama 盘前分析：动态智能分批（按研报字符预算贪心打包，推理时间取决于总 token 数
+# 而非条数——短研报拼到 30 条/批，长研报自然降到 ~10 条/批）。
 OLLAMA_ZSXQ_BATCH_TARGET_CHARS: int = 9000   # 每批研报总字符软目标（中文约 1 token/字）
 OLLAMA_ZSXQ_BATCH_MAX_ITEMS: int = 30        # 单批最多条数（短研报封顶）
 OLLAMA_ZSXQ_BATCH_HARD_CHARS: int = 9000    # 字符硬上限（超过立即切批，防撑爆上下文）
@@ -1201,7 +1177,7 @@ STOCK_CACHE_DIR: str = os.getenv("STOCK_CACHE_DIR",
                                  )))
 # 单文件名格式：YYYYMMDDHH_<sanitized_stock_name>.txt
 STOCK_CACHE_FILE_FMT: str = "%Y%m%d%H"
-# ============ 盘前新闻 / 热门股来源平台清单（单一真源，2026-09-08 收敛） ============
+# ============ 盘前新闻 / 热门股来源平台清单（单一真源） ============
 # 使用方：server.py 盘前新闻签名检测、analysis_workflow 搜索词 + 综答提示词、
 #         hot_stock_warmup 兜底、STOCK_CACHE_WARMUP_SOURCES。
 # 修改平台清单只改本元组；"/"串、空格串、签名检测前4项均为派生，自动跟随。

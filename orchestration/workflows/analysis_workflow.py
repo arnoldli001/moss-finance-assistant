@@ -56,13 +56,12 @@ from config.constants import (
     PREMARKET_US_CONTEXT_CHARS, PREMARKET_DOM_ITEM_CONTENT_CHARS,
 )
 
-# 盘前缓存目录 & TTL（规则1严格按设计）
-# 2026-09-09 用户要求：盘前新闻输出迁移到 output/pre_market_news（输出产物与运行时数据分离）
+# 盘前缓存目录 & TTL（输出产物落 output/，与运行时数据 data/ 分离）
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_ROOT = Path(os.environ.get("DATA_DIR", _PROJECT_ROOT / "data"))
 PRE_MARKET_DIR = _PROJECT_ROOT / "output" / "pre_market_news"
 STOCK_CACHE_DIR = DATA_ROOT / "stock"
-PRE_MARKET_TTL_HOURS = 2  # 2026-09-10 用户要求 2h→2h：盘前行情时效性强，缩短陈旧窗口
+PRE_MARKET_TTL_HOURS = 2  # 盘前行情时效性强，缓存窗口 2 小时
 STOCK_CACHE_TTL_DAYS = 7
 # 4 源总硬超时（重构.md：单任务 150s，这里 4 源 DAG 设 180s 留余量给 Agent）
 FOUR_SOURCE_DAG_TIMEOUT_SEC = 180.0
@@ -76,16 +75,9 @@ RISK_DISCLAIMER = (
 
 
 def _normalize_premarket_markdown(text: str) -> str:
-    """盘前简报 markdown 标题规范化（2026-09-10，low-effort 模型格式偷懒的确定性兜底）。
-
-    实测 low effort 下模型高频出现：
-      ① 「###2.美股…」# 号后漏空格——CommonMark 不认，整行被渲染成纯文本；
-      ② 标题与表头拼行：「###2.美股表现|股票 |涨跌幅 |新闻 |」；
-      ③ 标题与正文拼行：「###3.推理分析与预测**利好 A股…**」。
-    prompt 骨架+铁律约束后仍偶发，故输出侧确定性修复：
-      - 标题行 # 后补空格；
-      - 标题行内含管道符 | 或加粗符 ** 时，在首个该字符处断为「标题 / 空行 / 剩余内容」。
-    仅处理 # 开头的标题行，正文与表格行不受影响。
+    """规范化盘前简报的 markdown 标题（low-effort 模型偶发格式错误的确定性兜底）：
+    标题行 # 后补空格；标题行内含管道符 | 或加粗符 ** 时，在首个该字符处断为
+    「标题 / 空行 / 剩余内容」。仅处理 # 开头标题行，正文与表格行不受影响。
     """
     import re as _re
     out: List[str] = []
@@ -108,10 +100,9 @@ def _normalize_premarket_markdown(text: str) -> str:
     return "\n".join(out)
 
 
-# 美股隔夜行情：新浪 gb_ 实时接口（国内直连/免 key/GBK），韩股 SK海力士 yfinance 兜底。
-# 2026-09-10：新闻搜索对美股个股隔夜涨跌幅的召回是碎片化三态（旧闻/矛盾/缺失），
-# low-effort 模型在"填旧数据 vs 全填无"之间反复横跳；改由实时行情接口提供权威涨跌幅
-# 注入 prompt，表格②直接照抄，新闻搜索只负责新闻列。
+# 美股隔夜行情由实时接口提供权威涨跌幅（新闻搜索对美股个股隔夜行情召回碎片化，
+# 不可靠）：新浪 gb_ 接口（国内直连/免 key/GBK）覆盖 6 股，韩股 SK海力士 yfinance 兜底。
+# 行情文本注入 prompt，表格②直接照抄，新闻搜索只负责新闻列。
 _US_QUOTE_SINA = [
     ("gb_mu", "美光", "MU"), ("gb_googl", "谷歌", "GOOGL"),
     ("gb_meta", "Meta", "META"), ("gb_aaoi", "应用光电", "AAOI"),
@@ -140,7 +131,7 @@ def _fetch_us_quotes_block_sync() -> str:
                 continue
     except Exception:
         pass
-    # SK海力士（韩股，新浪 gb_ 不覆盖）：yfinance 兜底；Yahoo 网络不通时静默跳过
+    # SK海力士为韩股，新浪不覆盖，用 yfinance 兜底；网络不通则静默跳过
     try:
         import yfinance as _yf
         _h = _yf.Ticker("000660.KS").history(period="5d")
@@ -232,7 +223,7 @@ def _try_hit_premarket_cache(force_refresh: bool = False) -> Optional[str]:
                 _cached = fp.read_text(encoding="utf-8")
             except Exception:
                 return None
-            # 0 字节/纯空白缓存视为未命中（旧版本失败时曾把空串写缓存，导致 2h 内全员拿空结果）
+            # 0 字节/纯空白缓存视为未命中（失败时可能写入空串）
             if _cached.strip():
                 return _cached
             continue
@@ -359,9 +350,8 @@ async def _run_web_search(query: str, max_results: int = 8) -> SourceResult:
         return SourceResult(source_key="web_search", ok=False, error=f"{type(e).__name__}: {e}")
 
 
-# 盘前新闻：6 路平台定向并发搜索（Tavily include_domains 白名单限定站点）
-# 历史教训：旧实现把平台名拼进一条自然语言查询，Tavily 不做站点定向、拆分器只按股票拆，
-#          导致雪球/股吧/同花顺热榜等平台内容实际一条都搜不到（2026-09-08 线上故障）。
+# 盘前新闻：6 路平台定向并发搜索（Tavily include_domains 白名单限定站点）。
+# 必须逐平台单独定向检索：平台名拼进自然语言查询时 Tavily 不做站点定向，热榜内容搜不到。
 # 每条 = (平台标签, 检索词, 域名白名单)；topic 统一 general——热榜/论坛/股吧不在 Tavily news 索引内。
 _PREMARKET_SITE_SEARCHES: tuple = (
     ("雪球", "雪球 7x24快讯 热股榜 今日热门股票 热门话题 个股讨论",
@@ -618,7 +608,7 @@ async def run_analysis_workflow(
     # --- Node 1: Router ---
     _wf_p(stage="Router 智能路由识别中", percent=10,
           detail="规则级联 + Gemma4 意图匹配中 ...")
-    # 任务级繁忙提示（2026-09-09 方案3）：搜索通道已有排队时提前告知，避免用户误以为卡死
+    # 任务级繁忙提示：搜索通道已有排队时提前告知，避免用户误以为卡死
     try:
         from shared.utils.concurrency_gate import tavily_gate as _tavily_gate_entry
         if _tavily_gate_entry.waiting > 0:
@@ -672,12 +662,10 @@ async def run_analysis_workflow(
 
         # ============= Branch 1: PRE_MARKET_NEWS =============
         if router.branch == RouteBranch.PRE_MARKET_NEWS:
-            # ===== single-flight 并发去重（2026-09-09）=====
-            # 背景：多会话/多用户并发触发盘前新闻（A 点"盘前新闻"按钮 + B 点"复盘预测"
-            # 阶段2 同样走本分支）会双跑 8 路 Tavily 站点搜索（16 路并发触发限流）+ 双份
-            # DeepSeek 综答，互相拖垮导致两路都长时间无输出（实测 5-6 分钟零输出）。
-            # 盘前新闻内容 = 当日市场信息，跨会话共享一次计算业务上完全合理；
-            # 每个调用方拿到共享 WorkflowResult 后各自按自己的 thread 推送/落库。
+            # ===== single-flight 并发去重 =====
+            # 盘前新闻是当日市场信息，多会话/按钮+复盘预测阶段2 并发触发时共享一次计算
+            # （否则双跑多路 Tavily 触发限流 + 双份综答互相拖垮）；各调用方拿到共享
+            # WorkflowResult 后各自按自己的 thread 推送/落库。
             # _premarket_in_flight=True 为 flight 内重入调用，直接执行原分支体。
             if not _premarket_in_flight:
                 from shared.utils.single_flight import run_single_flight, today_key
@@ -742,13 +730,11 @@ async def run_analysis_workflow(
                       "⏱ 预计联网阶段约 20-40s；之后云端 DeepSeek-V4-Flash 综合作答约 30-60s。"
                   ), stage="cache")
             # 缓存未命中 → 8 路并发（6 平台站点定向 + 美股夜盘 + zsxq）
-            # 站点定向用 Tavily include_domains 白名单：旧实现把平台名拼进一条自然语言查询，
-            # Tavily 不做站点定向、拆分器只按股票拆，导致各平台热榜内容一条都搜不到。
-            # 注意：不把用户 fullQuery 原文喂给美股搜索——StockMatcher 会把「海力士/应用光电」
-            # 误匹配成 A 股（海力风电/光电股份）；美股词用「SK海力士/AAOI」写法避开误匹配。
-            # 2026-09-10 二次修复：query 加「隔夜收盘/盘前」时段词——旧 query「最新涨跌幅」
-            # 太泛，凌晨/早高峰实测召回的是 3 月旧闻与互相矛盾的历史涨跌，模型只能填「无」；
-            # 盘前新闻是晨间场景（北京 8-9 点 = 美东隔夜收盘/盘前），时段词显著提升实时行情召回。
+            # 美股搜索注意：① 不用用户 fullQuery 原文——StockMatcher 会把「海力士/应用光电」
+            # 误匹配成 A 股（海力风电/光电股份），美股词用「SK海力士/AAOI」写法；
+            # ② query 带「隔夜收盘/盘前」时段词——晨间场景（北京 8-9 点=美东隔夜收盘/盘前），
+            # 泛词「最新涨跌幅」会召回陈旧旧闻；③ 走站点定向，通用 news 索引对中英混合长查询
+            # 返回无关条目。
             _us_q = ("美股隔夜收盘/盘前行情 美光MU、SK海力士、谷歌GOOGL、Meta、"
                      "AAOI、康宁GLW、英伟达NVDA 涨跌幅 最新")
             win_tip = _china_market_search_window_tip()
@@ -756,9 +742,6 @@ async def run_analysis_workflow(
                 _run_site_search(label=_lbl, query=_q, domains=_dom, max_results=8)
                 for _lbl, _q, _dom in _PREMARKET_SITE_SEARCHES
             ]
-            # 2026-09-10：美股路由 topic="news" 通用搜索改为站点定向——通用 news 索引对
-            # 中英混合长查询返回陈旧不相关条目（Hecla/Simpson 等无关票），综答只能填「无」；
-            # 定向白名单实测命中「谷歌盘前涨近4%」「康宁获Meta订单」等可用盘前行情。
             us_task = _run_site_search(
                 label="美股",
                 query=_us_q,
@@ -777,31 +760,22 @@ async def run_analysis_workflow(
             us_res = _gathered[len(_PREMARKET_SITE_SEARCHES)]
             zsxq_res = _gathered[len(_PREMARKET_SITE_SEARCHES) + 1]
             _us_quotes_block = str(_gathered[len(_PREMARKET_SITE_SEARCHES) + 2] or "")
-            # 美股夜盘条目同样补 channel 标签 + 当天日期：
-            # topic=news 命中的富途/tradingkey 快讯含真实涨跌幅但无日期，不补会在聚合排序中沉底被截断。
+            # 美股条目补 channel 标签 + 当天日期：快讯含真实涨跌幅但常无日期，不补会在聚合排序中沉底被截断。
             _today_us = _now_cn().strftime("%Y-%m-%d")
             for _uit in us_res.items:
                 if isinstance(_uit, dict):
                     _uit["channel"] = "美股"
                     if not str(_uit.get("published_at") or "").strip():
                         _uit["published_at"] = _today_us
-                    # 正文截到 200 字：美股块 2600 字预算内装下全部 8 条（新浪快讯标题
-                    # 已含涨跌幅关键信息，长摘要多为模板化导语，只会挤占条目数）。
+                    # 正文截 200 字：使美股块 2600 字预算能容纳全部 8 条（快讯标题已含涨跌幅关键信息）。
                     _uit["content"] = str(_uit.get("content") or "")[:200]
-            # 2026-09-10：美股与国内平台分池聚合（混排截断故障修复）。
-            # 实测混排（45 条输入）：终态 prompt 在 _fin_prompt 处硬截断（9500 字，
-            # 常量 PREMARKET_FINAL_PROMPT_CONTEXT_CHARS），国内长正文条目（每条≤500字）
-            # 占满前段，美股 8 条仅 1 条进入 prompt，综答美股表格只能填「无」；
-            # 单纯调大聚合预算无效（块越长被截越深）。
-            # 分池：国内块/美股块预算常量化于 config/constants.py CONTEXT_ENGINEER 分组，
-            # 两块之和 ~8400 + 状态行，全落截断线内。
+            # 分池聚合：国内块/美股块独立限额（预算见 config/constants.py）。混排时国内长正文
+            # 会占满 prompt 截断线前段，美股条目被挤掉；单纯调大预算无效，必须分池。
             _dom_items: List[Any] = []
             for _sr in site_res:
                 _dom_items.extend(_sr.items)
-            # 国内条目正文截断（2026-09-10）：热榜关键信息（股名/事件/平台）几乎都在
-            # 标题+首段，表格仅需 ≤30 字事件简述；[:250] 使总 prompt ~8400→~6300 字，
-            # 拥堵 prefill 省 5-15s，120s 首试墙余量 ~5-40s→~20-55s（压墙是超时兜底
-            # 文案的直接诱因）。省出的预算不扩条目、不动 9500 截断线，全转化为安全边际。
+            # 国内条目正文截 250 字：热榜关键信息（股名/事件/平台）集中在标题+首段，
+            # 截断可显著缩短 prompt、为拥堵 prefill 争取超时余量，且不扩条目/不动截断线。
             for _dit in _dom_items:
                 if isinstance(_dit, dict):
                     _dit["content"] = str(_dit.get("content") or "")[:PREMARKET_DOM_ITEM_CONTENT_CHARS]
@@ -852,8 +826,8 @@ async def run_analysis_workflow(
                       f"🔗 聚合统计："
                       + (", ".join(f"{k}={v}" for k, v in list(aggregator_stats.items())[:6]) or "（无）")
                   ), stage="retrieve")
-            # 本地 deepseek-r1:7b 留给单股深度推演类任务，不再用于本链路。
-            # 历史教训：不走 run_deep_agent（agent 循环在 DeepSeek 拥堵时无日志返回空串）。
+            # 综答直连云端模型：不走 run_deep_agent（agent 循环在拥堵时会无日志返回空串）；
+            # 本地 deepseek-r1:7b 仅留给单股深度推演类任务。
             _wf_p(stage="盘前新闻：DeepSeek 最终推理中", percent=88,
                   detail="结合 A股多平台 + 美股夜盘 + 知识星球聚合素材，生成最终答复（约 30-60s）...")
             _wf_r(title="🧠 最终推理（云端 DeepSeek-V4-Flash）",
@@ -914,15 +888,14 @@ async def run_analysis_workflow(
             )
             final_answer = ""
             try:
-                # 专用实例：read 超时 75s（默认 60s 会在深拥堵 TTFT 60-103s 时掐死请求，哨兵等不到首 token）
+                # 综答专用模型实例（read 超时放宽到 75s，默认 60s 会在深拥堵暗推理期掐死请求）
                 from shared.llm_client.deepseek_client import _premarket_final_model as _fin_model
                 from langchain_core.messages import HumanMessage as _HM
 
                 async def _afin_invoke(_prompt: str, _total: float, _stall: float) -> str:
-                    """流式综答 + 流停滞检测。2026-09-10 凌晨根因定位后重构：模型对复杂 prompt
-                    会先"暗推理" ~100s——期间持续流出空 delta（~120个/s，content 全空），推理
-                    完成后 ~4s 内喷出全文。故：任何 chunk（含空 delta）都算流存活，仅连续
-                    _stall 秒无任何 chunk 才判流死；单发总时长不超 _total 秒（含暗推理+生成）。"""
+                    """流式综答 + 流停滞检测。模型对复杂 prompt 会先"暗推理"（持续流出空 delta、
+                    推理完后才喷正文），故任何 chunk（含空 delta）都算流存活，仅连续 _stall 秒
+                    无 chunk 才判流死；单发总时长不超 _total 秒。"""
                     import time as _t_mod
                     _t0 = _t_mod.monotonic()
                     _last_chunk = _t0
@@ -1177,7 +1150,7 @@ async def run_analysis_workflow(
                   ), stage="retrieve")
             _wf_p(stage="影响分析：DeepSeek-R1 最终推理中", percent=90,
                   detail="基于双源聚合上下文，输出【利多因素 / 利空因素 / 影响评级】结构化结论 ...")
-            # 全局 Ollama 并发闸（2026-09-09 方案3）：单 GPU 长推理只允许 1 路占位，
+            # 全局 Ollama 并发闸：单 GPU 长推理只允许 1 路占位，
             # 多用户并发单股推演时排队 + 前端提示（避免无反馈互拖）。
             from shared.utils.concurrency_gate import ollama_gate as _ollama_gate
 

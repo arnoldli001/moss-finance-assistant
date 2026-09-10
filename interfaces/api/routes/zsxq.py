@@ -1,27 +1,15 @@
 #coding = utf-8
-"""盘前研报热度分析子路由（从 interfaces/api/server.py P1-F 拆分出来）。
+"""盘前研报热度分析子路由（POST /api/zsxq-analysis）。
 
-拆分范围（原 server.py L1782-L2226 块）：
-  - zsxq/ollama 辅助函数：
-      _save_zsxq_to_history /
-      _probe_ollama / _find_ollama_exe / _ollama_models_list / _ensure_ollama_ready /
-      _fetch_zsxq_txt_summary / _push_zsxq_summary_via_ws
-  - 1 个编排函数：_run_zsxq_analysis（仍作为 server.py 内调度器/复盘预测的共享编排层，保持原签名零破坏）
-  - 1 个 Pydantic 请求体：ZsxqAnalysisRequest
-  - 1 个 HTTP 路由：POST /api/zsxq-analysis（最终被 FastAPI include_router 挂载时补上 /api 前缀后的完整路径与原接口一致）
+承载 zsxq/ollama 辅助函数、编排函数 _run_zsxq_analysis、请求体 ZsxqAnalysisRequest 与路由。
 
-【关键兼容策略】
-  1. 公共编排函数 `_run_zsxq_analysis` 作为模块级 re-export 对象存在；server.py 内其它调用方
-     （scheduler 定时回调 L641、复盘预测 L2265、L2337 _save_zsxq_to_history）会通过
-     `from interfaces.api.routes.zsxq import _run_zsxq_analysis, _save_zsxq_to_history`
-     显式拿到，避免把 150+ 行代码继续滞留 server.py。
-  2. 私有 `_run_with_ctx` / `_register_background_task` 属于 server.py 的 HTTP 通用 Cancellation
-     编排，zsxq 路由运行时通过闭包回调从 server.py 里「注入」这些 helpers，避免拆分后循环依赖。
-     （实际实现中我们改为：在 zsxq.py 里以「模块级 set 变量」注册这些 server-level helpers，
-      由 server.py lifespan 启动早期调用 install_server_helpers(...) 一次性注入。）
-  3. APIRouter 不添加 /api 前缀（由主 server.app 已经做统一 /api 前缀的不做，防止出现 /zsxq-analysis 和
-     /api/zsxq-analysis 双路径并存），因此这里 prefix=""，路由里显式写 /api/zsxq-analysis 完整路径。
-     （与当前 server.py 其它 POST /api/* 直接挂载方式一致。）
+兼容约定：
+  1. _run_zsxq_analysis / _save_zsxq_to_history 作为模块级 re-export，供 server.py
+     调度器回调与复盘预测显式 import（保持原签名零破坏）。
+  2. server.py 的 _run_with_ctx / _register_background_task 等 HTTP 编排 helper 通过
+     install_server_helpers(...) 在 lifespan 早期注入（模块级 set 变量），避免循环依赖。
+  3. APIRouter prefix=""，路由里显式写完整 /api/zsxq-analysis 路径（前缀统一由主 app 处理，
+     防止 /zsxq-analysis 与 /api/zsxq-analysis 双路径并存）。
 """
 from __future__ import annotations
 
