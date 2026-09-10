@@ -143,7 +143,7 @@ def _rule_based_decide(query: str, *, has_visual_input: bool = False) -> RouterD
     # --- 6) 显式"盘前新闻" → PRE_MARKET_NEWS ---
     if PREMARKET_KEYWORDS.search(q):
         decision.branch = RouteBranch.PRE_MARKET_NEWS
-        decision.reason = "query 包含盘前新闻关键词 → 查6h缓存→并发4源→deepseek-r1推理→保存"
+        decision.reason = "query 包含盘前新闻关键词 → 查2h缓存→并发4源→deepseek-r1推理→保存"
         decision.confidence = 1.0
         return decision
 

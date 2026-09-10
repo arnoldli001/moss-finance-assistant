@@ -170,7 +170,7 @@ def _ensure_zsxq_router_installed_once() -> None:
 # 默认超时：Agent 主流程 180s，后台分析 360s（知识星球抓取+分析较耗时）
 _DEFAULT_AGENT_TIMEOUT: float = DEFAULT_AGENT_TIMEOUT_SEC
 _DEFAULT_BG_TIMEOUT: float = DEFAULT_BACKGROUND_TIMEOUT_SEC
-# 盘前新闻按钮 / 9:15 定时任务专用外墙（早高峰深拥堵下 180s 内三发综答放不下，成功后写 6h 缓存）
+# 盘前新闻按钮 / 9:15 定时任务专用外墙（早高峰深拥堵下 180s 内三发综答放不下，成功后写 2h 缓存）
 _PREMARKET_TASK_TIMEOUT: float = PREMARKET_TASK_TIMEOUT_SEC
 
 
@@ -2397,8 +2397,8 @@ async def _run_review_prediction(thread_id: str, user_id: Optional[str] = None, 
             "【复盘预测 阶段1/2】并行执行：盘前小作文热度分析 + 盘前新闻搜索...",
         )
         # 阶段2 复用"盘前新闻"按钮的完整工作流（analysis_workflow.PRE_MARKET_NEWS 分支）：
-        # 6h 缓存 → 双源并发（Tavily 直连 + 知识星球直连，无 agent 自主搜索循环）→
-        # 聚合去重 → 直连 deepseek-v4-flash 综合作答 → 写 6h 缓存。
+        # 2h 缓存 → 双源并发（Tavily 直连 + 知识星球直连，无 agent 自主搜索循环）→
+        # 聚合去重 → 直连 deepseek-v4-flash 综合作答 → 写 2h 缓存。
         # 原"agent 拿 pre_market_prompt 自主搜索"版实测 >135s 超时返回空串（前端"无结果"）；
         # 且工作流内 agent 综合作答在 DeepSeek 拥堵下会自然结束返回空串（2026-09-06 实测），
         # 已在工作流内改为直连综合作答。bus=None 时工作流进度推送全部静默不重复。

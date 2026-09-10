@@ -53,7 +53,7 @@ from enum import Enum as _Enum
 class RouteBranch(str, _Enum):
     """Router 最终分发的一级分支枚举。与重构.md §智能路由设计 1~5 一一对应：
 
-    PRE_MARKET_NEWS        = 分支1 盘前新闻（查6h缓存→并发搜索zsxq→Aggregator→deepseek-r1→保存）
+    PRE_MARKET_NEWS        = 分支1 盘前新闻（查2h缓存→并发搜索zsxq→Aggregator→deepseek-r1→保存）
     PRESET_SHORTCUT_OTHER  = 分支2 盘前研报热度 / 复盘预测（复用原逻辑）
     STOCK_QUERY            = 分支3.1 含股票（并发4任务:1周缓存+联网+zsxq2条+IMA，180s超时）
     GENERAL_QUERY          = 分支3.2 不含股票（联网+zsxq并发）

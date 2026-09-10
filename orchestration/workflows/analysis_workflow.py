@@ -15,7 +15,7 @@
   │Y/N    │   server逻辑)
   │       │
   ▼       ▼
-<6h缓存>─读直接返回      ┌──────────────────────────────────┐
+<2h缓存>─读直接返回      ┌──────────────────────────────────┐
                          │  Aggregator.aggregate(4源混合)     │
                          └──────────────┬────────────────────┘
                                         ▼
@@ -62,7 +62,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_ROOT = Path(os.environ.get("DATA_DIR", _PROJECT_ROOT / "data"))
 PRE_MARKET_DIR = _PROJECT_ROOT / "output" / "pre_market_news"
 STOCK_CACHE_DIR = DATA_ROOT / "stock"
-PRE_MARKET_TTL_HOURS = 6
+PRE_MARKET_TTL_HOURS = 2  # 2026-09-10 用户要求 2h→2h：盘前行情时效性强，缩短陈旧窗口
 STOCK_CACHE_TTL_DAYS = 7
 # 4 源总硬超时（重构.md：单任务 150s，这里 4 源 DAG 设 180s 留余量给 Agent）
 FOUR_SOURCE_DAG_TIMEOUT_SEC = 180.0
@@ -208,7 +208,7 @@ def _china_market_search_window_tip() -> str:
 # ======================================================================
 
 def _try_hit_premarket_cache(force_refresh: bool = False) -> Optional[str]:
-    """<6h 命中直接返回内容；force_refresh=True 时跳过缓存（用户问题含「请强制重新分析」）。"""
+    """<2h 命中直接返回内容；force_refresh=True 时跳过缓存（用户问题含「请强制重新分析」）。"""
     if force_refresh:
         return None
     try:
@@ -232,7 +232,7 @@ def _try_hit_premarket_cache(force_refresh: bool = False) -> Optional[str]:
                 _cached = fp.read_text(encoding="utf-8")
             except Exception:
                 return None
-            # 0 字节/纯空白缓存视为未命中（旧版本失败时曾把空串写缓存，导致 6h 内全员拿空结果）
+            # 0 字节/纯空白缓存视为未命中（旧版本失败时曾把空串写缓存，导致 2h 内全员拿空结果）
             if _cached.strip():
                 return _cached
             continue
@@ -705,14 +705,14 @@ async def run_analysis_workflow(
                     on_follow=_notify_follower,
                 )
             trace["branch"] = "PRE_MARKET_NEWS"
-            _wf_p(stage="盘前新闻：检查 6h 本地缓存", percent=20,
+            _wf_p(stage="盘前新闻：检查 2h 本地缓存", percent=20,
                   detail="读取盘前缓存目录，命中则秒级回显 ...")
             cached = _try_hit_premarket_cache(force_refresh=("强制重新分析" in str(query)))
             if cached is not None:
                 trace["premarket_cache_hit"] = True
-                _wf_p(stage="盘前新闻：6h 本地缓存命中", percent=95,
+                _wf_p(stage="盘前新闻：2h 本地缓存命中", percent=95,
                       detail="命中缓存，立即回显结果（无需联网搜索）")
-                _wf_r(title="📦 盘前新闻：6h 本地缓存命中",
+                _wf_r(title="📦 盘前新闻：2h 本地缓存命中",
                       content=(
                           f"返回字符数：{len(cached)}\n"
                           f"命中场景：同窗口内已有人查询盘前新闻，结果自动缓存，后续同问题秒回。\n"
@@ -726,8 +726,8 @@ async def run_analysis_workflow(
                 )
             trace["premarket_cache_hit"] = False
             _wf_p(stage="盘前新闻：缓存未命中，启动多源并发", percent=28,
-                  detail="6h 本地无匹配缓存，启动（A股多平台 + 美股夜盘 + 知识星球）并发搜索 ...")
-            _wf_r(title="📭 盘前新闻：6h 缓存未命中",
+                  detail="2h 本地无匹配缓存，启动（A股多平台 + 美股夜盘 + 知识星球）并发搜索 ...")
+            _wf_r(title="📭 盘前新闻：2h 缓存未命中",
                   content=(
                       f"时间窗口：{_china_market_search_window_tip()}\n"
                       "启动 8 路并发搜索(Tavily 站点定向 + 专项）：\n"
@@ -1004,9 +1004,9 @@ async def run_analysis_workflow(
                 # 顶部注入生成时间戳（在写缓存前注入：缓存命中时展示的是该简报的真实生成时间）
                 _ts = _now_cn().strftime("%Y-%m-%d %H:%M")
                 final_answer = f"📅 生成时间：{_ts}（北京时间）\n\n{final_answer}"
-                _wf_p(stage="盘前新闻：写入 6h 本地缓存", percent=97,
+                _wf_p(stage="盘前新闻：写入 2h 本地缓存", percent=97,
                       detail="推理完成，结果归档到本地缓存，后续相同问题秒回 ...")
-                # 保存到文件（空结果禁止写缓存——否则 6h 内所有用户都拿到空串）
+                # 保存到文件（空结果禁止写缓存——否则 2h 内所有用户都拿到空串）
                 try:
                     saved = await asyncio.to_thread(_save_premarket_result, final_answer)
                     trace["premarket_saved_to"] = str(saved)

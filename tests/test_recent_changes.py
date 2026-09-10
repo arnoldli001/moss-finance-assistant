@@ -24,7 +24,7 @@ def main():
     check("PRE_MARKET_DIR 位于 output/pre_market_news",
           PRE_MARKET_DIR.parts[-3:] == ("output", "pre_market_news") or
           str(PRE_MARKET_DIR).replace("\\", "/").endswith("output/pre_market_news"))
-    check("盘前缓存 TTL 仍为 6 小时", PRE_MARKET_TTL_HOURS == 6)
+    check("盘前缓存 TTL 为 2 小时（2026-09-10 由 6h 缩短）", PRE_MARKET_TTL_HOURS == 2)
 
     # 2) 复盘预测存档机制（server.py 源码标记断言）
     server_src = (Path(__file__).parent.parent / "interfaces" / "api" / "server.py").read_text(

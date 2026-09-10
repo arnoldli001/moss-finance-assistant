@@ -1228,7 +1228,7 @@ STOCK_CACHE_WARMUP_SOURCES: tuple = (
 # 缓存文件 TTL（秒）：用于『当小时未结束，但用户换了更准确的股票名后仍能刷新』——
 # 实际判断按『当日已存在的"时"粒度文件』优先级；当日 08 时缓存 → 20 时自动降级为旧数据，不覆盖新
 STOCK_CACHE_DEFAULT_TTL_SEC: int = int(os.getenv("STOCK_CACHE_DEFAULT_TTL_SEC",
-                                                  str(2 * 3600)))  # 默认 6 小时
+                                                  str(2 * 3600)))  # 默认 2 小时
 # 文件最大字节（保护磁盘 + 防止 warmup 产出 10M+ 垃圾）
 STOCK_CACHE_MAX_BYTES: int = int(os.getenv("STOCK_CACHE_MAX_BYTES", str(512 * 1024)))  # 512KB
 # 总缓存文件上限：超过后按 mtime 删除最旧文件
