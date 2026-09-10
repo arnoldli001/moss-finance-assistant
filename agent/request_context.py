@@ -62,7 +62,6 @@ class CancellationToken:
     )
 
     def __init__(self, timeout_sec: Optional[float] = None, *, detached: bool = False) -> None:
-        loop = asyncio.get_event_loop() if asyncio.get_event_loop_policy() else None
         self._id: str = uuid.uuid4().hex[:12]
         self._cancelled: bool = False
         self._reason: str = ""
@@ -94,7 +93,7 @@ class CancellationToken:
         if self._cancelled:
             return True
         if self._deadline_at is not None and time.monotonic() >= self._deadline_at:
-            # 已超时 → 自动触发取消（幂等）
+            # 超时自动触发取消（幂等）
             self._cancel_without_lock(f"timeout: deadline {self._deadline_at:.1f}s reached")
             return True
         return False

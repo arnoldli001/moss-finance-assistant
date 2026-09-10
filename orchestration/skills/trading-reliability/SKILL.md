@@ -284,7 +284,7 @@ trigger-keywords:
 
 ### 4.2 时间窗口三态熔断器（项目运行时实现）
 
-> **案例对齐**：用户要求"错误率超过 60 秒 3 次即熔断"。
+> **"错误率超过 60 秒 3 次即熔断"。
 
 项目运行时实现位于 [agent/circuit_breaker.py](file:///d:/code/moss-finance-assistant/agent/circuit_breaker.py)，采用**时间窗口内失败次数**触发（而非滑动窗口错误率），更贴合"60秒3次"案例：
 

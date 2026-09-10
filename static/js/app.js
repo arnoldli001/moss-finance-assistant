@@ -180,7 +180,7 @@ function _citationMetaMerge(items) {
 }
 
 // 6.9 引用角标悬停卡片：显示 / 隐藏 / 定位
-//  用户要求：只显示"标题 + 打开来源链接 + 最相关片段（最多100字）"，减少信息噪音和 token
+// 只显示"标题 + 打开来源链接 + 最相关片段（最多100字）"，减少信息噪音和 token
 function _citationShowCard(idx, anchorEl) {
   const card = document.getElementById('citation-hover-card');
   if (!card) return;
@@ -1311,7 +1311,7 @@ function _streamShowSourceBox(el, highlightIdx) {
       const urlA = s.url
         ? `<a href="${_escapeAttr(s.url)}" target="_blank" rel="noopener noreferrer" style="color:#1565c0;word-break:break-all;text-decoration:none;">🔗 打开来源</a>`
         : '<span style="color:#aaa;font-size:10.5px;">（无外链）</span>';
-      // 用户要求：最少 token。snippet ≤100 字；去掉 reliability/type/发布时间三行冗余元信息
+      // 最少 token。snippet ≤100 字；去掉 reliability/type/发布时间三行冗余元信息
       const SNIPPET_MAX = 100;
       const rawSnip = String(s.snippet || (s._snip ? s._snip : ''));
       const snipRaw = (function (idx) {

@@ -700,7 +700,7 @@ function _citationMetaMerge(items) {
 }
 
 // 6.9 引用角标悬停卡片：显示 / 隐藏 / 定位
-//  用户要求：只显示"标题 + 打开来源链接 + 最相关片段（最多100字）"，减少信息噪音和 token
+// 只显示"标题 + 打开来源链接 + 最相关片段（最多100字）"，减少信息噪音和 token
 function _citationShowCard(idx, anchorEl) {
   const card = document.getElementById('citation-hover-card');
   if (!card) return;
@@ -1782,7 +1782,7 @@ function _streamShowSourceBox(el, highlightIdx) {
       const urlA = s.url
         ? `<a href="${_escapeAttr(s.url)}" target="_blank" rel="noopener noreferrer" style="color:#1565c0;word-break:break-all;text-decoration:none;">🔗 打开来源</a>`
         : '<span style="color:#aaa;font-size:10.5px;">（无外链）</span>';
-      // 用户要求：最少 token。snippet ≤100 字；去掉 reliability/type/发布时间三行冗余元信息
+      // 最少 token。snippet ≤100 字；去掉 reliability/type/发布时间三行冗余元信息
       const SNIPPET_MAX = 100;
       const rawSnip = String(s.snippet || (s._snip ? s._snip : ''));
       const snipRaw = (function (idx) {
@@ -2092,12 +2092,16 @@ async function _streamRun(query, userDisplayText, opts) {
     if (!p) return;
     if (!currentAssistantMsgEl) _streamEnsureAssistantMsg(pendingTurnIndex);
     _streamAppendToolCall(currentAssistantMsgEl, 'call', p);
+    // 转发到全局事件总线，供 React 监控面板监听
+    try { window.dispatchEvent(new CustomEvent('moss:tool_call', { detail: p })); } catch (_) {}
   });
 
   buf.on('tool_result', (p) => {
     if (!p) return;
     if (!currentAssistantMsgEl) _streamEnsureAssistantMsg(pendingTurnIndex);
     _streamAppendToolCall(currentAssistantMsgEl, 'result', p);
+    // 转发到全局事件总线，供 React 监控面板监听
+    try { window.dispatchEvent(new CustomEvent('moss:tool_result', { detail: p })); } catch (_) {}
     // 把来源引用合并进全局池（tool_result.source_refs 带 index）
     if (Array.isArray(p.source_refs) && p.source_refs.length) {
       p.source_refs.forEach(sr => {
@@ -2125,6 +2129,8 @@ async function _streamRun(query, userDisplayText, opts) {
   buf.on('done', (p) => {
     clearThinkingTimer();
     _streamFinalizeMsg(currentAssistantMsgEl, (p && p.final_text) ? p.final_text : undefined);
+    // 转发到全局事件总线，供 React 监控面板标记全部完成
+    try { window.dispatchEvent(new CustomEvent('moss:task_done', { detail: p || {} })); } catch (_) {}
     // 日志
     if (p) {
       const usage = p.usage || {};
@@ -3760,5 +3766,10 @@ function escapeHtml(s) {
 }
 
 </script>
+<!-- ===== React 监控面板（多Agent并行执行可视化）===== -->
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script type="text/babel" src="/static/js/react_monitor.js"></script>
 </body>
 </html>

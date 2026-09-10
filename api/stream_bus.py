@@ -932,7 +932,7 @@ class StreamEventBus:
             items = (items or []) + merged
         if not items:
             return ""
-        # 去重 index，按 index 升序；最后统一 clamp title/url/snippet 到用户要求上限（token 安全）
+        # 去重 index，按 index 升序；最后统一 clamp title/url/snippet 到硬上限（token 安全）
         dedup: Dict[int, CitationMetaItem] = {}
         for it in items:
             dedup[it.index] = it

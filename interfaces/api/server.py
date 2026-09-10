@@ -84,7 +84,7 @@ project_root = _find_project_root(current_dir)
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-# 复盘预测输出存档目录（2026-09-09 用户要求）：output/Market_Recap_Outlook，
+# 复盘预测输出存档目录：output/Market_Recap_Outlook，
 # 每次成功推理存一份 markdown（文件名=创建时间 YYYYMMDDHHMMSS.md），
 # _run_review_prediction_dedup 开头检测 3 小时内的存档直接复用（类似盘前研报热度）。
 RECAP_ARCHIVE_DIR = Path(project_root) / "output" / "Market_Recap_Outlook"
@@ -2420,7 +2420,7 @@ async def _run_review_prediction(thread_id: str, user_id: Optional[str] = None, 
             skill_content = ""
 
         # ===== 阶段 1+2 并行：盘前小作文热度 + 盘前新闻搜索 =====
-        # 用户要求：原串行（150+130s）改并行（max=150s），两路结果汇总后给阶段3。
+        # 并行（max=150s），两路结果汇总后给阶段3。
         # wait_for 只会取消各自任务，互不牵连；gather(return_exceptions=True)
         # 把 TimeoutError/业务异常作为结果返回，逐段归类整理，保证两路都有兜底文案。
         monitor._emit(
@@ -2574,8 +2574,6 @@ async def _run_review_prediction(thread_id: str, user_id: Optional[str] = None, 
 
         # ===== 推送最终结果到前端对话区 =====
         monitor.report_task_result(analysis_result)
-
-        # ===== 存档到本地（2026-09-09 用户要求）=====
         # 仅 DeepSeek 成功综答（_ds_ok）才写档：超时/失败兜底文案不存，
         # 否则 3 小时存档窗口会把兜底文案反复端给用户。
         if _ds_ok and analysis_result.strip():

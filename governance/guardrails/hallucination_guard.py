@@ -1,7 +1,5 @@
 """
 Layer 3 - Harness Engineering: 模型幻觉防护（Hallucination Guard）。
-
-本模块实现用户要求的"避免模型幻觉"三重防护：
     1. RAG + 引用追踪（强制标注信息来源，缺失来源的陈述视为可疑）
     2. LLM-as-Judge（轻量模型二次校验：独立模型审查 Maker 输出是否与工具结果一致）
     3. 输出验证管道（JSON Schema 结构校验 + 语义比对：关键数字 / 股票代码必须可在工具结果中找到）
