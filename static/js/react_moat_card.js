@@ -4,7 +4,7 @@
  * 功能：当助手输出护城河分析时，自动识别五维度（品牌/技术/成本/网络效应/转换成本）
  *       的评分，渲染为可视化进度条卡片。
  *
- * 面试展示点：
+ * react：
  *   - 列表循环渲染（5 个维度 .map）
  *   - 条件渲染（评分等级对应不同颜色）
  *   - useEffect + MutationObserver 监听 DOM 变化
@@ -86,19 +86,33 @@
   // 单个维度条
   function DimBar({ dim, score }) {
     const pct = (score / 5) * 100;
+    const color = scoreColor(score);
+    // 刻度点（1~5）
+    const ticks = [1, 2, 3, 4, 5].map(function (t) {
+      return h("span", {
+        key: t,
+        className: "moat-dim-tick" + (score >= t ? " active" : ""),
+        style: { left: (t / 5 * 100) + "%" }
+      });
+    });
     return h("div", { className: "moat-dim-row" },
       h("div", { className: "moat-dim-label" },
         h("span", { className: "moat-dim-icon" }, dim.icon),
         h("span", { className: "moat-dim-name" }, dim.name)
       ),
       h("div", { className: "moat-dim-bar" },
+        ticks,
         h("div", {
           className: "moat-dim-bar-fill",
-          style: { width: pct + "%", background: scoreColor(score) }
+          style: { width: pct + "%", background: "linear-gradient(90deg, " + color + "aa, " + color + ")" }
         })
       ),
-      h("div", { className: "moat-dim-score", style: { color: scoreColor(score) } },
-        score ? score + "/5 " + scoreLabel(score) : '—'
+      h("div", {
+        className: "moat-dim-score-badge",
+        style: { background: color + "1a", color: color, borderColor: color + "40" }
+      },
+        score ? score + "/5" : '—',
+        score ? h("span", { className: "moat-dim-score-label" }, scoreLabel(score)) : null
       )
     );
   }
@@ -114,9 +128,16 @@
 
     return h("div", { className: "moat-card" },
       h("div", { className: "moat-card-header" },
-        h("span", { className: "moat-card-title" }, "🛡 护城河五维度评估" + (stockName ? " · " + stockName : "")),
-        h("span", { className: "moat-card-overall", style: { color: overallColor } },
-          overall + "（综合 " + avg + "/5）"
+        h("div", { className: "moat-card-title-wrap" },
+          h("span", { className: "moat-card-icon-badge" }, "🛡"),
+          h("span", { className: "moat-card-title" }, "护城河五维度评估" + (stockName ? " · " + stockName : ""))
+        ),
+        h("span", {
+          className: "moat-card-overall-badge",
+          style: { background: overallColor + "1a", color: overallColor, borderColor: overallColor + "40" }
+        },
+          h("span", { className: "moat-card-overall-label" }, overall),
+          h("span", { className: "moat-card-overall-score" }, avg + "/5")
         )
       ),
       h("div", { className: "moat-card-body" },
@@ -171,18 +192,101 @@
 
   // 注入样式
   var STYLE = [
-    ".moat-card { margin: 12px 0; padding: 16px; background: linear-gradient(135deg, #fff9f0 0%, #fff5e6 100%); border: 1px solid #ffe0b2; border-radius: 12px; box-shadow: 0 2px 8px rgba(255,152,0,0.08); }",
-    ".moat-card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; flex-wrap: wrap; gap: 8px; }",
-    ".moat-card-title { font-size: 14px; font-weight: 700; color: #e65100; }",
-    ".moat-card-overall { font-size: 13px; font-weight: 700; }",
-    ".moat-card-body { display: flex; flex-direction: column; gap: 10px; }",
-    ".moat-dim-row { display: flex; align-items: center; gap: 10px; }",
-    ".moat-dim-label { width: 90px; display: flex; align-items: center; gap: 5px; flex-shrink: 0; }",
-    ".moat-dim-icon { font-size: 14px; }",
-    ".moat-dim-name { font-size: 12px; font-weight: 600; color: #5d4037; }",
-    ".moat-dim-bar { flex: 1; height: 18px; background: #f5f5f5; border-radius: 9px; overflow: hidden; }",
-    ".moat-dim-bar-fill { height: 100%; border-radius: 9px; transition: width 0.6s ease; }",
-    ".moat-dim-score { width: 80px; text-align: right; font-size: 11px; font-weight: 600; flex-shrink: 0; }"
+    /* ===== 卡片容器 ===== */
+    ".moat-card {",
+    "  margin: 14px 0; padding: 18px 20px;",
+    "  background: linear-gradient(135deg, #fffdf7 0%, #fff8ed 50%, #fef6e4 100%);",
+    "  border: 1px solid rgba(255, 183, 77, 0.35);",
+    "  border-radius: 16px;",
+    "  box-shadow: 0 4px 16px rgba(255, 152, 0, 0.10), 0 1px 3px rgba(0,0,0,0.04);",
+    "  animation: moatFadeIn 0.4s ease-out;",
+    "  position: relative; overflow: hidden;",
+    "}",
+    /* 顶部装饰条 */
+    ".moat-card::before {",
+    "  content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px;",
+    "  background: linear-gradient(90deg, #ff9800, #ffb74d, #ffcc80);",
+    "}",
+    /* ===== 头部 ===== */
+    ".moat-card-header {",
+    "  display: flex; justify-content: space-between; align-items: center;",
+    "  margin-bottom: 16px; flex-wrap: wrap; gap: 10px;",
+    "}",
+    ".moat-card-title-wrap { display: flex; align-items: center; gap: 10px; }",
+    ".moat-card-icon-badge {",
+    "  display: inline-flex; align-items: center; justify-content: center;",
+    "  width: 30px; height: 30px; border-radius: 9px;",
+    "  background: linear-gradient(135deg, #ffb74d, #ff9800);",
+    "  font-size: 16px; box-shadow: 0 2px 6px rgba(255,152,0,0.3);",
+    "}",
+    ".moat-card-title { font-size: 15px; font-weight: 700; color: #4e342e; letter-spacing: 0.2px; }",
+    /* 综合评分徽章 */
+    ".moat-card-overall-badge {",
+    "  display: inline-flex; align-items: center; gap: 8px;",
+    "  padding: 6px 14px; border-radius: 20px; border: 1px solid;",
+    "  font-weight: 700; backdrop-filter: blur(4px);",
+    "}",
+    ".moat-card-overall-label { font-size: 13px; }",
+    ".moat-card-overall-score { font-size: 12px; opacity: 0.85; font-weight: 600; }",
+    /* ===== 维度行 ===== */
+    ".moat-card-body { display: flex; flex-direction: column; gap: 12px; }",
+    ".moat-dim-row { display: flex; align-items: center; gap: 12px; }",
+    ".moat-dim-label {",
+    "  width: 88px; display: flex; align-items: center; gap: 6px; flex-shrink: 0;",
+    "}",
+    ".moat-dim-icon {",
+    "  display: inline-flex; align-items: center; justify-content: center;",
+    "  width: 22px; height: 22px; border-radius: 6px;",
+    "  background: rgba(255,255,255,0.7); font-size: 13px;",
+    "  box-shadow: 0 1px 2px rgba(0,0,0,0.06);",
+    "}",
+    ".moat-dim-name { font-size: 12.5px; font-weight: 600; color: #5d4037; }",
+    /* 进度条轨道 */
+    ".moat-dim-bar {",
+    "  flex: 1; height: 22px; position: relative;",
+    "  background: rgba(0,0,0,0.04); border-radius: 11px;",
+    "  border: 1px solid rgba(0,0,0,0.05);",
+    "  overflow: hidden;",
+    "}",
+    /* 刻度点 */
+    ".moat-dim-tick {",
+    "  position: absolute; top: 50%; transform: translate(-50%, -50%);",
+    "  width: 3px; height: 10px; border-radius: 2px;",
+    "  background: rgba(255,255,255,0.6); z-index: 2;",
+    "  transition: background 0.3s;",
+    "}",
+    ".moat-dim-tick.active { background: rgba(255,255,255,0.95); }",
+    /* 进度条填充 */
+    ".moat-dim-bar-fill {",
+    "  height: 100%; border-radius: 11px;",
+    "  transition: width 0.8s cubic-bezier(0.22, 1, 0.36, 1);",
+    "  position: relative; z-index: 1;",
+    "  box-shadow: 0 0 8px rgba(0,0,0,0.1);",
+    "}",
+    /* 填充光泽动画 */
+    ".moat-dim-bar-fill::after {",
+    "  content: ''; position: absolute; top: 0; left: 0; right: 0; bottom: 0;",
+    "  background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.35) 50%, transparent 100%);",
+    "  animation: moatShimmer 2s ease-in-out infinite;",
+    "}",
+    /* 评分徽章 */
+    ".moat-dim-score-badge {",
+    "  min-width: 64px; padding: 4px 10px; border-radius: 8px;",
+    "  border: 1px solid; display: inline-flex; flex-direction: column;",
+    "  align-items: center; justify-content: center; flex-shrink: 0;",
+    "  line-height: 1.2;",
+    "}",
+    ".moat-dim-score-badge > :first-child { font-size: 13px; font-weight: 700; }",
+    ".moat-dim-score-label { font-size: 10px; opacity: 0.8; font-weight: 500; }",
+    /* ===== 动画 ===== */
+    "@keyframes moatFadeIn {",
+    "  from { opacity: 0; transform: translateY(8px); }",
+    "  to { opacity: 1; transform: translateY(0); }",
+    "}",
+    "@keyframes moatShimmer {",
+    "  0% { transform: translateX(-100%); }",
+    "  100% { transform: translateX(100%); }",
+    "}"
   ].join("\\n");
 
   var styleEl = document.createElement("style");
