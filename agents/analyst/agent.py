@@ -166,10 +166,10 @@ def _emit_model_cot_and_normalize_citations(
     thread_id: str,
     final_content: str,
     tool_result_texts: list,
-) -> None:
+) -> "Optional[str]":
     """§4.4 编排：把模型最终文本的 <think> 拆成独立 reasoning 事件；把正文引用角标归一；
     未标记引用时按"句子 x 文档" Jaccard overlap 动态分配引用。
-    所有修改 done in-place on `final_content`（引用角标替换）。
+    返回清洗后的正文（剥离 <think>、角标归一、含风险声明）；异常时调用方走原文。
     """
     # ----- 1. 把检索文档统一编号（1..N）并在 ThreadState 里注册 citation_meta -----
     from api.stream_bus import get_stream_bus_sync
@@ -553,6 +553,8 @@ def _emit_model_cot_and_normalize_citations(
     if final_content_out:
         bus.ev_delta(thread_id, text=final_content_out, is_reasoning=False)
 
+    return final_content_out
+
 
 def _split_into_paragraphs(text: str, max_chars: int = 2000) -> list:
     """按"\n\n"分段；每段再次按 "\n" + 纯长句按句号切；截断到 max_chars。"""
@@ -836,16 +838,21 @@ async def get_main_agent():
 
 project_root_path = Path(__file__).parents[2].resolve() # 绝对 解析路径标识以及软连接（parents[2]=项目根，output/ 会话目录统一到根下）
 
-async def run_deep_agent(task_query, session_id, user_id=None, quiet: bool = False):
+async def run_deep_agent(task_query, session_id, user_id=None, quiet: bool = False,
+                         injected_context: str = ""):
     """
     定义流式+异步执行主智能体！！
     执行过程中，返回：会话文件化通知 / 调用子智能体 / 工具执行进度 / 最终结果（通过 monitor 推前端）。
     参数:
-      task_query: 前端提问的问题
+      task_query: 前端提问的问题（必须是用户原话；外部检索上下文请走 injected_context，
+          不得拼进 task_query——否则长上下文会作为 HumanMessage 落 checkpointer，
+          历史恢复时撑爆用户气泡且顺序错乱）
       session_id: 每个前端会话对应的标识（1. 存储 session_id 到 ContextVars；2. session_id
           对应 output 输出目录），同时作为 LangGraph thread_id，由 AsyncSqliteSaver
           持久化对话历史，实现连续对话。
       user_id: 可选，所属用户 ID；传入时会更新会话标题与时间戳。
+      injected_context: 可选，工作流预检索到的外部上下文；作为 SystemMessage 注入本轮
+          （checkpointer 会存 system 消息，但历史读取只返回 user/assistant，对前端不可见）。
       quiet: 快捷按钮（盘前新闻/盘前研报热度/复盘预测）专用，开启后：
     """
     if quiet:
@@ -1033,12 +1040,21 @@ async def run_deep_agent(task_query, session_id, user_id=None, quiet: bool = Fal
         check_cancelled("main_agent.before_astream")
 
         # 执行
+        # 预检索上下文走 SystemMessage（对前端历史不可见）；HumanMessage 只放用户原话，
+        # 避免长检索上下文落 checkpointer 后在历史恢复时撑爆用户气泡
+        _astream_msgs = []
+        if injected_context and injected_context.strip():
+            _astream_msgs.append({
+                "role": "system",
+                "content": (
+                    "【系统已注入的外部检索与本地缓存上下文（仅供本轮作答参考；"
+                    "若已充分包含答案请直接基于上述信息作答，无需重复检索）】\n\n"
+                    + injected_context.strip()
+                ),
+            })
+        _astream_msgs.append({"role": "user", "content": final_user_content})
         async for chunk in agent.astream({
-            "messages":[
-                {
-                    "role":"user","content":final_user_content
-                }
-            ]
+            "messages": _astream_msgs
         },config=config,recursion_limit=MAIN_AGENT_RECURSION_LIMIT):  # type: ignore[call-arg]
             # ===== [Cancellation Check] 每轮 chunk 到达后再检查（同步循环体内的取消也能被感知）=====
             check_cancelled("main_agent.inside_astream")
@@ -1107,11 +1123,15 @@ async def run_deep_agent(task_query, session_id, user_id=None, quiet: bool = Fal
                             # 2) 正文所有 [citation:N] / [[N]] / (N) 统一为 [N]，同时补元数据
                             if _HAS_ADAPTER and isinstance(final_content, str):
                                 try:
-                                    _emit_model_cot_and_normalize_citations(
+                                    _cleaned = _emit_model_cot_and_normalize_citations(
                                         thread_id=session_id,
                                         final_content=final_content,
                                         tool_result_texts=_tool_result_texts,
                                     )
+                                    # 用清洗后正文（剥离 <think>、角标归一、含风险声明）
+                                    # 作为本轮回复与落库内容；清洗失败则保留原文
+                                    if isinstance(_cleaned, str) and _cleaned.strip():
+                                        final_content = _cleaned
                                 except Exception as _emit_err:
                                     print(f"[main_agent] cot/citation 预处理异常（不致命，走原路径）：{_emit_err}")
                             _log_verbose_result("主智能体执行结果", final_content, max_len=MAIN_AGENT_VERBOSE_MAX_LEN)
@@ -1377,6 +1397,34 @@ async def run_deep_agent(task_query, session_id, user_id=None, quiet: bool = Fal
                 await mm.add_turn(session_id, pure_user_query, current_assistant_reply.strip())
         except Exception as mm_err:
             print(f"[MemoryManager] 写入本轮记忆失败（不致命）: {mm_err}")
+
+        # ===== 回写清洗后正文到 checkpointer =====
+        # agent 自动落库的 AIMessage 是模型原始输出（含 <think> 思考段、缺风险声明），
+        # 历史恢复时会原样显示；按消息 id upsert 最后一条 AI 回复为清洗后文本。
+        try:
+            ctx = current_context()
+            cancelled = ctx.is_cancelled if ctx is not None else False
+            if (not cancelled) and current_assistant_reply and current_assistant_reply.strip():
+                from langchain_core.messages import AIMessage as _AIMsg
+                from langgraph.graph import START as _START
+                _agent = locals().get("agent")
+                _cfg = locals().get("config")
+                if _agent is not None and _cfg is not None:
+                    _st = await _agent.aget_state(_cfg)  # type: ignore[attr-defined]
+                    _mmsgs = (_st.values or {}).get("messages", []) if _st else []
+                    for _i in range(len(_mmsgs) - 1, -1, -1):
+                        _m = _mmsgs[_i]
+                        if type(_m).__name__ == "AIMessage" and not getattr(_m, "tool_calls", None):
+                            _mid = getattr(_m, "id", None)
+                            if not _mid:
+                                break
+                            _fixed = list(_mmsgs)
+                            _fixed[_i] = _AIMsg(content=current_assistant_reply.strip(), id=_mid)
+                            await _agent.aupdate_state(  # type: ignore[attr-defined]
+                                _cfg, {"messages": _fixed}, as_node=_START)
+                            break
+        except Exception as _rw_err:
+            print(f"[main_agent] 历史 AI 消息回写失败（不致命）: {_rw_err}")
         # ===== Progressive Tool Disclosure：清理 PTD query ctx =====
         reset_ptd_query(ptd_token)
         # 释放存储的地址和session_id

@@ -433,21 +433,30 @@ async def _run_zsxq(query: str, stock_names: List[str], stock_codes: List[str], 
         return SourceResult(source_key="zsxq", ok=False, error=f"{type(e).__name__}: {e}")
 
 
+async def _ainvoke_toolish(fn: Any, *args: Any) -> Any:
+    """统一调用三种形态的数据源函数：LangChain StructuredTool（@tool 装饰，
+    必须 .ainvoke()，直接 fn() 会抛 'StructuredTool' object is not callable）、
+    协程函数、普通同步函数。"""
+    if hasattr(fn, "ainvoke"):
+        return await fn.ainvoke(*args)
+    if asyncio.iscoroutinefunction(fn):
+        return await fn(*args)
+    return await asyncio.to_thread(fn, *args)
+
+
 async def _run_ima(query: str) -> SourceResult:
     """IMA 知识库（RAGFlow 远程）。"""
     try:
         from shared.data_sources.ima_knowledge import search_knowledge_base  # type: ignore
-        from inspect import iscoroutinefunction as _icf
-        fn = search_knowledge_base
-        if _icf(fn):
-            got = await fn(query)
-        else:
-            got = fn(query)
+        got = await _ainvoke_toolish(search_knowledge_base, query)
         items: List[Any] = []
         if isinstance(got, list):
             items = got
         elif isinstance(got, dict):
             items = [got]
+        elif isinstance(got, str) and got.strip():
+            items = [{"title": "IMA知识库", "content": got[:3000],
+                      "source_type": "ima", "channel": "IMA知识库"}]
         return SourceResult(source_key="ima", ok=True, items=items, raw_text=str(got)[:10000])
     except Exception as e:
         return SourceResult(source_key="ima", ok=False, error=f"{type(e).__name__}: {e}")
@@ -458,7 +467,7 @@ async def _run_local_sql(query: str, stock_names: List[str], stock_codes: List[s
     items: List[Any] = []
     try:
         from shared.data_sources.local_sql import list_sql_tables, get_table_data  # type: ignore
-        tables_raw = list_sql_tables()
+        tables_raw = await _ainvoke_toolish(list_sql_tables)
         tables: List[str] = []
         if isinstance(tables_raw, list):
             tables = [str(t) for t in tables_raw]
@@ -468,7 +477,7 @@ async def _run_local_sql(query: str, stock_names: List[str], stock_codes: List[s
         target = [t for t in tables if any(c.lower() in t.lower() for c in stock_codes) or any(n in t for n in stock_names)]
         for tbl in target[:1]:
             try:
-                got = get_table_data(tbl)
+                got = await _ainvoke_toolish(get_table_data, tbl)
                 items.append({"title": f"SQL表:{tbl}", "content": str(got)[:3000], "source_type": "sql", "channel": "MySQL本地股票K线库"})
             except Exception as _e:
                 items.append({"title": f"SQL表:{tbl} 读取失败", "content": f"{type(_e).__name__}: {_e}", "source_type": "sql"})
@@ -490,6 +499,7 @@ async def _final_analyst_answer(
     preferred_agent: Optional[str] = None,
     bus: Any = None,
     quiet: bool = False,
+    trace: Optional[Dict[str, Any]] = None,
 ) -> str:
     """
     最终答案生成：
@@ -501,19 +511,22 @@ async def _final_analyst_answer(
     try:
         from agents.analyst.agent import run_deep_agent  # type: ignore
         from inspect import iscoroutinefunction as _icf
-        # 在 query 顶部拼接一句："系统已注入检索上下文：... 以下是最终问题："，再交给 run_deep_agent
-        # （避免 run_deep_agent 内部再次重复检索同样信息）
-        injected_query_parts = []
-        if aggregated_prompt_context and len(aggregated_prompt_context.strip()) >= 30:
-            injected_query_parts.append(aggregated_prompt_context.rstrip())
-            injected_query_parts.append("——以上是系统已注入的外部检索与本地缓存上下文（若已充分包含答案请直接基于上述信息作答）——")
-        injected_query_parts.append(f"最终用户问题：{query}")
-        final_query = "\n\n".join(injected_query_parts)
+        # 检索上下文走 injected_context（SystemMessage，不落用户气泡）；
+        # task_query 只传用户原话（旧实现把上下文拼进 query，长文作为 HumanMessage
+        # 落 checkpointer，历史恢复时撑爆用户气泡且顺序颠倒）。
+        _injected = (aggregated_prompt_context.rstrip()
+                     if aggregated_prompt_context and len(aggregated_prompt_context.strip()) >= 30
+                     else "")
         fn = run_deep_agent
         if _icf(fn):
-            answer = await fn(final_query, thread_id or "", user_id or "", quiet=quiet)
+            answer = await fn(query, thread_id or "", user_id or "",
+                              quiet=quiet, injected_context=_injected)
         else:
-            answer = fn(final_query, thread_id or "", user_id or "", quiet=quiet)
+            answer = fn(query, thread_id or "", user_id or "",
+                        quiet=quiet, injected_context=_injected)
+        # agent.astream 已把 Human(原话)+AI(答案) 落 checkpointer，调用方无需再补落
+        if trace is not None:
+            trace["persisted_by_agent"] = True
     except Exception as e:
         # 兜底：如果 analyst Agent 不可用，直接返回 aggregator 上下文 + 风险声明
         answer = (
@@ -1006,7 +1019,7 @@ async def run_analysis_workflow(
             # 规则2：复用原逻辑（直接调原 main_agent.run_deep_agent，不做显式 DAG 改造）
             final_answer = await _final_analyst_answer(
                 query, thread_id, user_id, "",
-                preferred_agent=None, bus=bus, quiet=quiet,
+                preferred_agent=None, bus=bus, quiet=quiet, trace=trace,
             )
             return WorkflowResult(router_decision=router, final_answer=final_answer, branch_trace=trace)
 
@@ -1091,7 +1104,7 @@ async def run_analysis_workflow(
                   percent=90, detail="Agent 基于聚合上下文生成结构化答复 ...")
             final_answer = await _final_analyst_answer(
                 query, thread_id, user_id, aggregated_prompt_context,
-                preferred_agent=pref_agent, bus=bus, quiet=quiet,
+                preferred_agent=pref_agent, bus=bus, quiet=quiet, trace=trace,
             )
             return WorkflowResult(router_decision=router, final_answer=final_answer,
                                   branch_trace=trace, aggregator_stats=aggregator_stats)
@@ -1107,7 +1120,7 @@ async def run_analysis_workflow(
                   stage="workflow_dag")
             final_answer = await _final_analyst_answer(
                 query, thread_id, user_id, "",
-                preferred_agent="coder", bus=bus, quiet=quiet,
+                preferred_agent="coder", bus=bus, quiet=quiet, trace=trace,
             )
             return WorkflowResult(router_decision=router, final_answer=final_answer, branch_trace=trace)
 
@@ -1161,7 +1174,7 @@ async def run_analysis_workflow(
             final_answer = await _ollama_gate.run(
                 lambda: _final_analyst_answer(
                     query, thread_id, user_id, aggregated_prompt_context,
-                    preferred_agent="reasoning", bus=bus, quiet=quiet,
+                    preferred_agent="reasoning", bus=bus, quiet=quiet, trace=trace,
                 ),
                 on_wait=_gpu_wait,
             )
@@ -1175,7 +1188,7 @@ async def run_analysis_workflow(
                   detail="VISION 分支目前走 Vision Agent 兼容兜底 ...")
             final_answer = await _final_analyst_answer(
                 query, thread_id, user_id, "",
-                preferred_agent="vision", bus=bus, quiet=quiet,
+                preferred_agent="vision", bus=bus, quiet=quiet, trace=trace,
             )
             return WorkflowResult(router_decision=router, final_answer=final_answer, branch_trace=trace)
 
@@ -1218,7 +1231,7 @@ async def run_analysis_workflow(
               detail="分析 Agent 基于聚合上下文生成答复 ...")
         final_answer = await _final_analyst_answer(
             query, thread_id, user_id, aggregated_prompt_context,
-            preferred_agent=preferred_agent_override, bus=bus, quiet=quiet,
+            preferred_agent=preferred_agent_override, bus=bus, quiet=quiet, trace=trace,
         )
         return WorkflowResult(router_decision=router, final_answer=final_answer,
                               branch_trace=trace, aggregator_stats=aggregator_stats)

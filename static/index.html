@@ -798,8 +798,7 @@ const TaskManager = {
     currentTaskType = info.taskType; // 恢复结果渲染的靠左/靠右语义（zsxq 靠右）
     const mins = Math.max(1, Math.round((Date.now() - info.startTime) / 60000));
     appendMessage('system',
-      `⏳ 本会话的「${info.label}」任务仍在后台运行（已约 ${mins} 分钟），` +
-      `完成后结果会自动显示；期间可点击 ⏹ 停止，也可先切换其他会话。`);
+      `⏳ 本会话的「${info.label}」任务仍在后台运行（已约 ${mins} 分钟），`);
     setRunning(true, info.taskType); // 恢复 stop 按钮，超时保护计时器同步重启
   },
   async _poll() {
