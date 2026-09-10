@@ -26,22 +26,35 @@ An **enterprise-grade multi-agent financial research system** for retail investo
 
 ## 🖼️ Demo
 
-### Pre-Market Research-Report Heat — walkthrough (Zsxq scraping via Playwright + Ollama qwen3:8b local dynamic batching)
+### 1、Pre-Market Research-Report Heat — walkthrough (Zsxq scraping via Playwright + Ollama qwen3:8b local dynamic batching)
 ![Pre-market research heat walkthrough](screenshots/demo_pre_market_news.gif)
 
-### Pre-Market Research-Report Heat — output (frontend table: stock / sentiment / report count / sector / summary)
+### 2、Pre-Market Research-Report Heat — output (frontend table: stock / sentiment / report count / sector / summary)
 ![Pre-market research heat output](screenshots/zsxq_hot_table.png)
 
-### Pre-Market News — walkthrough (one click: site-targeted concurrent search across 6 major finance platforms + US overnight session + Zsxq aggregation → DeepSeek cloud reasoning → structured tables, with live progress)
+### 3、Pre-Market News — walkthrough (one click: site-targeted concurrent search across 6 major finance platforms + US overnight session + Zsxq aggregation → DeepSeek cloud reasoning → structured tables, with live progress)
 ![Pre-market news walkthrough](screenshots/盘前新闻功能演示动画2.gif)
 
-### Pre-Market News — output (three-part structured report: platform hot-topic table / US tech-stock pre-market table)
+### 4、Pre-Market News — output (three-part structured report: platform hot-topic table / US tech-stock pre-market table)
 ![Pre-market news output - tables](screenshots/盘前新闻输出结果展示1.png)
 
-### Pre-Market News — output (reasoning & prediction: bullish/bearish A-share concepts and stocks, each with risk disclaimer)
+### 5、Pre-Market News — output (reasoning & prediction: bullish/bearish A-share concepts and stocks, each with risk disclaimer)
 ![Pre-market news output - reasoning](screenshots/盘前新闻输出结果展示2.png)
 
-### Share-as-image (one-click borderless high-res PNG with diagonal watermark; both report-heat tables and pre-market-news structured tables are drawn as real Canvas tables)
+### 6、Review Prediction — walkthrough (pre-market research heat + pre-market news dual-source parallel → DeepSeek comprehensive analysis & market-index forecast; 3-hour archive reused in seconds)
+![Review prediction walkthrough](screenshots/6.复盘预测功能演示动画.gif)
+
+### 7、Review Prediction — output (multi-dimensional comprehensive analysis, auto-archived to output/Market_Recap_Outlook)
+![Review prediction output](screenshots/7.盘前预测_输出效果.png)
+
+### 8、User Input — Reasoning Process Display
+![User input reasoning process](screenshots/8.用户输入的推理过程展示.png)
+
+### 9、User Input — Output Process Display (multi-source concurrent detection across IMA knowledge base / Zsxq / web search)
+![User input output process](screenshots/9.用户输入含有股票的多源（IMA知识库、知识星球、网络搜索）并发检测输出效结果1.png)
+![User input output process](screenshots/10.用户输入含有股票的多源（IMA知识库、知识星球、网络搜索）并发检测输出效结果2.png)
+
+### 10、Share-as-image (one-click borderless high-res PNG with diagonal watermark; both report-heat tables and pre-market-news structured tables are drawn as real Canvas tables)
 > After **Ctrl+F5**, right-click a message → "Share → Generate share image".
 
 ---
