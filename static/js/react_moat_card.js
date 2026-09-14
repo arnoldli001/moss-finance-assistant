@@ -1,8 +1,12 @@
 /**
  * react_moat_card.js — 护城河五维度评估卡（React 18，createElement 写法）
  *
- * 功能：当助手输出护城河分析时，自动识别五维度（品牌/技术/成本/网络效应/转换成本）
- *       的评分，渲染为可视化进度条卡片。
+ * 功能：当且仅当【最新一轮】用户输入为护城河意图时才渲染：
+ *   1) 显式查询护城河（含"护城河/竞争壁垒/竞争优势/moat"），或
+ *   2) 仅输入股票名/代码（短中英文股票名或6位代码）
+ * 盘前新闻/盘前研报热度/复盘预测等快捷按钮回合一律不显示。
+ * 判定依据是【本轮用户消息文本】+【同回合助手回复须显式出现"护城河"且解析出≥3个维度】，
+ * 不扫描历史回合，新回合自动清除上一轮卡片。
  *
  * react：
  *   - 列表循环渲染（5 个维度 .map）
@@ -240,40 +244,123 @@
     );
   }
 
-  // 监听聊天区新消息，自动识别护城河分析
+  // ===== 意图判定：仅最新一轮用户输入为护城河查询或纯股票名时才允许展示 =====
+
+  // 快捷功能/非个股分析类提问（盘前新闻、研报热度、复盘预测等），直接排除
+  var QUICK_CMD_RE = /盘前|盘后|新闻|研报|热度|复盘|预测|小作文|大盘|指数|行情|速览|早报|晚报/;
+
+  function isBareStockQuery(q) {
+    if (!q || /\s/.test(q) || QUICK_CMD_RE.test(q)) return false;
+    if (/^\d{6}$/.test(q)) return true;                    // 6位股票代码
+    // 简短中英文股票名（无空格、2~10字）；是否真为护城河分析还需回复内容二次确认
+    return /^[\u4e00-\u9fa5A-Za-z0-9]{2,10}$/.test(q);
+  }
+
+  function extractStockName(query) {
+    var code = query.match(/\d{6}/);
+    if (code) return code[0];
+    var s = query.replace(/moat/ig, '').replace(/护城河|竞争壁垒|竞争优势/g, '');
+    // 尾部助词/疑问词（长词优先）
+    s = s.replace(/[?？!！。.,，\s]+$/g, '');
+    s = s.replace(/(?:的)?(?:怎么样|咋样|如何|情况|表现|分析|一下|下|的)+$/g, '');
+    // 头部请求语（短语最长匹配，循环剥离如"帮我分析下"；不单字剥"我"以免误伤我武生物）
+    var headRe = /^(?:请帮我|请帮忙|帮我|帮忙|请|给我|我想|我要|分析一下|分析下|分析|看看|看一下|看下|看|聊聊|聊一下|聊|介绍一下|介绍|评估一下|评估|研究一下|研究|查询一下|查一下|查下|查询|查|说说|说一下|说下|说|讲一下|讲下|讲|了解一下|了解|下)+/;
+    var prev;
+    do { prev = s; s = s.replace(headRe, ''); } while (s !== prev);
+    return s.trim();
+  }
+
+  // 返回 { stock } 表示本轮是护城河意图；null 表示非护城河回合（不显示卡片）
+  function moatIntent(query) {
+    if (!query) return null;
+    if (/护城河|竞争壁垒|竞争优势|moat/i.test(query)) {
+      return { stock: extractStockName(query) };
+    }
+    if (isBareStockQuery(query)) return { stock: query };
+    return null;
+  }
+
+  // 监听聊天区最新回合，仅在该回合为护城河意图时识别并渲染
   function MoatDetector() {
     const [moatData, setMoatData] = useState(null);
-    const bestRef = useRef(null); // 保留解析维度最多的结果
+    // 每轮回合同步重置：{ key: 最新用户消息msgId, max: 已解析最大维度数, scores }
+    const turnRef = useRef({ key: '', max: 0, scores: null });
 
     useEffect(function () {
       function scanMessages() {
-        // 助手消息结构：.msg-wrap.ai-msg > .msg.assistant
-        var wraps = document.querySelectorAll('.msg-wrap.ai-msg');
-        var bestScores = null;
-        var bestCount = 0;
-        for (var i = 0; i < wraps.length; i++) {
-          var wrap = wraps[i];
-          var inner = wrap.querySelector('.msg.assistant');
-          if (!inner) continue;
-          var text = inner.textContent || '';
-          // 检查是否包含护城河关键词
-          if (text.indexOf('护城河') !== -1 ||
-              (text.indexOf('品牌') !== -1 && text.indexOf('转换成本') !== -1)) {
-            var scores = parseMoatScores(text);
-            if (scores) {
-              var count = Object.keys(scores).length;
-              // 保留维度数最多的解析结果（流式过程中逐步完善）
-              if (count > bestCount) {
-                bestCount = count;
-                bestScores = scores;
-              }
-            }
+        var chat = document.getElementById('chat');
+        if (!chat) return;
+
+        // 最新一条用户消息 = 最新回合
+        var userWraps = chat.querySelectorAll('.msg-wrap.user-msg');
+        var lastUser = userWraps[userWraps.length - 1];
+        if (!lastUser) return;
+
+        var key = lastUser.dataset.msgId || '';
+        var query = (lastUser.dataset.content || '').trim();
+        if (!query) {
+          var userMsgEl = lastUser.querySelector('.msg.user');
+          query = userMsgEl ? (userMsgEl.textContent || '').trim() : '';
+        }
+
+        var intent = moatIntent(query);
+
+        // 新回合开始：重置上一轮的解析缓存
+        var st = turnRef.current;
+        if (st.key !== key) st = { key: key, max: 0, scores: null };
+
+        // 非护城河意图（盘前新闻/研报/复盘等）：立即清除卡片
+        if (!intent) {
+          turnRef.current = st;
+          if (st.max !== 0) { st.max = 0; st.scores = null; }
+          setMoatData(function (prev) { return prev ? null : prev; });
+          return;
+        }
+
+        // 只取【同回合】（data-turn-index 相同）的助手回复，绝不扫描历史回合
+        var ti = lastUser.dataset.turnIndex;
+        var replyText = '';
+        var aiWraps = chat.querySelectorAll('.msg-wrap.ai-msg');
+        if (ti) {
+          for (var i = 0; i < aiWraps.length; i++) {
+            if (aiWraps[i].dataset.turnIndex !== ti) continue;
+            var inner = aiWraps[i].querySelector('.msg.assistant');
+            if (inner) replyText += '\n' + (inner.textContent || '');
+          }
+        } else {
+          // 历史消息可能没有 turnIndex：退化为取最后一条助手回复
+          var lastAi = aiWraps[aiWraps.length - 1];
+          if (lastAi) {
+            var lastInner = lastAi.querySelector('.msg.assistant');
+            if (lastInner) replyText = lastInner.textContent || '';
           }
         }
-        if (bestScores && (!bestRef.current || Object.keys(bestScores).length > Object.keys(bestRef.current.scores).length)) {
-          bestRef.current = { scores: bestScores, stockName: '' };
-          setMoatData(bestRef.current);
+
+        // 二次确认：回复必须显式包含"护城河"，且至少解析出3个维度，
+        // 避免普通个股分析/新闻文本中零散出现品牌、技术等词导致误出卡
+        var canShow = replyText.indexOf('护城河') !== -1;
+        var scores = canShow ? parseMoatScores(replyText) : null;
+        var count = scores ? Object.keys(scores).length : 0;
+
+        if (count > st.max) { st.max = count; st.scores = scores; }
+
+        var payload = null;
+        if (st.max >= 3 && st.scores) {
+          payload = { key: key, scores: st.scores, stockName: intent.stock };
         }
+
+        turnRef.current = st;
+        setMoatData(function (prev) {
+          if (payload) {
+            // 同回合且维度数未增长：返回原对象，打断 MutationObserver→setState 循环
+            if (prev && prev.key === key &&
+                Object.keys(prev.scores).length === Object.keys(payload.scores).length) {
+              return prev;
+            }
+            return payload;
+          }
+          return prev ? null : prev;
+        });
       }
 
       scanMessages();

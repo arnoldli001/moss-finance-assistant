@@ -214,18 +214,27 @@
   styleEl.textContent = STYLE;
   document.head.appendChild(styleEl);
 
-  // 挂载到聊天区顶部（应用JS会重建#chat，需用MutationObserver保护挂载点）
+  // 挂载到最新一条用户输入下方（助手回复/推理过程之上），不置顶（应用JS会重建#chat，需用MutationObserver保护挂载点）
   var mount = document.createElement("div");
   mount.id = "react-agent-monitor-root";
 
   function ensureMounted() {
-    if (!document.getElementById("react-agent-monitor-root")) {
-      var chat = document.getElementById("chat");
-      if (chat) {
-        chat.insertBefore(mount, chat.firstChild);
-      } else {
+    var chat = document.getElementById("chat");
+    if (!chat) {
+      if (!document.getElementById("react-agent-monitor-root")) {
         document.body.appendChild(mount);
       }
+      return;
+    }
+    // 目标位置：最新一条用户消息的紧后方；无用户消息时挂到聊天区末尾
+    var userWraps = chat.querySelectorAll(".msg-wrap.user");
+    var lastUser = userWraps[userWraps.length - 1];
+    if (lastUser && lastUser.parentNode === chat) {
+      if (lastUser.nextSibling !== mount) {
+        chat.insertBefore(mount, lastUser.nextSibling);
+      }
+    } else if (chat.lastChild !== mount) {
+      chat.appendChild(mount);
     }
   }
   ensureMounted();
@@ -233,13 +242,11 @@
   var root = ReactDOM.createRoot(mount);
   root.render(h(AgentMonitor));
 
-  // 监听 #chat 的子节点变化，若 mount 被移除则重新插入（应用重建聊天区时触发）
+  // 监听 #chat 的子节点变化：新回合开始（新用户消息入列）时跟随移动，被移除时重新插入
   var chatEl = document.getElementById("chat");
   if (chatEl) {
     var observer = new MutationObserver(function () {
-      if (!document.getElementById("react-agent-monitor-root")) {
-        ensureMounted();
-      }
+      ensureMounted();
     });
     observer.observe(chatEl, { childList: true });
   }
