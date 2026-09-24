@@ -474,7 +474,7 @@ async def _push_zsxq_summary_via_ws(thread_id: str, txt_content: str) -> None:
         monitor.report_task_result(txt_content)
           → ToolMonitor._emit(event="task_result", payload={"result": <安全净化后的 txt>})
             → ConnectionManagerActor SEND_TO_THREAD → WS 发送
-              → app.js handleWSMessage(ev=='task_result')
+              → index.html handleWSMessage(ev=='task_result')
                 → appendMessage(currentTaskType=='zsxq' ? 'user' : 'assistant', result)
 
     同时会把"盘前研报热度 + txt 总结"写入会话历史 _save_zsxq_to_history，

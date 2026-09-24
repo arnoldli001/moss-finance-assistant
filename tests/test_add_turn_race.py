@@ -30,8 +30,19 @@ if str(PROJECT_ROOT) not in sys.path:
 from agents.reasoning.memory_manager import MemoryManager  # noqa: E402
 
 async def run_race(n_concurrent: int = 20) -> None:
-    # 用独立 DB，避免污染正式数据：临时实例
+    """并发 add_turn 竞态。
+
+    结束后**必须** close：aiosqlite 连接跑在非守护线程上，不关的话即使断言全过，
+    解释器也会在 __main__ 跑完后一直挂住（本文件此前正是这个症状）。
+    """
     mm = MemoryManager()
+    try:
+        await _run_race_body(mm, n_concurrent)
+    finally:
+        await mm.close()
+
+
+async def _run_race_body(mm, n_concurrent: int) -> None:
     # 复用其 DB（memory.db）。为隔离测试，清理目标 session
     sid = "race-test-session"
     await mm.clear_session(sid)
@@ -82,8 +93,15 @@ async def run_compress_race() -> None:
     重复 segment_index，build_prompt_context 读到双倍内容。
     修复后：每个 session_id 一把 asyncio.Lock，压缩任务串行执行。
     """
-    from agents.reasoning.memory_manager import SUMMARY_TRIGGER_TURNS
     mm = MemoryManager()
+    try:
+        await _run_compress_race_body(mm)
+    finally:
+        await mm.close()
+
+
+async def _run_compress_race_body(mm) -> None:
+    from agents.reasoning.memory_manager import SUMMARY_TRIGGER_TURNS
     sid = "compress-race-session"
     await mm.clear_session(sid)
 
@@ -113,6 +131,21 @@ async def run_compress_race() -> None:
 
     print(f"   ✅ 并发压缩无重复 segment（{len(seg_counts)} 段，各 1 次）")
     await mm.clear_session(sid)
+
+
+def test_add_turn_race():
+    """pytest 入口：并发 add_turn 无丢失更新。
+
+    ⚠️ 本文件此前是纯脚本（没有任何 test_* 函数）→ pytest 收集到 0 个用例，
+    CI 从来不跑这两个竞态护栏；而且因为 aiosqlite 连接从未关闭，
+    脚本即使断言全过也会在最后一行打印完**挂住不退出**。
+    """
+    asyncio.run(run_race(20))
+
+
+def test_compress_race():
+    """pytest 入口：并发压缩无重复 segment。"""
+    asyncio.run(run_compress_race())
 
 
 if __name__ == "__main__":

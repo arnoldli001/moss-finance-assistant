@@ -82,5 +82,20 @@ async def _main():
     print("结果：全部通过")
 
 
+def test_concurrency_gate():
+    """pytest 入口。
+
+    ⚠️ 本文件此前只有 async `_main()`、**没有任何 test_* 函数** → pytest 收集到 0 个用例，
+    下面这 8 条闸门断言（限流 / 排队 / on_wait 回调 / 异常传播 + 许可释放）在 CI 里
+    从未执行过（只有手动 `python tests/test_concurrency_gate.py` 才会跑）。
+    """
+    try:
+        asyncio.run(_main())
+    except SystemExit as e:
+        # _main() 失败时按脚本语义 sys.exit(1)；pytest 下必须转成断言失败，否则是假绿。
+        if e.code:
+            raise AssertionError("并发闸断言失败（见上方 [FAIL] 行）") from None
+
+
 if __name__ == "__main__":
     asyncio.run(_main())

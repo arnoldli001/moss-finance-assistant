@@ -248,6 +248,19 @@ class MemoryManager:
             await self._sqlite_conn.execute("PRAGMA journal_mode=WAL")
         return self._sqlite_conn
 
+    async def close(self) -> None:
+        """关闭异步连接。
+
+        ⚠️ 为什么必须有这个方法：`aiosqlite.connect()` 会在一个**非守护线程**里跑
+        事件循环，不显式 close，该线程会让解释器在 `__main__` 执行完后**永远无法退出**
+        （症状：脚本断言全过、最后一行也打印了，进程却挂住不结束）。
+
+        长驻服务（interfaces/api/server.py）不需要调用；脚本 / 测试在结束前必须调用。
+        """
+        if self._sqlite_conn is not None:
+            await self._sqlite_conn.close()
+            self._sqlite_conn = None
+
     @staticmethod
     def _now() -> str:
         return datetime.datetime.now().isoformat(timespec="seconds")
