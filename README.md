@@ -93,8 +93,14 @@
 ### 7. 多用户并发（single-flight + 资源闸 + 存档复用）
 - **Single-flight 去重**：当日市场信息类任务（盘前新闻 / 复盘预测 / 研报分析）跨会话、跨用户共享一次计算——并发触发时跟随者等待共享结果并写入各自会话，消除双跑导致的搜索限流与 LLM 拥堵（实测双跑 5-6 分钟零输出 → 单跑 ~40s-3min 出结果）
 - **全局资源闸**：Tavily 并发上限（套餐级，超出排队并提示"前方 N 个任务"）+ 本地 Ollama GPU 串行闸（长推理排队可见），环境变量可调
-- **结果存档**：复盘预测成功即存 `output/Market_Recap_Outlook/`（按创建时间命名 .md），3 小时内重复点击秒级复用；盘前新闻 6h 缓存迁至 `output/pre_market_news/`
+- **结果存档**：复盘预测成功即存 `output/Market_Recap_Outlook/`（按创建时间命名 .md），3 小时内重复点击秒级复用；盘前新闻成功结果写 2h 缓存于 `output/pre_market_news/`
+- **后台任务/会话生命周期解耦**：盘前/复盘等长任务在会话级 TaskGroup 之外运行，用户切走、断开或取消当前回合都不会误杀共享后台任务，跟随者仍能拿到结果（修复过"切会话即永久无输出"的竞态）
 - **会话隔离**：JWT 多用户 + 会话行级 owner 校验 + checkpointer 按 thread_id 隔离 + 前端跨账号 WS 残留清理（越权访问实测 401/403）
+
+### 8. 流式前端工程（AI 应用特有难点）
+- **护城河五维度评估卡（React + 纯前端解析）**：对 SSE 流式 token 做**增量容错解析**（不等整段 JSON，句号优先截断 + 客户集中度→转换成本等业务映射），实时渲染品牌/技术/成本/网络效应/转换成本五维评分条；**意图门控渲染**——仅当"最新回合用户输入"是护城河查询或纯股票名时才解析出卡，点"盘前新闻"等快捷按钮的回合显式排除并自动清除上一轮卡片，杜绝跨回合残留
+- **多 Agent 并行执行监控面板（React）**：WS 实时推送子 Agent（搜索/DB/知识库）并发状态，挂载于聊天流内、随会话滚动
+- **长图分享**：Canvas 真表格绘制（非 html2canvas 截图），一键导出无白边高清 PNG + 斜向水印
 
 ---
 
@@ -304,7 +310,7 @@ python -m tests.eval.run_eval --mode direct --limit 3   # LLM 评估抽样
 
 | 职责 | 真源（唯一实现） | 兼容垫片（勿改） |
 |------|----------------|----------------|
-| 全局常量（平铺定义 235+） | `config/constants.py` | `shared/config/constants.py`（flat re-export + 分组视图 TIMEOUTS/SLO_TARGETS） |
+| 全局常量（35 个功能分组，390+ 平铺常量，含注释与 .env 覆盖） | `config/constants.py` | `shared/config/constants.py`（flat re-export + 分组视图 TIMEOUTS/SLO_TARGETS） |
 | API 服务入口 | `interfaces/api/server.py`（`python main.py server`） | — |
 | 流式协议/总线/WS推送 | `api/stream_protocol.py`、`api/stream_bus.py`、`api/monitor.py` | `interfaces/api/` 同名文件 |
 | 用户/会话存储 | `interfaces/api/storage.py` | `api/storage.py` |
@@ -350,7 +356,7 @@ moss_finance_assistant/
 | 安全 | JWT + RBAC 四角色按 QPM 限流 + Prompt 注入双层防护（正则+LLM，JSONL 审计） |
 | 可观测性 | OpenTelemetry（console/OTLP）+ SLO 监控 + 错误预算 + 熔断器端点 |
 | 可靠性 | 三态熔断 + 四级降级 + 幻觉三重防护 + 输出五维校验重试 + Actor 快照 + 流式续流 |
-| 测试 | pytest（93+ 用例）+ k6 压测 + LLM 评估回归（26 条 golden set，CI 阻断） |
+| 测试 | pytest（113 用例）+ k6 压测 + LLM 评估回归（26 条 golden set，CI 阻断） |
 | 缓存/存储 | Semantic Cache（memory/redis）、MySQL、SQLite（LangGraph checkpointer + SLO 事件） |
 | Token 优化 | PTD 渐进式工具披露（自适应门控，实测节省 50%+） |
 

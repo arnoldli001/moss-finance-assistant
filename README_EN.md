@@ -282,7 +282,7 @@ python -m tests.eval.run_eval --mode direct --limit 3   # LLM eval sampling
 | POST | `/api/task/stop` | Stop the current task (CancellationToken cascading cancel) |
 | POST | `/api/auth/register` / `login` / `refresh` / `guest` | JWT auth endpoints (guest = one-click, 10 QPM) |
 | POST | `/api/zsxq-analysis` | Pre-market note heatmap analysis |
-| POST | `/api/review-prediction` | Review & prediction: stage1 note heatmap ∥ stage2 pre-market news (reuses button workflow: 6h cache → dual-source → direct synthesis) in parallel → stage3 DeepSeek index forecast; per-stage budgets 150/280/150s with a 450s background cap; on timeout, raw results of finished stages degrade gracefully |
+| POST | `/api/review-prediction` | Review & prediction: stage1 note heatmap ∥ stage2 pre-market news (reuses button workflow: 2h cache → dual-source → direct synthesis) in parallel → stage3 DeepSeek index forecast; per-stage budgets 150/280/150s with a 450s background cap; on timeout, raw results of finished stages degrade gracefully |
 | GET/POST/DELETE | `/api/users/*` `/api/sessions/*` | User/session management (JWT + row-level ownership checks) |
 | **GET** | **`/api/slo/status`** | **SLO snapshot (availability/error budget/degradation/breakers; owner/admin)** |
 | **GET** | **`/api/circuit-breakers`** | **Real-time breaker states (CLOSED/OPEN/HALF_OPEN)** |
@@ -298,7 +298,7 @@ python -m tests.eval.run_eval --mode direct --limit 3   # LLM eval sampling
 
 | Responsibility | Source of Truth | Compatibility Shim (do not edit) |
 |------|----------------|----------------|
-| Global constants (235+, flat) | `config/constants.py` | `shared/config/constants.py` (flat re-export + grouped views TIMEOUTS/SLO_TARGETS) |
+| Global constants (35 groups, 390+ flat constants, commented & .env-overridable) | `config/constants.py` | `shared/config/constants.py` (flat re-export + grouped views TIMEOUTS/SLO_TARGETS) |
 | API server entry | `interfaces/api/server.py` (`python main.py server`) | — |
 | Streaming protocol/bus/WS push | `api/stream_protocol.py`, `api/stream_bus.py`, `api/monitor.py` | same-named files under `interfaces/api/` |
 | User/session storage | `interfaces/api/storage.py` | `api/storage.py` |
@@ -343,7 +343,7 @@ moss_finance_assistant/
 | Security | JWT + RBAC (four roles, QPM rate limits) + dual-layer prompt-injection protection (regex + LLM, JSONL audit) |
 | Observability | OpenTelemetry (console/OTLP) + SLO monitoring + error budget + breaker endpoints |
 | Reliability | Three-state breakers + four-level degradation + triple hallucination guard + five-dimension output validation retry + Actor snapshots + stream resume |
-| Testing | pytest (93+ cases) + k6 load tests + LLM eval regression (26 golden samples, CI-blocking) |
+| Testing | pytest (113 cases) + k6 load tests + LLM eval regression (26 golden samples, CI-blocking) |
 | Cache/storage | Semantic cache (memory/redis), MySQL, SQLite (LangGraph checkpointer + SLO events) |
 | Token optimization | PTD progressive tool disclosure (adaptive gating, measured 50%+ savings) |
 
