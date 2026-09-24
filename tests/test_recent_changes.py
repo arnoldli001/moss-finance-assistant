@@ -156,20 +156,25 @@ def main():
     check("GET /api/task/status 暴露任务存活权威信号（结果落库后才注销）",
           '@app.get("/api/task/status")' in server_src
           and "SRMsg.GET_TASK_INFO" in server_src)
-    check("前端 TaskManager 以任务存活登记为准（复盘阶段1 中间结果先落库，"
+    check("GET /api/task/status 拆出 has_bg_task / has_agent_task（不能只给合并的 running）",
+          # 前端只认 has_bg_task；若只有合并字段，页面加载时会把用户刚发的普通聊天
+          # 任务误登记成"后台任务运行中"。running 保留但必须是两者的或。
+          '"has_bg_task": bg_running' in server_src
+          and '"has_agent_task": agent_running' in server_src
+          and '"running": bg_running or agent_running' in server_src)
+    check("前端 TaskManager 以任务存活状态为准（复盘阶段1 中间结果先落库，"
           "历史增长不可靠）",
           "resumeIfRunning" in _live_html
           and "TaskManager.start" in _live_html
-          and "TaskManager.finish" in _live_html)
-    # ⚠️ 已知缺口，如实登记（**不要**把它写成通过项）：
-    #   后端 GET /api/task/status 已实现（见上面一条 check），但**活的前端**
-    #   （static/index.html）并不调用它——其 TaskManager 是纯前端内存登记
-    #   （start / finish / resumeIfRunning），不读服务端权威存活状态。
-    #   这套"以服务端存活状态为准"的实现只存在于 static/js/app.js，而 app.js 已不被
-    #   index.html 引用（浏览器从不加载）。原护栏读的正是 app.js，故这条长期假绿。
-    if "/api/task/status" not in _live_html:
-        print("  [TODO] 后端 /api/task/status 未被活前端消费：TaskManager 仍是纯前端内存登记，"
-              "服务端权威存活状态未接入 UI")
+          and "TaskManager.finish" in _live_html
+          # 服务端权威存活信号必须真被**活前端**消费。
+          # 历史教训：这条曾只断言 static/js/app.js —— 一个浏览器从不加载的死文件，
+          # 于是长期"绿而无意义"，等于为一个没上线的能力背书。现在钉在 index.html 上：
+          and "/api/task/status" in _live_html
+          and "has_bg_task" in _live_html
+          # 且必须只认 has_bg_task：拿合并后的 running 在页面加载时登记，
+          # 会把用户刚发的普通聊天任务误显示成"后台任务运行中"
+          and "d.has_bg_task" in _live_html)
 
     print()
     if failures:

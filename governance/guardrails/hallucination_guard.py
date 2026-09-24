@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from agents.analyst.prompts_legacy import format_prompt
+from config.constants import HALLUCINATION_REPORT_SNIPPET_CHARS
 
 # ======================================================================
 # 正则：引用标记 / 关键实体提取
@@ -89,7 +90,7 @@ class HallucinationReport:
             "passed": self.passed,
             "confidence": round(self.confidence, 3),
             "citation_gaps": [
-                {"snippet": g.statement_snippet[:120], "type": g.evidence_type,
+                {"snippet": g.statement_snippet[:HALLUCINATION_REPORT_SNIPPET_CHARS], "type": g.evidence_type,
                  "expected_source": g.expected_source}
                 for g in self.citation_gaps
             ],
@@ -282,7 +283,7 @@ class HallucinationGuard:
                 continue
             # 含数字或财务术语的陈述句
             if re.search(r"\d", s) and _NEEDS_SOURCE_RE.search(s):
-                snippets.append(s[:120])
+                snippets.append(s[:HALLUCINATION_REPORT_SNIPPET_CHARS])
             if len(snippets) >= 3:
                 break
         return snippets

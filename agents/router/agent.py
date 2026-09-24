@@ -26,6 +26,7 @@ import re
 from typing import List
 
 from shared.models import RouteBranch, RouterDecision
+from config.constants import ROUTER_RULE_CONFIDENCE_THRESHOLD
 
 # ---------------------------------------------------------------------------
 # Phase 1：Python 规则关键字（与重构.md §路由规则 1~7 对齐）
@@ -255,7 +256,7 @@ def _parse_gemma4_json(text: str, fallback: RouterDecision) -> RouterDecision:
 
 async def cascade_gemma4_decide(query: str, rule_result: RouterDecision, *, model: str = "gemma4:e4b") -> RouterDecision:
     """Phase 2：gemma4 语义兜底。调用失败不抛，返回 rule_result。"""
-    if rule_result.confidence >= 0.85:
+    if rule_result.confidence >= ROUTER_RULE_CONFIDENCE_THRESHOLD:
         # 规则已经很可靠，不浪费本地 GPU
         return rule_result
     prompt = _GEMMA4_ROUTER_PROMPT_TEMPLATE.format(query=query)

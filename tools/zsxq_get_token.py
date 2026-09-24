@@ -15,9 +15,13 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 ENV_PATH = ROOT / ".env"
 LOGIN_URL = "https://wx.zsxq.com"
 TIMEOUT_SEC = 300
+
+from config.constants import ZSXQ_BROWSER_CONFIRM_CLOSE_WAIT_MS  # noqa: E402
 
 
 def _upsert_env(key: str, value: str) -> None:
@@ -75,8 +79,8 @@ def main() -> int:
 
         _upsert_env("ZSXQ_ACCESS_TOKEN", token)
         print(f"[OK] 登录成功（当前页面: {page.url}）")
-        # 保持浏览器 3 秒方便确认，然后关闭
-        page.wait_for_timeout(3000)
+        # 保持浏览器几秒方便确认，然后关闭
+        page.wait_for_timeout(ZSXQ_BROWSER_CONFIRM_CLOSE_WAIT_MS)
         browser.close()
 
     print("\n验证：python -c \"import sys; sys.path.insert(0, r'%s'); import tools.zsxq_tool as z; print(z.ZSXQ_ACCESS_TOKEN[:12])\"" % str(ROOT))

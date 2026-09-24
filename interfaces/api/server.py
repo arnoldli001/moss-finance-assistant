@@ -142,6 +142,12 @@ from config.constants import (
     STREAM_RESUME_BODY_LAST_EVENT_ID_ALLOW,
     STREAM_RESUME_COLD_RESTART_SUGGESTION,
     SHUTDOWN_PROC_KILL_WAIT_SEC,
+    REVIEW_STAGE3_ZSXQ_INPUT_CHARS,
+    REVIEW_STAGE3_NEWS_INPUT_CHARS,
+    REVIEW_STAGE3_FALLBACK_ZSXQ_CHARS,
+    REVIEW_STAGE3_FALLBACK_NEWS_CHARS,
+    REVIEW_STAGE3_ERROR_ZSXQ_CHARS,
+    REVIEW_STAGE3_ERROR_NEWS_CHARS,
 )
 
 # ===== P1-F：子路由拆分（盘前小作文热度 → interfaces/api/routes/zsxq.py）=====
@@ -2330,9 +2336,14 @@ async def task_status(thread_id: str,
     """查询某会话是否仍有任务在跑（后台快捷任务 或 交互式聊天任务）。
 
     前端切回会话/轮询时的**权威**信号：SessionRegistryActor 里任务登记
-    在"结果落库之后"才随 done 回调注销，因此 running=false 时结果必然已写历史。
+    在"结果落库之后"才随 done 回调注销，因此对应 *_running=false 时结果必然已写历史。
     不能用"历史消息数增长"代替——复盘预测阶段1 会把小作文热度中间结果先落库，
     任务其实还在跑。P0 行级校验同 /api/task/stop。
+
+    ⚠️ 为什么把合并的 running 拆开：调用方需要区分这两类任务。前端 TaskManager 的
+    "本会话任务仍在后台运行"提示 + stop 按钮只应对**后台快捷任务**（盘前新闻 / 盘前研报
+    热度 / 复盘预测）生效；若拿合并后的 running 在页面加载时登记，用户刚发了一条普通
+    聊天消息再刷新页面，就会误显示成"后台任务运行中"。running 字段保留以兼容既有调用方。
     """
     if not thread_id:
         raise HTTPException(status_code=400, detail="缺少 thread_id")
@@ -2341,13 +2352,17 @@ async def task_status(thread_id: str,
         current_user_id_must_match(current, sess["user_id"])
     sa = _session_actor
     if sa is None:
-        return {"thread_id": thread_id, "running": False}
+        return {"thread_id": thread_id, "running": False,
+                "has_bg_task": False, "has_agent_task": False}
     info = await sa.ask(SRMsg.GET_TASK_INFO, {"thread_id": thread_id})
-    running = bool(
-        (info.get("has_bg_task") and not info.get("bg_done"))
-        or (info.get("has_agent_task") and not info.get("agent_done"))
-    )
-    return {"thread_id": thread_id, "running": running}
+    bg_running = bool(info.get("has_bg_task") and not info.get("bg_done"))
+    agent_running = bool(info.get("has_agent_task") and not info.get("agent_done"))
+    return {
+        "thread_id": thread_id,
+        "running": bg_running or agent_running,   # 合并字段：兼容既有调用方
+        "has_bg_task": bg_running,                # 后台快捷任务 → 驱动前端"后台运行中"
+        "has_agent_task": agent_running,          # 交互式聊天任务
+    }
 
 
 async def _register_background_task(thread_id: str, task: asyncio.Task) -> None:
@@ -2531,8 +2546,8 @@ async def _run_review_prediction(thread_id: str, user_id: Optional[str] = None, 
             current_time_str=_current_time_str,
             market_phase=_market_phase,
             skill_content=skill_content,
-            zsxq_result=zsxq_result[:4000],
-            news_result=news_result[:4000],
+            zsxq_result=zsxq_result[:REVIEW_STAGE3_ZSXQ_INPUT_CHARS],
+            news_result=news_result[:REVIEW_STAGE3_NEWS_INPUT_CHARS],
             user_stock_hint=user_stock_hint,
         )
 
@@ -2553,11 +2568,11 @@ async def _run_review_prediction(thread_id: str, user_id: Optional[str] = None, 
             analysis_result = (
                 f"⏱【阶段3/3超时】DeepSeek 综合分析超过 {_ds_timeout_sec:.0f}s 未返回。"
                 f" 以下为已完成阶段的原始结果，请根据自身判断操作。\n\n"
-                f"【盘前小作文热度】\n{zsxq_result[:3500]}\n\n【盘前新闻】\n{news_result[:3500]}"
+                f"【盘前小作文热度】\n{zsxq_result[:REVIEW_STAGE3_FALLBACK_ZSXQ_CHARS]}\n\n【盘前新闻】\n{news_result[:REVIEW_STAGE3_FALLBACK_NEWS_CHARS]}"
             )
         except Exception as e:
             print(f"[ReviewPrediction] DeepSeek 分析异常: {e}")
-            analysis_result = f"⚠️ DeepSeek 综合分析调用失败: {e}\n\n【盘前小作文热度】\n{zsxq_result[:1500]}\n\n【盘前新闻】\n{news_result[:1500]}"
+            analysis_result = f"⚠️ DeepSeek 综合分析调用失败: {e}\n\n【盘前小作文热度】\n{zsxq_result[:REVIEW_STAGE3_ERROR_ZSXQ_CHARS]}\n\n【盘前新闻】\n{news_result[:REVIEW_STAGE3_ERROR_NEWS_CHARS]}"
 
         # 若阶段 2 盘前新闻和阶段 1 小作文都失败，给用户一个明确的"下一步动作"提示
         if not _zsxq_ok or not _news_ok:

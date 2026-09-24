@@ -21,14 +21,15 @@
    */
   function EventSourceBuffer(opts) {
     if (!opts || !opts.url) throw new Error("[ESB] url 必传");
+    var _AC = (typeof window !== "undefined" && window.APP_CONSTANTS) || {};
     this.opts = Object.assign({
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      connectTimeoutMs: 5000,
+      connectTimeoutMs: _AC.STREAM_CONNECT_TIMEOUT_MS || 5000,
       idleTimeoutMs: 0,
       retry: true,
-      maxRetries: 3,
-      baseDelayMs: 800,
+      maxRetries: _AC.STREAM_MAX_RETRIES || 3,
+      baseDelayMs: _AC.STREAM_RETRY_BASE_DELAY_MS || 800,
       stopEndpoint: "/api/task/stop",
       idempotentByEventId: true,
     }, opts || {});
@@ -59,7 +60,7 @@
     // 幂等去重集：已经 emit 过的 event id，重放阶段直接跳过
     this._seenEventIds = (typeof Set !== "undefined") ? new Set() : Object.create(null);
     // 最多保留多少 id：环形兜底，避免极端长流内存线性长（5000 ≈ 150KB）
-    this._seenMax = 5000;
+    this._seenMax = _AC.STREAM_SEEN_EVENT_IDS_MAX || 5000;
     // lastEventId 写入 body 的兜底路径（与服务端 STREAM_RESUME_BODY_LAST_EVENT_ID_ALLOW 对应）
     this._bodyLastEventIdFallback = true;
   }

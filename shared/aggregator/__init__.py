@@ -17,6 +17,11 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from config.constants import (
+    RETRIEVAL_ITEM_CONTENT_MAX_CHARS,
+    RETRIEVAL_ITEM_TITLE_MAX_CHARS,
+)
+
 # 可靠性 & Jaccard & 时效性正则：直接沿用原 agent/context_engineer.py 定义的规则
 try:
     # 优先尝试新路径
@@ -157,8 +162,8 @@ def normalize_item(raw: Any) -> Optional[RetrievalItem]:
         if not content and not title:
             return None
         return RetrievalItem(
-            title=title[:200],
-            content=content[:4000],
+            title=title[:RETRIEVAL_ITEM_TITLE_MAX_CHARS],
+            content=content[:RETRIEVAL_ITEM_CONTENT_MAX_CHARS],
             url=str(raw.get("url") or raw.get("link") or ""),
             source_type=str(raw.get("source_type") or raw.get("source") or "other"),
             channel=str(raw.get("channel") or raw.get("site_name") or raw.get("author_channel") or ""),
@@ -180,7 +185,7 @@ def normalize_item(raw: Any) -> Optional[RetrievalItem]:
         if not s:
             return None
         return RetrievalItem(
-            content=s[:4000],
+            content=s[:RETRIEVAL_ITEM_CONTENT_MAX_CHARS],
             source_type="unknown",
             reliability=SourceReliability.UNVERIFIED,
         )
@@ -189,7 +194,7 @@ def normalize_item(raw: Any) -> Optional[RetrievalItem]:
     s = str(raw).strip()
     if not s:
         return None
-    return RetrievalItem(content=s[:4000], source_type="other", reliability=SourceReliability.UNVERIFIED)
+    return RetrievalItem(content=s[:RETRIEVAL_ITEM_CONTENT_MAX_CHARS], source_type="other", reliability=SourceReliability.UNVERIFIED)
 
 
 def _format_prompt_context_block(items: List[RetrievalItem], max_chars: int) -> str:

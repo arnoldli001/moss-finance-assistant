@@ -38,6 +38,8 @@ import asyncio
 import time
 from typing import Any, Awaitable, Callable, List, Optional, Tuple
 
+from config.constants import AUDIT_FIELD_MAX_CHARS
+
 # 默认策略表（可在 constants 中覆写；先硬编码默认值，constants 加载成功就覆盖）
 DEFAULT_LOOP_POLICY: dict = {
     "pre_market_news":        {"timeout": 120.0, "max_attempts": 1},
@@ -217,7 +219,7 @@ async def run_task_with_loop(
                     attempt=attempt, attempts=attempts,
                     quadrant=quadrant, should_retry=should_retry,
                     error_type=type(attempt_err).__name__,
-                    error_msg=str(attempt_err)[:500],
+                    error_msg=str(attempt_err)[:AUDIT_FIELD_MAX_CHARS],
                 )
             except Exception:
                 pass

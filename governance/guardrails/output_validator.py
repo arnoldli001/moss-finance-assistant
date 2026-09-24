@@ -46,6 +46,8 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from config.constants import (
+    AUDIT_FIELD_MAX_CHARS,
+    AUDIT_INPUT_MAX_CHARS,
     OUTPUT_VALIDATOR_AUTO_RETRY,
     OUTPUT_VALIDATOR_MAX_RETRIES,
     OUTPUT_VALIDATOR_RETRY_HINT,
@@ -418,8 +420,8 @@ class OutputValidator:
             "timestamp": time.time(),
             "ts_human": time.strftime("%Y-%m-%d %H:%M:%S"),
             "category": ctx.category,
-            "user_input": (ctx.user_input or "")[:200],
-            "agent_output": (ctx.agent_output or "")[:500],
+            "user_input": (ctx.user_input or "")[:AUDIT_INPUT_MAX_CHARS],
+            "agent_output": (ctx.agent_output or "")[:AUDIT_FIELD_MAX_CHARS],
             "is_blocked": result.is_blocked,
             "violations": [
                 {

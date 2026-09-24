@@ -156,6 +156,8 @@ from config.constants import (
     ZSXQ_OLLAMA_ENTRY_TRUNCATE_CHARS,
     ZSXQ_OLLAMA_ERROR_FALLBACK_TRUNCATE_CHARS,
     ZSXQ_BROWSER_LOCK_WAIT_TIMEOUT_SEC,
+    ZSXQ_BROWSER_PAGE_RELOAD_WAIT_MS,
+    ZSXQ_BROWSER_GROUP_GOTO_WAIT_MS,
     ZSXQ_PREVIEW_CONTENT_TRUNCATE_CHARS,
     ZSXQ_DB_SEARCH_MAX_LIMIT,
     ZSXQ_DB_SEARCH_PREVIEW_TRUNCATE_CHARS,
@@ -238,11 +240,11 @@ def _login_by_token(p):
         }
     ])
     page.reload()
-    page.wait_for_timeout(2000)
+    page.wait_for_timeout(ZSXQ_BROWSER_PAGE_RELOAD_WAIT_MS)
 
     print(f"[抓取] [3/4] 进入群组页面 {ZSXQ_GROUP_ID}...")
     page.goto(f"https://wx.zsxq.com/dweb2/index/group/{ZSXQ_GROUP_ID}")
-    page.wait_for_timeout(3000)
+    page.wait_for_timeout(ZSXQ_BROWSER_GROUP_GOTO_WAIT_MS)
 
     if "/login" in page.url:
         browser.close()

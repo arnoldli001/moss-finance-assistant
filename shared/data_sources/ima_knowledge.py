@@ -10,6 +10,8 @@ from api.monitor import monitor
 from rawflow.rag_config import _load_ragflow_env
 import json
 
+from config.constants import KNOWLEDGE_ENTRY_CONTENT_CHARS
+
 # 文件位于 shared/data_sources/ 下，需上溯 3 层到项目根（shared→data_sources→本文件）
 _PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent)
 if _PROJECT_ROOT not in sys.path:
@@ -120,7 +122,7 @@ def search_knowledge_base(query: str, knowledge_base_name: str = "") -> str:
                 all_results.append({
                     "knowledge_base": kb["name"],
                     "title": entry["title"],
-                    "content": entry["content"][:2000] if entry["content"] else "(无正文内容)",
+                    "content": entry["content"][:KNOWLEDGE_ENTRY_CONTENT_CHARS] if entry["content"] else "(无正文内容)",
                     "url": str(entry.get("url") or entry.get("doc_url") or f"ima://{kb['name']}/{entry.get('id','')}"),
                     "reliability": "可靠",
                     "source_type": "knowledge_base",

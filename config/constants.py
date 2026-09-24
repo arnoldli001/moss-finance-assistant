@@ -147,6 +147,19 @@ HALLUCINATION_REPORT_MAX_CITATION_GAPS: int = 3
 # 幻觉防护报告：引用缺口 snippet 前后文截取字符数
 HALLUCINATION_REPORT_SNIPPET_CHARS: int = 120
 
+# 检索聚合器（shared/aggregator）：单条检索结果入库正文截断字符数
+RETRIEVAL_ITEM_CONTENT_MAX_CHARS: int = 4000
+# 检索聚合器：单条标题截断字符数
+RETRIEVAL_ITEM_TITLE_MAX_CHARS: int = 200
+# 知识库（ima/ragflow）条目正文截断字符数
+KNOWLEDGE_ENTRY_CONTENT_CHARS: int = 2000
+# 路由规则匹配置信度阈值（>= 则跳过本地语义兜底，直接采信规则结果）
+ROUTER_RULE_CONFIDENCE_THRESHOLD: float = 0.85
+# 审计/防护日志中用户输入与输出的截断字符数（防止单行 JSONL 过大）
+AUDIT_FIELD_MAX_CHARS: int = 500
+# 审计日志中用户输入的截断字符数（比输出更短，输入通常只需前段定位）
+AUDIT_INPUT_MAX_CHARS: int = 200
+
 # PTD 路由器：tokenizer 无法估计时的保守估计 token 数（每 tool 估算值）
 PTD_TOKEN_FALLBACK_PER_TOOL_ESTIMATE: int = 300
 
@@ -244,6 +257,15 @@ PREMARKET_FINAL_PROMPT_CONTEXT_CHARS: int = 9500  # prompt 上下文总截断线
 PREMARKET_DOM_CONTEXT_CHARS: int = 5800           # 国内平台块
 PREMARKET_US_CONTEXT_CHARS: int = 2600            # 美股块
 PREMARKET_DOM_ITEM_CONTENT_CHARS: int = 250       # 国内条目正文截断（关键信息在标题+首段）
+
+# 复盘预测阶段3：拼给 DeepSeek 的 zsxq/news 原始结果截断（正常路径，字符数）
+REVIEW_STAGE3_ZSXQ_INPUT_CHARS: int = 4000
+REVIEW_STAGE3_NEWS_INPUT_CHARS: int = 4000
+# 阶段3 超时/异常兜底输出中展示原始结果的截断（更短，突出兜底性质）
+REVIEW_STAGE3_FALLBACK_ZSXQ_CHARS: int = 3500
+REVIEW_STAGE3_FALLBACK_NEWS_CHARS: int = 3500
+REVIEW_STAGE3_ERROR_ZSXQ_CHARS: int = 1500
+REVIEW_STAGE3_ERROR_NEWS_CHARS: int = 1500
 
 # Context Engineer 专用常量（与 AGENTS.md 规范对齐）
 # 上下文总字符硬上限（2000字精简裁剪阈值）
@@ -419,6 +441,15 @@ ZSXQ_EXPAND_BTN_CLICK_TIMEOUT_MS: float = 2000
 
 # 所有"展开全部"按钮点完后，滚到下一批的等待秒数
 ZSXQ_EXPAND_PASS_SCROLL_WAIT_SEC: int = 2
+
+# Playwright 页面 reload 后等待 SPA 渲染（毫秒）
+ZSXQ_BROWSER_PAGE_RELOAD_WAIT_MS: int = 2000
+
+# Playwright 跳转群组页面后等待内容加载（毫秒）
+ZSXQ_BROWSER_GROUP_GOTO_WAIT_MS: int = 3000
+
+# 扫码登录成功后保留浏览器供用户确认的等待（毫秒，zsxq_get_token.py 用）
+ZSXQ_BROWSER_CONFIRM_CLOSE_WAIT_MS: int = 3000
 
 # DOM 提取前，滚回顶部后的等待秒数
 ZSXQ_DOM_SCROLL_TO_TOP_WAIT_SEC: int = 1

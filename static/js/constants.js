@@ -51,6 +51,25 @@
     // 监控进度条：每多少毫秒更新一次显示
     const PROGRESS_UPDATE_INTERVAL_MS = 5000;
 
+    // 监控面板：任务全部完成后延迟多少毫秒隐藏面板（让用户看清最终状态）
+    const MONITOR_HIDE_DELAY_MS = 3000;
+
+    // ======================================================================
+    // 2.5 SSE 流式客户端（stream_client.js EventSourceBuffer 默认值）
+    // ======================================================================
+
+    // 建连超时（毫秒）：首字节到达之前的最长等待
+    const STREAM_CONNECT_TIMEOUT_MS = 5000;
+
+    // SSE 断线最多重连次数
+    const STREAM_MAX_RETRIES = 3;
+
+    // SSE 重连指数退避基底（毫秒）
+    const STREAM_RETRY_BASE_DELAY_MS = 800;
+
+    // 幂等去重集最多保留的 event id 条数（环形兜底，防长流内存线性增长，5000 ≈ 150KB）
+    const STREAM_SEEN_EVENT_IDS_MAX = 5000;
+
     // ======================================================================
     // 3. 删除/确认/通知交互
     // ======================================================================
@@ -150,6 +169,11 @@
         ZSXQ_RUNNING_TIMEOUT_MS,
         THINKING_TIMER_TICK_MS,
         PROGRESS_UPDATE_INTERVAL_MS,
+        MONITOR_HIDE_DELAY_MS,
+        STREAM_CONNECT_TIMEOUT_MS,
+        STREAM_MAX_RETRIES,
+        STREAM_RETRY_BASE_DELAY_MS,
+        STREAM_SEEN_EVENT_IDS_MAX,
         DELETE_CONFIRM_WINDOW_MS,
         TOAST_DEFAULT_DURATION_MS,
         COPY_BTN_HIGHLIGHT_MS,

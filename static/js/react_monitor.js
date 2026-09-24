@@ -145,10 +145,11 @@
 
       var onTaskDone = function () {
         setCompletedCount(function (c) { return c + 1; });
+        var hideDelayMs = (window.APP_CONSTANTS && window.APP_CONSTANTS.MONITOR_HIDE_DELAY_MS) || 3000;
         hideTimerRef.current = setTimeout(function () {
           setVisible(false);
           setAgents([]);
-        }, 3000);
+        }, hideDelayMs);
       };
 
       window.addEventListener("moss:tool_call", onToolCall);

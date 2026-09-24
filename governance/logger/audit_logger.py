@@ -22,7 +22,7 @@ import threading
 import time
 from typing import Any, Dict, Optional
 
-from config.constants import SECURITY_AUDIT_LOG_PATH
+from config.constants import AUDIT_FIELD_MAX_CHARS, SECURITY_AUDIT_LOG_PATH
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +62,7 @@ def audit_log_security_event(
         "event_type": event_type,
         "user_id": user_id,
         "ip": ip,
-        "input_text": input_text[:500],  # 截断
+        "input_text": input_text[:AUDIT_FIELD_MAX_CHARS],  # 截断
         "violations": violations or [],
         "action": action,
     }

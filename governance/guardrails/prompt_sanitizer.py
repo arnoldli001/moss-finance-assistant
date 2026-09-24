@@ -36,6 +36,7 @@ from config.constants import (
     PROMPT_INJECTION_MAX_LEN,
     PROMPT_INJECTION_REJECT,
     SECURITY_AUDIT_LOG_PATH,
+    AUDIT_FIELD_MAX_CHARS,
 )
 
 logger = logging.getLogger(__name__)
@@ -328,7 +329,7 @@ def _audit_log_event(result: SanitizeResult) -> None:
             "violations": result.violations,
             "llm_checked": result.llm_checked,
             "llm_verdict": result.llm_verdict,
-            "original_text": result.original_text[:500],
+            "original_text": result.original_text[:AUDIT_FIELD_MAX_CHARS],
         }
         with open(SECURITY_AUDIT_LOG_PATH, "a", encoding="utf-8") as f:
             f.write(json.dumps(event, ensure_ascii=False) + "\n")
