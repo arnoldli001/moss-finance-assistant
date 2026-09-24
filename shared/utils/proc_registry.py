@@ -26,7 +26,10 @@ import threading
 import time
 from typing import Dict, List, Optional
 
-from config.constants import SHUTDOWN_PROC_KILL_WAIT_SEC  # noqa: E402
+from config.constants import (  # noqa: E402
+    SHUTDOWN_PROC_KILL_WAIT_SEC,
+    SHUTDOWN_TREE_KILL_TIMEOUT_SEC,
+)
 
 # ---------------------------------------------------------------------------
 # 注册表本体：{id(proc): entry}
@@ -80,7 +83,7 @@ def _tree_kill_sync(pid: int) -> None:
         if sys.platform.startswith("win"):
             subprocess.run(
                 ["taskkill", "/PID", str(pid), "/T", "/F"],
-                capture_output=True, timeout=8,
+                capture_output=True, timeout=SHUTDOWN_TREE_KILL_TIMEOUT_SEC,
             )
         else:
             import signal

@@ -1217,3 +1217,104 @@ RISK_DISCLAIMER_CACHE_GUARD: str = (
 )
 
 
+# ======================================================================
+# 32. PORT_CLI — 启动端口探测 / 冲突自愈（main.py cmd_server）
+# ======================================================================
+
+# 端口占用快路径：TCP connect 探测超时（秒），要足够快避免拖慢启动
+PORT_PROBE_SOCKET_TIMEOUT_SEC: float = 0.3
+
+# 慢路径：netstat -ano 子进程查询超时（秒）
+PORT_NETSTAT_QUERY_TIMEOUT_SEC: float = 8.0
+
+# 慢路径：PowerShell 查进程名/命令行的子进程超时（秒）
+PORT_PROCESS_QUERY_TIMEOUT_SEC: float = 10.0
+
+# /health 探针 HTTP 超时（秒）：用于识别占用者是否为本项目旧实例
+PORT_HEALTH_PROBE_TIMEOUT_SEC: float = 0.8
+
+# --auto-port：从起始端口逐个+1探测的最大尝试次数
+PORT_FIND_FREE_MAX_ATTEMPTS: int = 100
+
+# 自动释放端口：taskkill 子进程超时（秒）
+PORT_RELEASE_TASKKILL_TIMEOUT_SEC: float = 10.0
+
+# taskkill 后确认端口已释放的最大轮询轮数
+PORT_RELEASE_POLL_MAX_ROUNDS: int = 10
+
+# taskkill 后每轮确认间隔（秒）
+PORT_RELEASE_POLL_INTERVAL_SEC: float = 0.2
+
+
+# ======================================================================
+# 33. IMA_CLIENT — IMA/RAGFlow 知识库 HTTP 客户端（tools/MyRAGFlow.py）
+# ======================================================================
+
+# IMA API 默认 HTTP 超时（秒）：搜索/正文等常规请求
+IMA_HTTP_DEFAULT_TIMEOUT_SEC: int = 15
+
+# IMA API 短请求超时（秒）：知识库列表/媒体信息等轻量请求
+IMA_HTTP_SHORT_TIMEOUT_SEC: int = 10
+
+# IMA 文件下载超时（秒）：PDF/Word 等附件可能较大
+IMA_HTTP_DOWNLOAD_TIMEOUT_SEC: int = 30
+
+# 请求失败（超时/网络/5xx）最大重试次数
+IMA_HTTP_MAX_RETRIES: int = 2
+
+# 重试间隔（秒）
+IMA_HTTP_RETRY_BACKOFF_SEC: int = 1
+
+# 获取知识库列表时单次拉取的条数上限
+IMA_KB_LIST_LIMIT: int = 50
+
+# 知识库检索默认返回条数
+IMA_SEARCH_DEFAULT_LIMIT: int = 3
+
+# 附件下载遇到连接重置时的最大重试次数
+IMA_DOWNLOAD_MAX_RETRIES: int = 3
+
+# 4xx 错误打印响应体的预览字符数
+IMA_CLIENT_ERROR_PREVIEW_CHARS: int = 200
+
+
+# ======================================================================
+# 34. STREAM_DRAIN — SSE done/error 帧后的残留事件排空
+# ======================================================================
+
+# 常规排空窗口（秒）：收到 done/error 后继续抽取残留帧的时长
+STREAM_DRAIN_WINDOW_SEC: float = 1.0
+
+# 快速排空窗口（秒）：订阅循环结束后的较短排空
+STREAM_DRAIN_WINDOW_FAST_SEC: float = 0.5
+
+# agent_task 提前结束时的排空窗口（秒）：比常规更宽，尽量不丢尾帧
+STREAM_DRAIN_WINDOW_AGENT_DONE_SEC: float = 2.0
+
+# 常规排空每轮等待下一帧的超时（秒）
+STREAM_DRAIN_POLL_INTERVAL_SEC: float = 0.1
+
+# 快速排空每轮等待下一帧的超时（秒）
+STREAM_DRAIN_FAST_POLL_INTERVAL_SEC: float = 0.05
+
+
+# ======================================================================
+# 35. SHUTDOWN_PROCESS — 关停阶段外部进程处理
+# ======================================================================
+
+# 树杀子进程（taskkill /T /F）的子进程超时（秒）
+SHUTDOWN_TREE_KILL_TIMEOUT_SEC: float = 8.0
+
+# 关停自拉起 Ollama：取消 pull 读取任务后等待其收尾的超时（秒）
+OLLAMA_SHUTDOWN_READER_CANCEL_WAIT_SEC: float = 3.0
+
+# 关停自拉起 Ollama：terminate 后轮询确认退出的轮数
+OLLAMA_SHUTDOWN_TERMINATE_POLLS: int = 10
+
+# 关停自拉起 Ollama：terminate 后轮询间隔（秒）
+OLLAMA_SHUTDOWN_TERMINATE_POLL_INTERVAL_SEC: float = 0.3
+
+# 关停自拉起 Ollama：executor 中 proc.wait 的外层等待超时（秒）
+OLLAMA_SHUTDOWN_WAIT_EXECUTOR_TIMEOUT_SEC: float = 6.0
+
+

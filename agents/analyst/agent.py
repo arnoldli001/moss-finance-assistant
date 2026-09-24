@@ -52,6 +52,7 @@ import time
 import os
 from contextvars import ContextVar
 from pathlib import Path
+from typing import Optional
 
 # §3 / §4 协议适配与编排路由层（引用注入/思考标签拆分；真源 shared/llm_client/stream_adapters.py）
 from shared.llm_client.stream_adapters import (

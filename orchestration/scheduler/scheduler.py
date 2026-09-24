@@ -12,21 +12,26 @@ from __future__ import annotations
 
 import asyncio
 import datetime
-import os
 from typing import Callable, Dict, List, Optional
 from dataclasses import dataclass
 
 from dotenv import load_dotenv, find_dotenv
 load_dotenv(find_dotenv())
 
-from config.constants import SCHEDULER_LOOK_AHEAD_DAYS_MAX, SCHEDULER_PRE_MARKET_DEFAULT_MINUTE, SCHEDULER_AFTER_MARKET_DEFAULT_MINUTE
+from config.constants import (
+    SCHEDULER_AFTER_MARKET_DEFAULT_MINUTE,
+    SCHEDULER_ENABLED,
+    SCHEDULER_LOOK_AHEAD_DAYS_MAX,
+    SCHEDULER_POLL_INTERVAL_SEC,
+    SCHEDULER_PRE_MARKET_DEFAULT_MINUTE,
+    SCHEDULER_TIMEZONE_OFFSET_HOURS,
+)
 
 # ======================================================================
-# 配置项（可通过 .env 覆盖）
+# 配置项（真源在 config/constants.py，可通过 .env 覆盖）
 # ======================================================================
-SCHEDULER_ENABLED = os.getenv("SCHEDULER_ENABLED", "1").strip() not in ("0", "false")
 # 中国时区 UTC+8（可通过环境变量调整）
-SCHEDULER_TZ_OFFSET = int(os.getenv("SCHEDULER_TZ_OFFSET", "8"))
+SCHEDULER_TZ_OFFSET = SCHEDULER_TIMEZONE_OFFSET_HOURS
 
 # 中国时区对象
 _CHINA_TZ = datetime.timezone(datetime.timedelta(hours=SCHEDULER_TZ_OFFSET))
@@ -97,8 +102,8 @@ class TaskScheduler:
                         continue
                     if self._should_run(task, now):
                         await self._run_task(task)
-                # 每 30 秒轮询一次
-                await asyncio.sleep(30)
+                # 轮询间隔（真源：config.constants.SCHEDULER_POLL_INTERVAL_SEC）
+                await asyncio.sleep(SCHEDULER_POLL_INTERVAL_SEC)
         except asyncio.CancelledError:
             print("[Scheduler] 调度器循环被取消")
             raise

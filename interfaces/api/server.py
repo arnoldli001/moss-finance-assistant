@@ -134,8 +134,14 @@ from config.constants import (
     HTTP_CODE_TOO_MANY_REQUESTS,
     HTTP_CODE_NOT_FOUND,
     STREAM_DISCONNECT_POLL_INTERVAL_SEC,
+    STREAM_DRAIN_FAST_POLL_INTERVAL_SEC,
+    STREAM_DRAIN_POLL_INTERVAL_SEC,
+    STREAM_DRAIN_WINDOW_AGENT_DONE_SEC,
+    STREAM_DRAIN_WINDOW_FAST_SEC,
+    STREAM_DRAIN_WINDOW_SEC,
     STREAM_RESUME_BODY_LAST_EVENT_ID_ALLOW,
     STREAM_RESUME_COLD_RESTART_SUGGESTION,
+    SHUTDOWN_PROC_KILL_WAIT_SEC,
 )
 
 # ===== P1-F：子路由拆分（盘前小作文热度 → interfaces/api/routes/zsxq.py）=====
@@ -1327,7 +1333,9 @@ async def auth_register(req: RegisterRequest):
                     "message": "用户名前缀 guest_ 为系统保留，请更换"},
         )
     try:
-        user = storage.get_or_create_user(
+        # 新建用户分支含 bcrypt/PBKDF2 哈希（数百毫秒 CPU），整体丢线程池避免阻塞事件循环
+        user = await asyncio.to_thread(
+            storage.get_or_create_user,
             req.user_id,
             req.display_name or req.user_id,
             password=req.password,
@@ -1346,7 +1354,7 @@ async def auth_register(req: RegisterRequest):
 async def auth_login(req: LoginRequest):
     """账号密码登录并签发 JWT 对。密码强度若为旧算法会被原地升级为最新 hash。"""
     from fastapi import status as _st
-    ok, need_upgrade, role = storage.verify_user_password(req.user_id, req.password)
+    ok, need_upgrade, role = await storage.verify_user_password_async(req.user_id, req.password)
     if not ok:
         raise HTTPException(
             status_code=_st.HTTP_401_UNAUTHORIZED,
@@ -1358,7 +1366,7 @@ async def auth_login(req: LoginRequest):
     if need_upgrade:
         # 登录成功后把旧算法哈希升级为当前最强算法（pbkdf2 → bcrypt 或低 iters → 高 iters）
         try:
-            storage.update_password(req.user_id, req.password)
+            await storage.update_password_async(req.user_id, req.password)
         except Exception:
             # 升级失败不影响登录
             pass
@@ -1409,7 +1417,7 @@ async def auth_change_password(req: ChangePasswordRequest,
         raise HTTPException(status_code=403,
                             detail={"code": "GUEST_CANNOT_CHANGE_PASSWORD",
                                     "message": "游客账号不支持改密码，请先注册正式账号"})
-    ok, _need, _role = storage.verify_user_password(current.user_id, req.old_password)
+    ok, _need, _role = await storage.verify_user_password_async(current.user_id, req.old_password)
     if not ok:
         raise HTTPException(
             status_code=_st.HTTP_401_UNAUTHORIZED,
@@ -1417,7 +1425,7 @@ async def auth_change_password(req: ChangePasswordRequest,
             headers={"WWW-Authenticate": "Bearer"},
         )
     try:
-        storage.update_password(current.user_id, req.new_password)
+        await storage.update_password_async(current.user_id, req.new_password)
     except ValueError as ve:
         raise HTTPException(status_code=400,
                             detail={"code": "BAD_NEW_PASSWORD", "message": str(ve)})
@@ -1785,11 +1793,11 @@ async def run_task_stream(req: _StreamTaskRequest, request: Request,
 
                 yield frame
                 if ("event: done" in frame) or ("event: error" in frame):
-                    _drain_deadline = time.monotonic() + 1.0
+                    _drain_deadline = time.monotonic() + STREAM_DRAIN_WINDOW_SEC
                     while time.monotonic() < _drain_deadline:
                         try:
                             cc = sub_iter.__anext__()
-                            f2 = await asyncio.wait_for(cc, timeout=0.1)
+                            f2 = await asyncio.wait_for(cc, timeout=STREAM_DRAIN_POLL_INTERVAL_SEC)
                             yield f2
                         except (asyncio.TimeoutError, StopAsyncIteration):
                             break
@@ -1955,15 +1963,16 @@ async def run_task_stream(req: _StreamTaskRequest, request: Request,
                     "from_stock_cache": True, "hit_stock": _hit_stock})
             except Exception:
                 pass
-            # 订阅主循环（防止 done 之后残留事件）：跑 0.5s 排空后直接 return
-            _drain_deadline = time.monotonic() + 0.5
+            # 订阅主循环（防止 done 之后残留事件）：排空 0.5s 后直接 return
+            _drain_deadline = time.monotonic() + STREAM_DRAIN_WINDOW_FAST_SEC
             try:
                 sub_iter = sub.__aiter__()
                 while time.monotonic() < _drain_deadline:
                     if await request.is_disconnected():
                         break
                     try:
-                        f2 = await asyncio.wait_for(sub_iter.__anext__(), timeout=0.05)
+                        f2 = await asyncio.wait_for(sub_iter.__anext__(),
+                                                    timeout=STREAM_DRAIN_FAST_POLL_INTERVAL_SEC)
                         yield f2
                         if ("event: done" in f2) or ("event: error" in f2):
                             break
@@ -2087,11 +2096,11 @@ async def run_task_stream(req: _StreamTaskRequest, request: Request,
                 yield frame
                 if ("event: done" in frame) or ("event: error" in frame):
                     # workflow 正常结束 → 排空 1s 后直接 return
-                    _drain_deadline = time.monotonic() + 1.0
+                    _drain_deadline = time.monotonic() + STREAM_DRAIN_WINDOW_SEC
                     while time.monotonic() < _drain_deadline:
                         try:
                             cc = sub_iter.__anext__()
-                            f2 = await asyncio.wait_for(cc, timeout=0.1)
+                            f2 = await asyncio.wait_for(cc, timeout=STREAM_DRAIN_POLL_INTERVAL_SEC)
                             yield f2
                         except (asyncio.TimeoutError, StopAsyncIteration):
                             break
@@ -2205,11 +2214,11 @@ async def run_task_stream(req: _StreamTaskRequest, request: Request,
                     frame = await asyncio.wait_for(anext_coro, timeout=_poll_interval)
                 except asyncio.TimeoutError:
                     if agent_task is not None and agent_task.done():
-                        _drain_deadline = time.monotonic() + 2.0
+                        _drain_deadline = time.monotonic() + STREAM_DRAIN_WINDOW_AGENT_DONE_SEC
                         while time.monotonic() < _drain_deadline:
                             try:
                                 cc = sub_iter.__anext__()
-                                f2 = await asyncio.wait_for(cc, timeout=0.1)
+                                f2 = await asyncio.wait_for(cc, timeout=STREAM_DRAIN_POLL_INTERVAL_SEC)
                                 yield f2
                             except (asyncio.TimeoutError, StopAsyncIteration):
                                 break
@@ -2221,11 +2230,11 @@ async def run_task_stream(req: _StreamTaskRequest, request: Request,
                 yield frame
 
                 if ("event: done" in frame) or ("event: error" in frame):
-                    _drain_deadline = time.monotonic() + 1.0
+                    _drain_deadline = time.monotonic() + STREAM_DRAIN_WINDOW_SEC
                     while time.monotonic() < _drain_deadline:
                         try:
                             cc = sub_iter.__anext__()
-                            f2 = await asyncio.wait_for(cc, timeout=0.1)
+                            f2 = await asyncio.wait_for(cc, timeout=STREAM_DRAIN_POLL_INTERVAL_SEC)
                             yield f2
                         except (asyncio.TimeoutError, StopAsyncIteration):
                             break
@@ -3437,7 +3446,7 @@ def kill_port(port: int):
     try:
         result = subprocess.run(
             ["netstat", "-ano"],
-            capture_output=True, text=True, timeout=5
+            capture_output=True, text=True, timeout=SHUTDOWN_PROC_KILL_WAIT_SEC
         )
         pids = set()
         for line in result.stdout.splitlines():
@@ -3448,7 +3457,8 @@ def kill_port(port: int):
                 if pid != current_pid and pid != "0":
                     pids.add(pid)
         for pid in pids:
-            subprocess.run(["taskkill", "/PID", pid, "/F"], timeout=5)
+            subprocess.run(["taskkill", "/PID", pid, "/F"],
+                           timeout=SHUTDOWN_PROC_KILL_WAIT_SEC)
             print(f"[启动] 已清理占用端口 {port} 的残留进程: PID {pid}")
     except FileNotFoundError:
         # 非 Windows 环境无 netstat/taskkill，跳过

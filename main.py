@@ -37,6 +37,18 @@ import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from config.constants import (
+    DEFAULT_SERVER_PORT,
+    PORT_FIND_FREE_MAX_ATTEMPTS,
+    PORT_HEALTH_PROBE_TIMEOUT_SEC,
+    PORT_NETSTAT_QUERY_TIMEOUT_SEC,
+    PORT_PROBE_SOCKET_TIMEOUT_SEC,
+    PORT_PROCESS_QUERY_TIMEOUT_SEC,
+    PORT_RELEASE_POLL_INTERVAL_SEC,
+    PORT_RELEASE_POLL_MAX_ROUNDS,
+    PORT_RELEASE_TASKKILL_TIMEOUT_SEC,
+)
+
 
 # ============================================================
 # CLI: python main.py test-imports 架构层最小冒烟：逐个 import 新架构真源路径，打印PASS/FAIL，失败退出码=1。
@@ -243,7 +255,7 @@ def _port_is_listening(host: str, port: int) -> Optional[dict]:
     # Fast-path: 纯socket connect 判断（跨平台）
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.settimeout(0.3)
+            s.settimeout(PORT_PROBE_SOCKET_TIMEOUT_SEC)
             if s.connect_ex((host if host != "0.0.0.0" else "127.0.0.1", port)) == 0:
                 pass
             else:
@@ -260,7 +272,7 @@ def _port_is_listening(host: str, port: int) -> Optional[dict]:
             # 用 netstat 拿 PID（比 WMI 轻量且稳定）
             out = _sp.run(
                 ["netstat", "-ano", "-p", "TCP"],
-                capture_output=True, text=True, timeout=8,
+                capture_output=True, text=True, timeout=PORT_NETSTAT_QUERY_TIMEOUT_SEC,
             ).stdout or ""
             target_lh = f"{host}:{port}"
             target_any = f"0.0.0.0:{port}"
@@ -289,7 +301,7 @@ def _port_is_listening(host: str, port: int) -> Optional[dict]:
                              pid_, "$p.ProcessName",
                              "(Get-CimInstance Win32_Process -Filter \"ProcessId=$($p.Id)\").CommandLine"
                          )],
-                        capture_output=True, text=True, timeout=10,
+                        capture_output=True, text=True, timeout=PORT_PROCESS_QUERY_TIMEOUT_SEC,
                     ).stdout.strip()
                     parts = proc.split("|", 2)
                     if len(parts) >= 2:
@@ -301,7 +313,7 @@ def _port_is_listening(host: str, port: int) -> Optional[dict]:
             try:
                 import urllib.request as _ur
                 probe_url = f"http://127.0.0.1:{port}/health"
-                with _ur.urlopen(probe_url, timeout=0.8) as resp:
+                with _ur.urlopen(probe_url, timeout=PORT_HEALTH_PROBE_TIMEOUT_SEC) as resp:
                     body = (resp.read() or b"").decode("utf-8", errors="replace")
                     info["status_url_body"] = body
                     if "MOSS-Finance-Assistant" in body or "moss-finance-assistant" in body.lower():
@@ -313,13 +325,14 @@ def _port_is_listening(host: str, port: int) -> Optional[dict]:
     return info
 
 
-def _find_free_port(host: str, start_port: int, max_attempts: int = 100) -> int:
+def _find_free_port(host: str, start_port: int,
+                    max_attempts: int = PORT_FIND_FREE_MAX_ATTEMPTS) -> int:
     """从 start_port 开始逐个+1，返回第一个空闲端口（最多尝试 max_attempts 个）。"""
     import socket
     for p in range(start_port, start_port + max_attempts):
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.settimeout(0.3)
+                s.settimeout(PORT_PROBE_SOCKET_TIMEOUT_SEC)
                 if s.connect_ex((host if host != "0.0.0.0" else "127.0.0.1", p)) != 0:
                     return p
         except OSError:
@@ -384,12 +397,13 @@ def cmd_server(args) -> int:
                 print(f"💡 检测到是本项目旧实例，自动释放端口 {port}（kill PID={pid}）...",
                       file=sys.stderr)
                 _sp2.run(["taskkill", "/F", "/PID", str(pid)],
-                         capture_output=False, timeout=10, check=False)
+                         capture_output=False, timeout=PORT_RELEASE_TASKKILL_TIMEOUT_SEC,
+                         check=False)
                 import time as _t
-                for _ in range(10):
+                for _ in range(PORT_RELEASE_POLL_MAX_ROUNDS):
                     if _port_is_listening(host, port) is None:
                         break
-                    _t.sleep(0.2)
+                    _t.sleep(PORT_RELEASE_POLL_INTERVAL_SEC)
                 info2 = _port_is_listening(host, port)
                 if info2 is None:
                     print(f"✅ 端口 {host}:{port} 已成功释放，可以启动新服务。", file=sys.stderr)
@@ -405,7 +419,7 @@ def cmd_server(args) -> int:
                 print(f"⚠️  --kill-conflicts=always：强制释放端口 {port}（PID={pid}，非本项目）",
                       file=sys.stderr)
                 _sp3.run(["taskkill", "/F", "/PID", str(pid)], capture_output=False,
-                         timeout=10, check=False)
+                         timeout=PORT_RELEASE_TASKKILL_TIMEOUT_SEC, check=False)
             except Exception as e3:
                 print(f"❌ 强制释放失败：{type(e3).__name__}: {e3}", file=sys.stderr)
 
@@ -498,7 +512,8 @@ def _build_parser() -> argparse.ArgumentParser:
     # 1) server
     ps = sub.add_parser("server", help="启动 uvicorn FastAPI HTTP 服务")
     ps.add_argument("--host", default="127.0.0.1")
-    ps.add_argument("--port", type=int, default=int(os.environ.get("PORT", "8000")))
+    ps.add_argument("--port", type=int,
+                    default=int(os.environ.get("PORT", str(DEFAULT_SERVER_PORT))))
     ps.add_argument("--reload", action="store_true", help="开发模式：文件变动自动重启")
     ps.add_argument("--log-level", default="info", choices=["debug", "info", "warning", "error", "critical"])
     ps.add_argument(

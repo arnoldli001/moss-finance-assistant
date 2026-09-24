@@ -2,6 +2,18 @@ from ragflow_sdk import RAGFlow
 import requests
 import time
 
+from config.constants import (
+    IMA_CLIENT_ERROR_PREVIEW_CHARS,
+    IMA_DOWNLOAD_MAX_RETRIES,
+    IMA_HTTP_DEFAULT_TIMEOUT_SEC,
+    IMA_HTTP_DOWNLOAD_TIMEOUT_SEC,
+    IMA_HTTP_MAX_RETRIES,
+    IMA_HTTP_RETRY_BACKOFF_SEC,
+    IMA_HTTP_SHORT_TIMEOUT_SEC,
+    IMA_KB_LIST_LIMIT,
+    IMA_SEARCH_DEFAULT_LIMIT,
+)
+
 class MyRAGFlow(RAGFlow):
     def __init__(self, api_key, base_url, ima_client_id, ima_api_key, version='v1'):
         # 初始化父类
@@ -20,9 +32,11 @@ class MyRAGFlow(RAGFlow):
             "Content-Type": "application/json"
         }
 
-    def _request_with_retry(self, method, url, headers, json=None, params=None, timeout=15, retries=2):
+    def _request_with_retry(self, method, url, headers, json=None, params=None,
+                            timeout=IMA_HTTP_DEFAULT_TIMEOUT_SEC,
+                            retries=IMA_HTTP_MAX_RETRIES):
         """带重试和状态码检查的 HTTP 请求封装。
-        每次失败后等待 1 秒再重试。超时/网络错误/5xx 都会重试。
+        每次失败后等待 IMA_HTTP_RETRY_BACKOFF_SEC 秒再重试。超时/网络错误/5xx 都会重试。
         """
         last_err = None
         for attempt in range(1, retries + 1):
@@ -35,27 +49,27 @@ class MyRAGFlow(RAGFlow):
                     last_err = f"HTTP {resp.status_code}"
                     print(f"[IMA] {url} 第{attempt}次失败: HTTP {resp.status_code}，{'重试中...' if attempt < retries else '已达最大重试次数'}")
                     if attempt < retries:
-                        time.sleep(1)
+                        time.sleep(IMA_HTTP_RETRY_BACKOFF_SEC)
                     continue
                 if resp.status_code >= 400:
-                    print(f"[IMA] {url} 客户端错误: HTTP {resp.status_code} - {resp.text[:200]}")
+                    print(f"[IMA] {url} 客户端错误: HTTP {resp.status_code} - {resp.text[:IMA_CLIENT_ERROR_PREVIEW_CHARS]}")
                     return None
                 return resp
             except requests.exceptions.Timeout:
                 last_err = f"请求超时({timeout}s)"
                 print(f"[IMA] {url} 第{attempt}次超时({timeout}s)，{'重试中...' if attempt < retries else '已达最大重试次数'}")
                 if attempt < retries:
-                    time.sleep(1)
+                    time.sleep(IMA_HTTP_RETRY_BACKOFF_SEC)
             except (requests.exceptions.ConnectionError, ConnectionResetError, ConnectionAbortedError, BrokenPipeError) as e:
                 last_err = f"连接错误: {e}"
                 print(f"[IMA] {url} 第{attempt}次连接错误({type(e).__name__})，{'重试中...' if attempt < retries else '已达最大重试次数'}")
                 if attempt < retries:
-                    time.sleep(1)
+                    time.sleep(IMA_HTTP_RETRY_BACKOFF_SEC)
             except Exception as e:
                 last_err = f"未知错误: {e}"
                 print(f"[IMA] {url} 第{attempt}次异常: {e}")
                 if attempt < retries:
-                    time.sleep(1)
+                    time.sleep(IMA_HTTP_RETRY_BACKOFF_SEC)
         print(f"[IMA] {url} 全部重试失败: {last_err}")
         return None
 
@@ -64,7 +78,9 @@ class MyRAGFlow(RAGFlow):
         if use_cache and self._kb_cache is not None:
             return self._kb_cache
         url = "https://ima.qq.com/openapi/wiki/v1/get_addable_knowledge_base_list"
-        resp = self._request_with_retry("POST", url, self._ima_headers(), json={"cursor": "", "limit": 50}, timeout=10)
+        resp = self._request_with_retry("POST", url, self._ima_headers(),
+                                        json={"cursor": "", "limit": IMA_KB_LIST_LIMIT},
+                                        timeout=IMA_HTTP_SHORT_TIMEOUT_SEC)
         if resp is None:
             print("[IMA] 获取知识库列表失败")
             return []
@@ -75,12 +91,14 @@ class MyRAGFlow(RAGFlow):
         self._kb_cache = data.get("data", {}).get("addable_knowledge_base_list", [])
         return self._kb_cache
 
-    def search_knowledge(self, query, knowledge_base_id, cursor="", limit=3):
+    def search_knowledge(self, query, knowledge_base_id, cursor="",
+                         limit=IMA_SEARCH_DEFAULT_LIMIT):
         """在指定知识库中搜索知识内容，返回 info_list（含 media_id、title）"""
         url = "https://ima.qq.com/openapi/wiki/v1/search_knowledge"
         payload = {"query": query, "cursor": cursor, "knowledge_base_id": knowledge_base_id, "limit": limit}
         t0 = time.time()
-        resp = self._request_with_retry("POST", url, self._ima_headers(), json=payload, timeout=15)
+        resp = self._request_with_retry("POST", url, self._ima_headers(), json=payload,
+                                        timeout=IMA_HTTP_DEFAULT_TIMEOUT_SEC)
         if resp is None:
             print(f"[IMA] search_knowledge 失败 (query={query})")
             return {}
@@ -94,7 +112,8 @@ class MyRAGFlow(RAGFlow):
         """获取媒体详情，返回 notebook_id 和 media_type"""
         url = "https://ima.qq.com/openapi/wiki/v1/get_media_info"
         payload = {"media_id": media_id, "knowledge_base_id": knowledge_base_id}
-        resp = self._request_with_retry("POST", url, self._ima_headers(), json=payload, timeout=10)
+        resp = self._request_with_retry("POST", url, self._ima_headers(), json=payload,
+                                        timeout=IMA_HTTP_SHORT_TIMEOUT_SEC)
         if resp is None:
             print(f"[IMA] get_media_info 失败 (media_id={media_id})")
             return {}
@@ -104,7 +123,9 @@ class MyRAGFlow(RAGFlow):
         """获取笔记正文内容，返回 content 字符串"""
         url = "https://ima.qq.com/openapi/note/v1/get_doc_content"
         t0 = time.time()
-        resp = self._request_with_retry("GET", url, self._ima_headers(), params={"doc_id": doc_id}, timeout=15)
+        resp = self._request_with_retry("GET", url, self._ima_headers(),
+                                        params={"doc_id": doc_id},
+                                        timeout=IMA_HTTP_DEFAULT_TIMEOUT_SEC)
         if resp is None:
             print(f"[IMA] get_doc_content 失败 (doc_id={doc_id})")
             return ""
@@ -136,11 +157,12 @@ class MyRAGFlow(RAGFlow):
         t0 = time.time()
         content_bytes = None
         # 下载部分做连接重置重试
-        for attempt in range(1, 4):
+        for attempt in range(1, IMA_DOWNLOAD_MAX_RETRIES + 1):
             try:
                 # 合并 IMA 认证头和下载所需的额外头
                 download_headers = {**self._ima_headers(), **headers}
-                resp = requests.get(url, headers=download_headers, timeout=30)
+                resp = requests.get(url, headers=download_headers,
+                                    timeout=IMA_HTTP_DOWNLOAD_TIMEOUT_SEC)
                 if resp.status_code != 200:
                     print(f"[IMA] 下载失败: HTTP {resp.status_code} (title={title})")
                     return ""

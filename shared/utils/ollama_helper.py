@@ -78,6 +78,11 @@ from config.constants import (  # noqa: E402
     OLLAMA_PULL_PROGRESS_LINE_MAX_CHARS,
     OLLAMA_PULL_HARD_TIMEOUT_SEC,
     OLLAMA_MODEL,
+    OLLAMA_SHUTDOWN_READER_CANCEL_WAIT_SEC,
+    OLLAMA_SHUTDOWN_TERMINATE_POLL_INTERVAL_SEC,
+    OLLAMA_SHUTDOWN_TERMINATE_POLLS,
+    OLLAMA_SHUTDOWN_WAIT_EXECUTOR_TIMEOUT_SEC,
+    SHUTDOWN_PROC_KILL_WAIT_SEC,
 )
 from shared.utils.proc_registry import track as _track_proc, untrack as _untrack_proc  # noqa: E402
 
@@ -386,7 +391,8 @@ async def ensure_ollama_ready(
             if not reader_task.done():
                 reader_task.cancel()
             try:
-                await asyncio.wait_for(reader_task, timeout=3.0)
+                await asyncio.wait_for(reader_task,
+                                       timeout=OLLAMA_SHUTDOWN_READER_CANCEL_WAIT_SEC)
             except (asyncio.TimeoutError, asyncio.CancelledError):
                 pass
             _untrack_proc(proc)
@@ -428,11 +434,11 @@ async def shutdown_ollama_if_spawned() -> bool:
     except Exception:
         pass
     exited = False
-    for _ in range(10):
+    for _ in range(OLLAMA_SHUTDOWN_TERMINATE_POLLS):
         if proc.poll() is not None:
             exited = True
             break
-        await asyncio.sleep(0.3)
+        await asyncio.sleep(OLLAMA_SHUTDOWN_TERMINATE_POLL_INTERVAL_SEC)
     if not exited:
         try:
             proc.kill()
@@ -440,8 +446,9 @@ async def shutdown_ollama_if_spawned() -> bool:
             pass
         try:
             await asyncio.wait_for(
-                asyncio.get_running_loop().run_in_executor(None, proc.wait, 5.0),
-                timeout=6.0,
+                asyncio.get_running_loop().run_in_executor(
+                    None, proc.wait, SHUTDOWN_PROC_KILL_WAIT_SEC),
+                timeout=OLLAMA_SHUTDOWN_WAIT_EXECUTOR_TIMEOUT_SEC,
             )
         except Exception:
             pass
