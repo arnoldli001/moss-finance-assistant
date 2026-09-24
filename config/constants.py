@@ -918,6 +918,11 @@ EVAL_WS_CONNECT_TIMEOUT_SEC: int = 10
 EVAL_AGENT_TASK_PATH: str = "/api/task"
 # http 模式：监听 Agent 输出推送的 WS 路径前缀（最终拼接为 /ws/{thread_id}）
 EVAL_AGENT_WS_PATH_PREFIX: str = "/ws/"
+# direct 模式：被测裸模型的 temperature（比 judge 略高，允许自然表达但仍偏确定）
+EVAL_DIRECT_TEMPERATURE: float = 0.3
+# direct 模式：被测裸模型单次输出 token 上限。多股对比/护城河等题需较长篇幅，
+# 过低（如 800）会在给全代码与结论前截断，被 judge 误判为覆盖不足。
+EVAL_DIRECT_MAX_TOKENS: int = 1500
 
 
 # ======================================================================

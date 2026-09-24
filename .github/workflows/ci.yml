@@ -47,7 +47,7 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
 
   eval:
-    name: LLM 评估回归（direct 抽样）
+    name: LLM 评估回归（direct 离线子集）
     needs: test
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -73,4 +73,7 @@ jobs:
             echo "::notice::未配置 DEEPSEEK_API_KEY（仓库 Settings → Secrets and variables → Actions 添加后自动启用），本次跳过 LLM 评估"
             exit 0
           fi
-          python -m tests.eval.run_eval --mode direct --limit 3
+          # direct=裸模型无联网/工具，run_eval 会自动跳过 requires_live_data 的实时题
+          # （新闻/估值/时效/数值对比/行业当期数据），只评离线可公平测的定性分析与
+          # 行为合规样本（护城河/反幻觉拒答/风险声明），实时链路由本地 http 模式全量回归覆盖。
+          python -m tests.eval.run_eval --mode direct

@@ -85,7 +85,7 @@ Two-stage routing: Stage 0 injects a minimal tool menu for the model to pick too
 - **Dual-layer prompt-injection protection**: regex fast path (zero cost) → local LLM classifier slow path (semantic second check, rejects at confidence ≥0.7) → JSONL audit logging; LLM failure defaults to fail-open (availability first), switchable to fail-closed
 
 ### 5. LLM Evaluation Regression (CI-blocking)
-26 structured golden-set samples (10 multi-stock comparisons, 10 industry analyses, etc.), LLM-as-Judge six-dimension scoring (coverage / violations / must-contain / hallucination / risk compliance / overall). **Judge reliability measured first**: qwen3:8b achieves 100% self-consistency, 100% position-bias-free rate, 80% agreement with human labels — because when the judge is inconsistent, downstream eval metrics are pure noise. CI blocks when pass rate <70% or hallucination rate >5%.
+26 structured golden-set samples (10 multi-stock comparisons, 10 industry analyses, etc.), LLM-as-Judge six-dimension scoring (coverage / violations / must-contain / hallucination / risk compliance / overall). **Judge reliability measured first**: qwen3:8b achieves 100% self-consistency, 100% position-bias-free rate, 80% agreement with human labels — because when the judge is inconsistent, downstream eval metrics are pure noise. CI blocks when pass rate <70% or hallucination rate >5%. **direct/http split tracks**: CI's direct mode calls the bare LLM with no web/tools, so it auto-excludes the 22 `requires_live_data` items (news, current valuation, freshness, numeric multi-stock comparisons, current-period industry data) and fairly evaluates only the 4 offline-answerable behavioral/qualitative samples (moat / anti-hallucination refusal / risk disclaimer / qualitative comparison); the live-data chain is covered by the full 26-sample http (online) regression run locally — so an honest "data not found" refusal is never misjudged as a quality regression.
 
 ### 6. Context Engineering
 Sliding window of 10 turns + auto-compression into 3-part summaries after 20 turns + permanent retention of key decisions + relevance filtering (Jaccard + stock-code weighting, threshold 0.15) + 2000-char context trimming + semantic cache (embedding cosine matching with benchmark-calibrated threshold).
@@ -268,7 +268,7 @@ Open `http://localhost:8000` for the frontend; first-time users can click "guest
 python main.py test-imports               # import-chain smoke test
 pytest tests/ -q                          # unit tests (network tests skipped by default)
 k6 run benchmarks/k6/smoke.js             # full-chain HTTP smoke test (requires k6)
-python -m tests.eval.run_eval --mode direct --limit 3   # LLM eval sampling
+python -m tests.eval.run_eval --mode direct          # LLM eval (auto-skips live-data items; offline subset only)
 ```
 
 ---
@@ -423,7 +423,7 @@ No, on both counts. Three-layer synchronized persistence: `memory_turns` rows de
 <details>
 <summary><b>How do I add evaluation samples to the golden set?</b></summary>
 
-Edit `tests/eval/golden_set.json`; each sample requires `_description` / `id` (contiguous eval_XXX) / `category` / `input` / `expected_points` / `forbidden_patterns` / `risk_level`; for buy/sell advice add `must_contain: ["仅供参考", "不构成投资建议"]`. Then verify with `python -m tests.eval.run_eval --mode direct --ids <newId> --limit 1`.
+Edit `tests/eval/golden_set.json`; each sample requires `_description` / `id` (contiguous eval_XXX) / `category` / `input` / `expected_points` / `forbidden_patterns` / `risk_level`; for buy/sell advice add `must_contain: ["仅供参考", "不构成投资建议"]`. Add `"requires_live_data": true` for items that need live market/financial data (skipped in direct mode, covered by http), or `false` to force a purely qualitative/behavioral item into the offline CI gate. Then verify with `python -m tests.eval.run_eval --mode http --ids <newId> --limit 1` (live items) or `--mode direct` (offline items).
 </details>
 
 <details>

@@ -57,11 +57,62 @@ from config.constants import (
     EVAL_WS_CONNECT_TIMEOUT_SEC,
     EVAL_AGENT_TASK_PATH,
     EVAL_AGENT_WS_PATH_PREFIX,
+    EVAL_DIRECT_MAX_TOKENS,
+    EVAL_DIRECT_TEMPERATURE,
 )
 from tests.eval.judge_prompt import (
     JUDGE_SYSTEM_PROMPT,
     JUDGE_USER_PROMPT_TEMPLATE,
 )
+
+# direct 模式（直连裸 LLM，无联网/知识库/数据库工具）只能公平评估
+# 「不依赖实时行情/财务数据」的样本：定性分析与行为合规类。
+# 其余金融问答（新闻/估值/时效/多股数值对比/行业当期数据）在 direct 下
+# 模型只能拒答或用过时知识——把这类纳入无工具评测属于测试设计错误，
+# 会把"诚实拒答"误判为质量回归。它们仍由 http 模式（全系统联网）覆盖。
+# 可用样本级 requires_live_data 字段显式覆盖（true=跳过 / false=保留）。
+_DIRECT_OFFLINE_CATEGORIES = {"moat", "hallucination_guard", "risk_disclaimer"}
+
+
+def _sample_requires_live_data(sample: Dict[str, Any]) -> bool:
+    """样本是否依赖联网/工具获取的实时数据。
+
+    显式标记优先；未标记时按类别保守判定：不在离线白名单类别的样本，
+    direct 模式一律视为需要实时数据（安全默认，新增类别不会悄悄进 CI 门）。
+    """
+    flag = sample.get("requires_live_data")
+    if flag is not None:
+        return bool(flag)
+    return sample.get("category") not in _DIRECT_OFFLINE_CATEGORIES
+
+
+def select_samples(
+    golden_set: List[Dict[str, Any]],
+    mode: str,
+    category_filter: Optional[str] = None,
+    ids_filter: Optional[List[str]] = None,
+    limit: Optional[int] = None,
+) -> tuple[List[Dict[str, Any]], List[str]]:
+    """按模式/类别/ID/数量挑选待测样本（纯函数，便于离线单测）。
+
+    返回 (选中样本, 被跳过样本ID)。direct 模式（无工具）在 --limit 之前剔除
+    依赖实时数据的样本，避免前 N 条恰好是实时题而结构性必挂。
+    """
+    selected = list(golden_set)
+    if category_filter:
+        selected = [s for s in selected if s.get("category") == category_filter]
+    if ids_filter:
+        id_set = set(ids_filter)
+        selected = [s for s in selected if s.get("id") in id_set]
+
+    skipped_ids: List[str] = []
+    if mode == "direct":
+        skipped_ids = [s.get("id", "?") for s in selected if _sample_requires_live_data(s)]
+        selected = [s for s in selected if not _sample_requires_live_data(s)]
+
+    if limit:
+        selected = selected[:limit]
+    return selected, skipped_ids
 
 
 # ======================================================================
@@ -96,6 +147,8 @@ class EvalReport:
     passed: int = 0
     failed: int = 0
     errored: int = 0
+    skipped: int = 0  # 因评测模式不支持（如 direct 无实时数据）而跳过的样本数
+    skipped_samples: List[str] = field(default_factory=list)
     avg_score: float = 0.0
     hallucination_rate: float = 0.0
     avg_coverage: float = 0.0
@@ -253,8 +306,8 @@ async def _call_deepseek_direct(user_input: str, timeout: float) -> str:
                     {"role": "system", "content": _AGENT_SYSTEM_PROMPT},
                     {"role": "user", "content": user_input},
                 ],
-                "temperature": 0.3,
-                "max_tokens": 800,
+                "temperature": EVAL_DIRECT_TEMPERATURE,
+                "max_tokens": EVAL_DIRECT_MAX_TOKENS,
             },
         )
         resp.raise_for_status()
@@ -406,26 +459,34 @@ async def run_eval(
     # 1) 加载 golden set
     with open(EVAL_GOLDEN_SET_PATH, "r", encoding="utf-8") as f:
         golden_set: List[Dict[str, Any]] = json.load(f)
-    if category_filter:
-        golden_set = [s for s in golden_set if s.get("category") == category_filter]
-    if ids_filter:
-        id_set = set(ids_filter)
-        golden_set = [s for s in golden_set if s.get("id") in id_set]
-    if limit:
-        golden_set = golden_set[:limit]
 
-    print(f"[eval] 加载 {len(golden_set)} 个样本  mode={mode}")
+    # direct 模式（无工具）在 limit 前剔除实时数据样本，避免前 N 条恰好是实时题
+    golden_set, skipped_ids = select_samples(
+        golden_set, mode,
+        category_filter=category_filter, ids_filter=ids_filter, limit=limit,
+    )
+
+    print(f"[eval] 加载 {len(golden_set)} 个样本  mode={mode}"
+          + (f"（direct 无工具，已跳过 {len(skipped_ids)} 个实时数据样本）" if skipped_ids else ""))
+    if skipped_ids:
+        print(f"[eval] 跳过样本：{', '.join(skipped_ids)}")
+    if not golden_set:
+        print("[eval] ❌ 过滤后没有可评测样本（空集不能判定通过），CI 阻断")
 
     # 2) 并发评估
     conc = concurrency if concurrency and concurrency > 0 else EVAL_CONCURRENCY
     semaphore = asyncio.Semaphore(conc)
+    if not golden_set:
+        # 空集：不发起任何调用，直接返回带 skipped 的报告（main 阈值判定会判失败）
+        return EvalReport(total=0, skipped=len(skipped_ids), skipped_samples=skipped_ids)
     tasks = [evaluate_one(s, agent_url, semaphore, mode=mode) for s in golden_set]
     t0 = time.time()
     results: List[SampleResult] = await asyncio.gather(*tasks)
     elapsed = time.time() - t0
 
     # 3) 聚合报告
-    report = EvalReport(total=len(results))
+    report = EvalReport(total=len(results),
+                        skipped=len(skipped_ids), skipped_samples=skipped_ids)
     for r in results:
         report.samples.append(r)
         if r.error:
@@ -481,6 +542,8 @@ def save_report(report: EvalReport) -> Path:
             "passed": report.passed,
             "failed": report.failed,
             "errored": report.errored,
+            "skipped": report.skipped,
+            "skipped_samples": report.skipped_samples,
             "avg_score": round(report.avg_score, 4),
             "avg_coverage": round(report.avg_coverage, 4),
             "hallucination_rate": round(report.hallucination_rate, 4),
@@ -517,6 +580,8 @@ def save_report(report: EvalReport) -> Path:
         f"- 通过：{report.passed} ({report.passed/max(report.total,1)*100:.1f}%)",
         f"- 失败：{report.failed}",
         f"- 错误：{report.errored}",
+        f"- 跳过（模式不支持，如 direct 无实时数据）：{report.skipped}"
+        + (f"（{', '.join(report.skipped_samples)}）" if report.skipped_samples else ""),
         f"- 平均分：{report.avg_score:.2f}（阈值 {EVAL_PASS_SCORE_THRESHOLD}）",
         f"- 平均覆盖度：{report.avg_coverage:.2f}",
         f"- 幻觉率：{report.hallucination_rate:.2%}（阻断阈值 {EVAL_HALLUCINATION_RATE_BLOCK_THRESHOLD:.0%}）",
@@ -583,6 +648,9 @@ def main() -> int:
     print(f"[eval] 报告已保存：{json_path}")
 
     # CI 阈值判定
+    if report.total == 0:
+        print(f"[eval] ❌ 无有效评测样本（跳过 {report.skipped} 个），空集不允许判通过，CI 阻断")
+        return 1
     if report.hallucination_rate > EVAL_HALLUCINATION_RATE_BLOCK_THRESHOLD:
         print(f"[eval] ❌ 幻觉率 {report.hallucination_rate:.2%} 超阈值，CI 阻断")
         return 1

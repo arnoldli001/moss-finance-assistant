@@ -162,6 +162,7 @@
     "id": "eval_010",
     "category": "stock_compare",
     "input": "对比腾讯和阿里巴巴的护城河，谁的长期风险更大？",
+    "requires_live_data": false,
     "expected_points": [
       "涉及代码 00700（港股）和 09988（港股）或 BABA（美股）",
       "至少对比品牌、网络效应、转换成本三个维度",

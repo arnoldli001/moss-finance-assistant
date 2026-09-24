@@ -85,7 +85,7 @@
 - **Prompt 注入双层防护**：正则快路（零成本）→ 本地 LLM 分类器慢路（语义二判，confidence≥0.7 拒绝）→ JSONL 审计；LLM 故障默认 fail-open（可用性优先），可切 fail-closed
 
 ### 5. LLM 评估回归体系（CI 可阻断）
-26 条结构化 golden set（多股对比×10 / 行业分析×10 等），LLM-as-Judge 六维评分（覆盖度/违规/必须包含/幻觉/风险合规/综合分）。**Judge 可靠性先行实测**：qwen3:8b 自一致率 100%、位置无偏率 100%、与人工标注一致率 80%——裁判不一致时下游 eval 指标全是噪声。CI 通过率 <70% 或幻觉率 >5% 即阻断。
+26 条结构化 golden set（多股对比×10 / 行业分析×10 等），LLM-as-Judge 六维评分（覆盖度/违规/必须包含/幻觉/风险合规/综合分）。**Judge 可靠性先行实测**：qwen3:8b 自一致率 100%、位置无偏率 100%、与人工标注一致率 80%——裁判不一致时下游 eval 指标全是噪声。CI 通过率 <70% 或幻觉率 >5% 即阻断。**direct/http 分轨**：CI 的 direct 模式是裸模型无联网，自动剔除 `requires_live_data` 的实时题（新闻/当前估值/时效/数值对比/行业当期数据共 22 条），只公平评测离线可答的 4 条定性/行为样本（护城河/反幻觉拒答/风险声明/定性对比），实时链路则由本地 http 模式（全系统联网）26 条全量回归覆盖——避免把"无数据时诚实拒答"误判为质量回归。
 
 ### 6. Context Engineering
 滑窗 10 轮 + 20 轮自动压缩 3 段摘要 + 关键决策永久保留 + 关联度过滤（Jaccard + 股票代码加权，阈值 0.15）+ 2000 字精简裁剪 + 语义缓存（Embedding 余弦命中，阈值经基准校准）。
@@ -280,7 +280,7 @@ docker compose up -d --build       # 方式二：Docker 一键起（app + MySQL 
 python main.py test-imports               # import 链冒烟
 pytest tests/ -q                          # 单元测试（网络测试默认跳过）
 k6 run benchmarks/k6/smoke.js             # HTTP 全链路冒烟（需 k6）
-python -m tests.eval.run_eval --mode direct --limit 3   # LLM 评估抽样
+python -m tests.eval.run_eval --mode direct          # LLM 评估（自动跳过实时题，只评离线子集）
 ```
 
 ---
@@ -410,7 +410,7 @@ moss_finance_assistant/
 <details>
 <summary><b>如何给 golden set 新增评估样本？</b></summary>
 
-编辑 `tests/eval/golden_set.json`，每条必填 `_description` / `id`（eval_XXX 连续）/ `category` / `input` / `expected_points` / `forbidden_patterns` / `risk_level`；涉及买卖建议的追加 `must_contain: ["仅供参考", "不构成投资建议"]`。然后 `python -m tests.eval.run_eval --mode direct --ids <新ID> --limit 1` 验证。
+编辑 `tests/eval/golden_set.json`，每条必填 `_description` / `id`（eval_XXX 连续）/ `category` / `input` / `expected_points` / `forbidden_patterns` / `risk_level`；涉及买卖建议的追加 `must_contain: ["仅供参考", "不构成投资建议"]`。若该题依赖实时行情/财务数据，加 `"requires_live_data": true`（direct 模式会跳过，由 http 模式覆盖）；纯定性/行为题可设 `false` 强制纳入离线 CI。然后用 `python -m tests.eval.run_eval --mode http --ids <新ID> --limit 1`（实时题）或 `--mode direct`（离线题）验证。
 </details>
 
 <details>
