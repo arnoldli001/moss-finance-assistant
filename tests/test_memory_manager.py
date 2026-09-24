@@ -47,6 +47,7 @@ def test_priority_classification():
             f"      priority={prio}, is_key_decision={is_key}  "
             f"(期望 key={exp_key}, 高优先级={'是' if exp_high else '否'})"
         )
+    assert all_pass, "优先级分类存在失败用例（见上方 ❌ 行）"
     return all_pass
 
 

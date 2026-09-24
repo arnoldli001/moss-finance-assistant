@@ -1,4 +1,4 @@
-﻿"""
+"""
 知识星球 (zsxq) 群组内容抓取工具 - Playwright 浏览器自动化版
 
 核心原理：
@@ -21,7 +21,9 @@ import time
 from pathlib import Path
 from typing import Optional, Dict, List
 from datetime import datetime
-from playwright.sync_api import sync_playwright
+# 注意：playwright 一律在**调用点**懒加载（见 _fetch_topics_by_search / _fetch_topics_via_browser），
+# 不在模块顶层 import —— 顶层 eager import 会让未安装 playwright 的环境（CI / 纯 import 链 smoke）
+# 连 `import tools.zsxq_tool` 都直接失败。
 
 # 确保项目根目录在 sys.path 中（直接运行本文件时需要）
 # 鲁棒算法：向上查找项目根标志性文件 AGENTS.md（项目独有），找不到再退化 parent 层数：
@@ -191,7 +193,8 @@ import threading as _threading
 _zsxq_browser_lock = _threading.Lock()
 _zsxq_active_operation = None  # 记录当前正在运行的操作名（"search" / "fetch_all" / None）
 import asyncio
-from playwright.async_api import async_playwright
+# （原此处有 `from playwright.async_api import async_playwright`，AST 核实为**未被使用**的
+#  顶层 eager import：真正的调用点各自懒加载，故删除以免拖垮 import 链。）
 
 # ======================== ZSXQ 访问配置（token 免扫码） ========================
 # 更新 token：运行 python tools/zsxq_get_token.py 自动写入 .env，

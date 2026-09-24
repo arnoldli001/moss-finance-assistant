@@ -122,8 +122,12 @@ def main():
           and "injected_context=_injected" in _wf_src)
     _zsxq_route_src = (Path(__file__).parent.parent / "interfaces" / "api" / "routes" / "zsxq.py"
                        ).read_text(encoding="utf-8")
-    _appjs = (Path(__file__).parent.parent / "static" / "js" / "app.js"
-              ).read_text(encoding="utf-8")
+    # 前端真源 = static/index.html：浏览器实际加载的唯一页面，它只引 constants.js /
+    # auth_bootstrap.js / stream_client.js / react_monitor.js / react_moat_card.js 五个脚本，
+    # **不引用 static/js/app.js，也不引用 static/index.css**（两者已是死代码）。
+    # 原护栏读的是 app.js —— 检查一个浏览器永远不会加载的文件，所以长期"绿而无意义"。
+    _live_html = (Path(__file__).parent.parent / "static" / "index.html"
+                  ).read_text(encoding="utf-8")
     check("_save_zsxq_to_history 落库幂等（agent 已落库时不重复追加气泡）",
           "_already_saved" in _zsxq_route_src and "aget_state" in _zsxq_route_src)
     check("StructuredTool 数据源经 _ainvoke_toolish 调用（修 'StructuredTool' is not callable）",
@@ -152,17 +156,44 @@ def main():
     check("GET /api/task/status 暴露任务存活权威信号（结果落库后才注销）",
           '@app.get("/api/task/status")' in server_src
           and "SRMsg.GET_TASK_INFO" in server_src)
-    check("前端 TaskManager 以任务存活状态为准（复盘阶段1 中间结果先落库，"
+    check("前端 TaskManager 以任务存活登记为准（复盘阶段1 中间结果先落库，"
           "历史增长不可靠）",
-          "_fetchRunning" in _appjs and "/api/task/status" in _appjs
-          and "resumeIfRunning" in _appjs
-          and "任务已在后台完成" in _appjs)
+          "resumeIfRunning" in _live_html
+          and "TaskManager.start" in _live_html
+          and "TaskManager.finish" in _live_html)
+    # ⚠️ 已知缺口，如实登记（**不要**把它写成通过项）：
+    #   后端 GET /api/task/status 已实现（见上面一条 check），但**活的前端**
+    #   （static/index.html）并不调用它——其 TaskManager 是纯前端内存登记
+    #   （start / finish / resumeIfRunning），不读服务端权威存活状态。
+    #   这套"以服务端存活状态为准"的实现只存在于 static/js/app.js，而 app.js 已不被
+    #   index.html 引用（浏览器从不加载）。原护栏读的正是 app.js，故这条长期假绿。
+    if "/api/task/status" not in _live_html:
+        print("  [TODO] 后端 /api/task/status 未被活前端消费：TaskManager 仍是纯前端内存登记，"
+              "服务端权威存活状态未接入 UI")
 
     print()
     if failures:
         print(f"结果：{len(failures)} 项失败 -> {failures}")
         sys.exit(1)
     print("结果：全部通过")
+
+
+def test_recent_changes_regressions():
+    """pytest 入口。
+
+    ⚠️ 本文件此前只有 main()、**没有任何 test_* 函数**，pytest 收集到 0 个用例 ——
+    也就是说下面这一整组回归护栏在 CI 里从来不执行（只有手动
+    `python tests/test_recent_changes.py` 才会跑）：护栏存在，但不上岗。
+    """
+    failures.clear()
+    try:
+        main()
+    except SystemExit as e:
+        # main() 失败时按脚本语义 sys.exit(1)。pytest 下必须转成断言失败，
+        # 否则 SystemExit 可能被当作"正常退出"，又是一次假绿。
+        if e.code:
+            raise AssertionError(f"回归护栏失败 {len(failures)} 项: {failures}") from None
+    assert not failures, f"回归护栏失败 {len(failures)} 项: {failures}"
 
 
 if __name__ == "__main__":

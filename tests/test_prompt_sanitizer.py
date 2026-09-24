@@ -33,6 +33,7 @@ FAIL = 0
 
 
 def expect(name, cond, detail=""):
+    """断言助手。失败时直接抛 AssertionError，pytest 与脚本模式都能捕获。"""
     global PASS, FAIL
     if cond:
         PASS += 1
@@ -40,6 +41,7 @@ def expect(name, cond, detail=""):
     else:
         FAIL += 1
         print(f"  ❌ {name}  {detail}")
+        raise AssertionError(f"{name}  {detail}")
 
 
 def _patch(obj, name, value):

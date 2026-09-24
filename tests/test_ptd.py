@@ -102,6 +102,7 @@ def test_parse_route_output():
               f"       解析得到 ids={ids} (len={len(ids)}, 期望 {expect_cnt})\n"
               f"       {reason} → {'通过' if ok_clean else '失败'}"
               f"{('' if raw_has_route else f' (len相等={len(cleaned) == len(raw)})')}")
+    assert all_ok, "路由协议解析存在失败用例（见上方 ❌ 行）"
     return all_ok
 
 
@@ -139,6 +140,7 @@ def test_heuristic_select():
         print(f"   {mark} [{label}]\n"
               f"       用户Query: {q[:50]}…\n"
               f"       命中工具: {sorted(got)}  期望包含: {sorted(expect_set)}")
+    assert all_ok, "关键词启发式兜底存在失败用例（见上方 ❌ 行）"
     return all_ok
 
 

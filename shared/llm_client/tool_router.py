@@ -95,7 +95,15 @@ PRESET_INDEX: Dict[str, ToolIndexEntry] = {
         summary="解析用户上传/服务器已有文件（PDF/Excel/Word/Markdown/TXT 等）并按指令抽取内容",
         trigger_keywords=["读取文件", "读取上传", "上传的文件", "解析excel", "解析pdf", "解析word",
                           "分析文件", "读取附件", "打开我上传的", "读取文档", "读xlsx",
-                          "读pdf", "读docx", "读csv", "提取附件内容"],
+                          "读pdf", "读docx", "读csv", "提取附件内容",
+                          # 带前导点的扩展名：用户直接"指文件"时（"我刚刚上传的 贵州茅台.xlsx"、
+                          # "我给你的研报.pdf"），上面「动词+格式」的写法全都命中不了——中间会夹字
+                          # （如"读取 我刚刚上传的 …文件"里并没有连续的"读取文件"）。
+                          # 用前导点是刻意的：比裸 "pdf" 精确得多，不会误吃"生成/导出 pdf"这类动作
+                          # （见 convert_md_to_pdf 上方注释：该信号本来就属于"读取"而非"生成"）。
+                          ".pdf", ".xlsx", ".xls", ".docx", ".doc", ".csv", ".txt",
+                          # 高频口语说法："我刚刚上传的 / 我上传的"
+                          "上传的"],
     ),
     "search_zsxq_by_stock": ToolIndexEntry(
         tool_id="search_zsxq_by_stock",

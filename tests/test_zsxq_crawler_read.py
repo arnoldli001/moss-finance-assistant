@@ -79,7 +79,8 @@ def _write_analysis_json(d: Path, stem: str, payload: str) -> Path:
 # ============================================================
 # 1) find_latest_today_txt
 # ============================================================
-def test_find_latest_today_txt(failures):
+def test_find_latest_today_txt():
+    failures = []
     def check(name, cond):
         print(f"  [{'PASS' if cond else 'FAIL'}] {name}")
         if not cond:
@@ -127,11 +128,14 @@ def test_find_latest_today_txt(failures):
               find_latest_today_txt(d) is not None
               and find_latest_today_txt(d).name == f"{today}101010.txt")
 
+    assert not failures, f"find_latest_today_txt 失败项: {failures}"
+
 
 # ============================================================
 # 2) _attach_table_marker
 # ============================================================
-def test_attach_table_marker(failures):
+def test_attach_table_marker():
+    failures = []
     def check(name, cond):
         print(f"  [{'PASS' if cond else 'FAIL'}] {name}")
         if not cond:
@@ -172,6 +176,8 @@ def test_attach_table_marker(failures):
         _write_analysis_json(d, txt.stem, json.dumps({"generated_at": "x", "details": []}))
         out5 = _attach_table_marker(TXT_BODY, txt)
         check("details 为空 → 原样返回", out5 == TXT_BODY)
+
+    assert not failures, f"_attach_table_marker 失败项: {failures}"
 
 
 # ============================================================
@@ -291,11 +297,11 @@ async def _test_fetch_async(failures):
 def main():
     failures = []
     print("[1] find_latest_today_txt")
-    test_find_latest_today_txt(failures)
+    test_find_latest_today_txt()                     # 内部自断言，失败直接 raise
     print("[2] _attach_table_marker")
-    test_attach_table_marker(failures)
+    test_attach_table_marker()                       # 同上
     print("[3] fetch_zsxq_latest_summary_async")
-    asyncio.run(_test_fetch_async(failures))
+    asyncio.run(_test_fetch_async(failures))         # 下划线前缀，pytest 不收集
 
     print()
     if failures:

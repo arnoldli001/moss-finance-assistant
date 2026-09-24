@@ -28,7 +28,21 @@ PASS = 0
 FAIL = 0
 
 
+def _recent(days: int = 3) -> str:
+    """近 N 天的日期串（供用例构造"仍在时效窗口内"的文档）。
+
+    build_citation_context 内置时效性窗口过滤（stream_adapters.filter_items_by_recency）：
+    IMA 通道即使 published_at 解析失败/超期也保留（静态 PDF，入库时间≠新闻时效），
+    但 **Tavily / ZSXQ 解析失败即视为过期删除**（stream_adapters.py L113-116 明确策略）。
+    因此构造非 IMA 文档时必须给一个**相对当前时间**的近期日期；
+    写死日期会让用例在 30 天窗口滑过后自己变红（定时炸弹）。
+    """
+    from datetime import datetime, timedelta
+    return (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+
+
 def expect(name, cond, detail=""):
+    """断言助手。失败时直接抛 AssertionError，pytest 与脚本模式都能捕获。"""
     global PASS, FAIL
     if cond:
         PASS += 1
@@ -36,6 +50,7 @@ def expect(name, cond, detail=""):
     else:
         FAIL += 1
         print(f"  ❌ {name}  {detail}")
+        raise AssertionError(f"{name}  {detail}")
 
 
 # =================================================================
@@ -97,14 +112,15 @@ def test_normalize_citations():
 def test_build_citation_context():
     print("\n== 场景 3: build_citation_context [citation:N] Prompt ==")
     from shared.llm_client.stream_adapters import build_citation_context
+    _pub = _recent()
     docs: List[Dict] = [
         {"doc_id": "t1", "title": "茅台上半年净利同比增20%", "url": "https://news.cn/1",
          "content": "贵州茅台发布半年报，净利同比增20%超预期。", "channel": "tavily",
-         "reliability": "可靠", "published_at": "2026-08-28"},
+         "reliability": "可靠", "published_at": _pub},
         {"doc_id": "i1", "title": "IMA 白酒行业报告", "content": "白酒估值PE 25倍，处于近5年均值之上。",
-         "channel": "ima", "reliability": "可靠", "knowledge_base": "白酒行业"},
+         "channel": "ima", "reliability": "可靠", "knowledge_base": "白酒行业", "published_at": _pub},
         {"doc_id": "z1", "title": "散户讨论茅台出货", "content": "吧里有大户在出茅台，大家小心。",
-         "channel": "zsxq", "source_type": "forum"},
+         "channel": "zsxq", "source_type": "forum", "published_at": _pub},
     ]
     norm_docs, block = build_citation_context(docs)
     expect("3 条被规范化", len(norm_docs) == 3)
@@ -124,13 +140,14 @@ def test_assign_citations_by_overlap():
     from shared.llm_client.stream_adapters import (        build_citation_context, assign_citations_by_overlap
     )
     # 构造 docs：关键词 茅台/净利/超预期 对应 doc1；白酒/PE/估值 对应 doc2；出货/大户 对应 doc3
+    _pub = _recent()
     docs_dict = [
         {"title": "茅台上半年净利增20%超预期", "content": "贵州茅台发布半年报，净利同比增20%超预期",
-         "channel": "tavily", "reliability": "可靠"},
+         "channel": "tavily", "reliability": "可靠", "published_at": _pub},
         {"title": "白酒行业估值PE 25倍", "content": "白酒行业估值 PE 25 倍，高于近5年均值",
-         "channel": "ima", "reliability": "可靠"},
+         "channel": "ima", "reliability": "可靠", "published_at": _pub},
         {"title": "散户讨论茅台大户出货", "content": "吧里有大户在出茅台，建议短线规避",
-         "channel": "zsxq", "source_type": "forum", "reliability": "待验证"},
+         "channel": "zsxq", "source_type": "forum", "reliability": "待验证", "published_at": _pub},
     ]
     norm_docs, _ = build_citation_context(docs_dict)
     # 测试句 1：茅台半年报业绩超预期 → 应 top=1
