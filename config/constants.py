@@ -1281,6 +1281,46 @@ PORT_RELEASE_POLL_MAX_ROUNDS: int = 10
 # taskkill 后每轮确认间隔（秒）
 PORT_RELEASE_POLL_INTERVAL_SEC: float = 0.2
 
+# 端口来源环境变量名（单一真源）：启动横幅 / ngrok 隧道 / --port 默认值共用，
+# 避免「横幅写死 8000、实际监听 8010」这类提示与实际不一致
+SERVER_PORT_ENV_KEYS: tuple[str, ...] = ("PORT",)
+
+# 运行时端口回写变量（内部约定）：main.py cmd_server 在端口冲突自愈/--auto-port 定案后
+# 把最终端口写入此变量，app 侧（横幅提示 / ngrok 隧道目标）优先读它 —— uvicorn 自身
+# 不从环境变量取端口，若不回写则 --port 8010 时横幅仍提示 8000。
+SERVER_RUNTIME_PORT_ENV: str = "MOSS_RUNTIME_PORT"
+
+# 合法端口区间（IANA）：越界视为非法配置
+PORT_VALID_MIN: int = 1
+PORT_VALID_MAX: int = 65535
+
+# Ctrl+C 后 uvicorn 等待连接优雅关闭的秒数（0/None 表示无限等待 → 终端永不退出）
+UVICORN_GRACEFUL_SHUTDOWN_TIMEOUT_SEC: int = 8
+
+# uvicorn.run() 支持的 kwargs 探测结果缓存：{参数名: bool}
+# 启动路径每次只探一次；拒绝「静默降级」——不支持的能力由 cmd_server 显式打印
+UVICORN_RUN_KWARG_PROBE_CACHE: dict[str, bool] = {}
+
+
+def resolve_server_port(default: int = DEFAULT_SERVER_PORT) -> int:
+    """解析服务实际监听端口：运行时回写变量 → SERVER_PORT_ENV_KEYS → 默认端口。
+
+    用于启动横幅 / ngrok 隧道目标 —— 让「提示里的端口」与「实际监听的端口」同源。
+    非法值（非数字 / 越界）不抛异常，回落 default（横幅等展示场景可用性优先）；
+    CLI 侧由 main.py cmd_server 对同一环境变量做严格校验并以退出码 2 拒绝启动。
+    """
+    for key in (SERVER_RUNTIME_PORT_ENV, *SERVER_PORT_ENV_KEYS):
+        raw = (os.getenv(key) or "").strip()
+        if not raw:
+            continue
+        try:
+            port = int(raw)
+        except ValueError:
+            continue
+        if PORT_VALID_MIN <= port <= PORT_VALID_MAX:
+            return port
+    return default
+
 
 # ======================================================================
 # 33. IMA_CLIENT — IMA/RAGFlow 知识库 HTTP 客户端（tools/MyRAGFlow.py）

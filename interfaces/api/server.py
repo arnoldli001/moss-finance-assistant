@@ -7,6 +7,11 @@ try:
     sys.stderr.reconfigure(line_buffering=True)
 except AttributeError:
     pass
+# 控制台编码自愈（2026-10-16）：Windows 中文控制台默认 GBK，本模块启动横幅/日志含 emoji
+# → print 抛 UnicodeEncodeError 会打断 lifespan 启动；统一走 shared 单一真源（失败静默）。
+from shared.console_encoding import ensure_utf8_console  # noqa: E402
+
+ensure_utf8_console()
 import uuid
 import asyncio
 
@@ -125,7 +130,6 @@ from config.constants import (
     NGROK_TUNNEL_MAX_POLL_ROUNDS,
     NGROK_TUNNEL_POLL_INTERVAL_SEC,
     SHORT_HTTP_TIMEOUT_SEC,
-    DEFAULT_SERVER_PORT,
     NGROK_LOCAL_API_PORT,
     SCHEDULER_CANCEL_WAIT_SEC,
     SUBPROCESS_WAIT_TIMEOUT_SEC,
@@ -148,6 +152,7 @@ from config.constants import (
     REVIEW_STAGE3_FALLBACK_NEWS_CHARS,
     REVIEW_STAGE3_ERROR_ZSXQ_CHARS,
     REVIEW_STAGE3_ERROR_NEWS_CHARS,
+    resolve_server_port,
 )
 
 # ===== P1-F：子路由拆分（盘前小作文热度 → interfaces/api/routes/zsxq.py）=====
@@ -936,8 +941,10 @@ async def lifespan(app: FastAPI):
             # 直接用 ngrok 命令行启动，加 --pooling-enabled 允许多实例共享同一域名
             # 彻底避免 ERR_NGROK_334: endpoint already online
             ngrok_bin = get_ngrok_config().ngrok_path
+            # 隧道目标端口必须与实际监听端口同源（resolve_server_port：PORT 环境变量 → 默认），
+            # 否则 --port 8010 启动时 ngrok 会把隧道指向 8000（空指向）
             ngrok_proc = subprocess.Popen(
-                [ngrok_bin, "http", str(DEFAULT_SERVER_PORT), "--pooling-enabled", "--log=stdout"],
+                [ngrok_bin, "http", str(resolve_server_port()), "--pooling-enabled", "--log=stdout"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL
             )
@@ -972,8 +979,10 @@ async def lifespan(app: FastAPI):
             ngrok_proc = None  # 失败时避免关闭阶段误操作
     elif not ngrok_token:
         # 未配置 ngrok token，提示局域网访问地址
+        # 端口取 resolve_server_port()：与 main.py cmd_server 回写的最终端口同源，
+        # 避免「--port 8010 启动、提示 8000」这类提示与实况不符（2026-10-16 实测问题）
         print("\n[提示] 未配置 NGROK_AUTHTOKEN，仅支持局域网访问")
-        print(f"[提示] 局域网访问: 手机连同一 WiFi 后访问 http://<本机IP>:{DEFAULT_SERVER_PORT}")
+        print(f"[提示] 局域网访问: 手机连同一 WiFi 后访问 http://<本机IP>:{resolve_server_port()}")
         print("[提示] 外网访问: 在 .env 中设置 NGROK_AUTHTOKEN 后重启\n")
 
     yield  # 应用在此运行，处理请求
@@ -3483,7 +3492,9 @@ def kill_port(port: int):
 
 
 if __name__ == "__main__":
-    kill_port(8000)
+    # 端口同源（2026-10-16）：原先硬编码 8000，PORT/--port 改端口时这里会去清理错误端口，
+    # 且 uvicorn.run 绑定的却是 8000 —— 两处统一走 resolve_server_port()。
+    kill_port(resolve_server_port())
     # 安全策略：配置了 NGROK_AUTHTOKEN 且 pyngrok 可用时。
     _env_ngrok = os.getenv("NGROK_AUTHTOKEN", "").strip()
     _pyngrok_available = False
@@ -3522,4 +3533,6 @@ if __name__ == "__main__":
         asyncio.get_event_loop().set_exception_handler(_asyncio_excepthook)
     except Exception:
         pass
-    uvicorn.run(app, host=bind_host, port=8000)
+    # 端口同源（2026-10-16）：此处原先硬编码 8000，与 main.py 的 --port/PORT 配置不一致
+    # （`python interfaces/api/server.py` 直跑时改端口无效）。统一走 resolve_server_port()。
+    uvicorn.run(app, host=bind_host, port=resolve_server_port())

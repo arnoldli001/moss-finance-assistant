@@ -226,6 +226,9 @@ git clone https://github.com/arnoldli001/moss-finance-assistant.git
 cd moss-finance-assistant
 pip install -r requirements.txt
 
+# 1.5) Dev/test extras (needed for pytest / ruff; kept out of requirements.txt to stay lean)
+pip install pytest pytest-cov ruff
+
 # 2) Playwright (needed for Zsxq scraping)
 playwright install chromium
 
@@ -235,6 +238,10 @@ ollama pull qwen3:8b
 # 4) Environment variables
 cp .env.example .env
 ```
+
+> **No extra setup needed on a Chinese Windows console**: the CLI and server ship a built-in
+> UTF-8 console self-heal (`shared/console_encoding.py`, single source), so you no longer need to
+> set `PYTHONIOENCODING=utf-8` by hand. The variable still works if you set it explicitly.
 
 Key `.env` settings:
 
@@ -265,8 +272,15 @@ SCHEDULER_ENABLED=1              # Scheduler
 ```bash
 # 5) Start
 python main.py server              # Option 1: unified entry (recommended)
+python main.py server --reload --log-level debug   # dev: auto-restart on file change + debug logs
+python main.py server --port 8010 --auto-port      # port clash: pick a free port automatically
 docker compose up -d --build       # Option 2: Docker (app + MySQL + Redis + Jaeger)
 ```
+
+Port single source of truth: `--port` > `PORT` env var (`.env`, valid range 1~65535; an invalid value
+> is rejected at startup with a hint) > default 8000. The startup banner, the ngrok tunnel target and
+> running `python interfaces/api/server.py` directly all read this one source, so the banner can no
+> longer claim 8000 while you started on 8010.
 
 Open `http://localhost:8000` for the frontend; first-time users can click "guest login" for an instant account, or register via `POST /api/auth/register`. Jaeger UI (OTel tracing) is at `http://localhost:16686`.
 
@@ -275,7 +289,8 @@ Open `http://localhost:8000` for the frontend; first-time users can click "guest
 ```bash
 python main.py test-imports               # import-chain smoke test
 pytest tests/ -q                          # unit tests (network tests skipped by default)
-k6 run benchmarks/k6/smoke.js             # full-chain HTTP smoke test (requires k6)
+pytest tests/test_main_cli.py -q          # CLI startup-path regression (port / encoding / uvicorn kwargs)
+k6 run benchmarks/k6/smoke.js             # full-chain HTTP smoke test (requires k6 + running server)
 python -m tests.eval.run_eval --mode direct          # LLM eval (auto-skips live-data items; offline subset only)
 ```
 

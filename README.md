@@ -238,6 +238,9 @@ git clone https://github.com/arnoldli001/moss-finance-assistant.git
 cd moss-finance-assistant
 pip install -r requirements.txt
 
+# 1.5) 开发/测试可选依赖（跑 pytest / ruff 需要；不进 requirements.txt 以保持运行时精简）
+pip install pytest pytest-cov ruff
+
 # 2) Playwright（知识星球抓取功能需要）
 playwright install chromium
 
@@ -247,6 +250,10 @@ ollama pull qwen3:8b
 # 4) 环境变量
 cp .env.example .env
 ```
+
+> **Windows 中文控制台无需任何额外设置**：CLI 与服务端已内置 UTF-8 控制台自愈
+> （`shared/console_encoding.py` 单一真源），不必再手工 `set PYTHONIOENCODING=utf-8`。
+> 该变量仍受支持（显式设置时优先遵循你的设置）。
 
 编辑 `.env` 核心配置：
 
@@ -277,8 +284,14 @@ SCHEDULER_ENABLED=1              # 定时调度
 ```bash
 # 5) 启动
 python main.py server              # 方式一：统一入口（推荐）
+python main.py server --reload --log-level debug   # 开发调试：改文件自动重启 + debug 日志
+python main.py server --port 8010 --auto-port      # 端口冲突：自动换端口，不用手工找
 docker compose up -d --build       # 方式二：Docker 一键起（app + MySQL + Redis + Jaeger）
 ```
+
+端口来源单一真源：`--port` > 环境变量 `PORT`（`.env`，合法范围 1~65535，非法值启动即拒绝并提示）
+> 默认 8000。启动横幅、ngrok 隧道目标、`python interfaces/api/server.py` 直跑三处均读同一来源，
+> 不会再出现「`--port 8010` 启动、横幅却提示 8000」这类提示与实况不符。
 
 访问 `http://localhost:8000` 打开前端；首次使用点「游客登录」一键获取账号，或 `POST /api/auth/register` 注册。Jaeger UI（OTel 追踪）在 `http://localhost:16686`。
 
@@ -287,7 +300,8 @@ docker compose up -d --build       # 方式二：Docker 一键起（app + MySQL 
 ```bash
 python main.py test-imports               # import 链冒烟
 pytest tests/ -q                          # 单元测试（网络测试默认跳过）
-k6 run benchmarks/k6/smoke.js             # HTTP 全链路冒烟（需 k6）
+pytest tests/test_main_cli.py -q          # CLI 启动路径回归（端口/编码/uvicorn 参数）
+k6 run benchmarks/k6/smoke.js             # HTTP 全链路冒烟（需 k6，先启动服务）
 python -m tests.eval.run_eval --mode direct          # LLM 评估（自动跳过实时题，只评离线子集）
 ```
 

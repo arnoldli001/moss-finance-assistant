@@ -30,6 +30,8 @@ if not hasattr(argparse.ArgumentParser, "parse_known_args"):
     def _parse_known_args_compat(self, args=None, namespace=None):
         return self._parse_known_args2(args, namespace, intermixed=False)
     argparse.ArgumentParser.parse_known_args = _parse_known_args_compat
+import contextlib
+import io
 import asyncio
 import json
 import os
@@ -47,7 +49,22 @@ from config.constants import (
     PORT_RELEASE_POLL_INTERVAL_SEC,
     PORT_RELEASE_POLL_MAX_ROUNDS,
     PORT_RELEASE_TASKKILL_TIMEOUT_SEC,
+    PORT_VALID_MAX,
+    PORT_VALID_MIN,
+    SERVER_PORT_ENV_KEYS,
+    SERVER_RUNTIME_PORT_ENV,
+    UVICORN_GRACEFUL_SHUTDOWN_TIMEOUT_SEC,
+    UVICORN_RUN_KWARG_PROBE_CACHE,
 )
+from shared.console_encoding import ensure_utf8_console
+
+# ============================================================
+# 控制台编码自愈（2026-10-16）：Windows 中文控制台默认 GBK，
+# 本文件帮助文本含 emoji（💡）→ print() 抛 UnicodeEncodeError 直接崩溃，
+# 过去必须外部设 PYTHONIOENCODING=utf-8 才能跑。此处内置自愈，避免转嫁环境成本。
+# 失败静默（可用性优先）：老终端/重定向场景保持原编码，不阻断 CLI。
+# ============================================================
+ensure_utf8_console()
 
 
 # ============================================================
@@ -340,6 +357,83 @@ def _find_free_port(host: str, start_port: int,
     raise RuntimeError(f"在 {host} 的 {start_port}~{start_port+max_attempts-1} 范围内没有找到空闲端口")
 
 
+# ============================================================
+# uvicorn 启动参数：按「能力探测」构建，取代原来的 try/except TypeError 猜版本
+# 实测根因（2026-10-16）：uvicorn 0.41.0 已从 run()/Config() 移除 socket_options，
+# 旧代码每次启动都落进兜底分支，打印「当前 uvicorn 版本不支持 socket_options」——
+# 功能没坏（uvicorn config.py bind_socket() 已无条件 setsockopt SO_REUSEADDR），
+# 但提示与真实原因不符，且真正需要的 timeout_graceful_shutdown 是否生效无从得知。
+# ============================================================
+def _uvicorn_run_supports(kwarg_name: str, value,
+                          *, probe_app: str = "moss_uvicorn_capability_probe:app") -> bool:
+    """探测当前 uvicorn 是否接受某个可选 kwargs（结果按参数名缓存）。
+
+    探针直接实例化 uvicorn.Config（不做签名内省，避免 **kwargs 版本误判）：
+    Config 构造不绑定端口、无副作用；stdout/stderr 在探测期间重定向以吞掉日志提示。
+    异常一律按「不支持」保守处理，绝不因探测失败中断启动（可用性优先）。
+    """
+    if kwarg_name in UVICORN_RUN_KWARG_PROBE_CACHE:
+        return UVICORN_RUN_KWARG_PROBE_CACHE[kwarg_name]
+    supported = True
+    try:
+        import uvicorn
+        probe_kwargs = {"host": "127.0.0.1", "port": DEFAULT_SERVER_PORT, kwarg_name: value}
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            uvicorn.Config(probe_app, **probe_kwargs)
+    except TypeError:
+        supported = False
+    except Exception as exc:  # noqa: BLE001 — 探测异常按不支持处理，不中断启动
+        print(f"ℹ️  uvicorn 能力探测异常（按不支持处理）: {type(exc).__name__}: {exc}",
+              file=sys.stderr)
+        supported = False
+    UVICORN_RUN_KWARG_PROBE_CACHE[kwarg_name] = supported
+    return supported
+
+
+def _build_uvicorn_run_kwargs(host: str, port: int, reload: bool, log_level: str) -> dict:
+    """构建 uvicorn.run() 参数：必需项 + 按能力探测保留的可选增强项。
+
+    可选增强项（不支持则剔除并显式打印原因，不做静默降级）：
+      - socket_options            : SO_REUSEADDR 注入（Windows 10048 后立刻重启）
+      - reuse_port                : 仅 POSIX（Windows 传 True 会直接报错，显式跳过）
+      - timeout_graceful_shutdown : Ctrl+C 后等待连接优雅关闭的上限秒数
+                                    （缺省为无限等待 → 前端页面开着时终端永不退出）
+    """
+    kwargs: dict = {
+        "host": host,
+        "port": port,
+        "reload": bool(reload),
+        "log_level": log_level,
+    }
+    skipped: List[str] = []
+
+    # SO_REUSEADDR：老版本 uvicorn 的 Config 接受该参数；新版（>=0.41）已移除，
+    # 但 uvicorn 自身 bind_socket() 无条件 setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)，能力等价。
+    import socket as _sk
+    _reuse_addr_opt = [(_sk.SOL_SOCKET, _sk.SO_REUSEADDR, 1)]
+    if _uvicorn_run_supports("socket_options", _reuse_addr_opt):
+        kwargs["socket_options"] = _reuse_addr_opt
+    else:
+        skipped.append("socket_options（uvicorn 自身 bind_socket() 已内置 SO_REUSEADDR，能力等价）")
+
+    if os.name != "nt":
+        if _uvicorn_run_supports("reuse_port", True):
+            kwargs["reuse_port"] = True
+        else:
+            skipped.append("reuse_port")
+
+    if _uvicorn_run_supports("timeout_graceful_shutdown", UVICORN_GRACEFUL_SHUTDOWN_TIMEOUT_SEC):
+        kwargs["timeout_graceful_shutdown"] = UVICORN_GRACEFUL_SHUTDOWN_TIMEOUT_SEC
+    else:
+        skipped.append("timeout_graceful_shutdown（Ctrl+C 后需先关闭前端页面再停服）")
+
+    if skipped:
+        print(f"ℹ️  当前 uvicorn 未启用可选启动参数：{'；'.join(skipped)}", file=sys.stderr)
+    enabled = [k for k in ("socket_options", "reuse_port", "timeout_graceful_shutdown") if k in kwargs]
+    print(f"ℹ️  uvicorn 可选启动参数已启用: {enabled or '无'}", file=sys.stderr)
+    return kwargs
+
+
 def cmd_server(args) -> int:
     """启动 FastAPI HTTP 服务（等价于 uvicorn interfaces.api.server:app）。
 
@@ -362,6 +456,10 @@ def cmd_server(args) -> int:
 
     host = args.host
     port = int(args.port)
+    if not (PORT_VALID_MIN <= port <= PORT_VALID_MAX):
+        print(f"❌ 端口越界（合法范围 {PORT_VALID_MIN}~{PORT_VALID_MAX}）: {port}；"
+              f"请用 --port 或环境变量 PORT 指定合法端口", file=sys.stderr)
+        return 2
     kill_conflicts = str(getattr(args, "kill_conflicts", "project")).strip().lower() \
         in ("1", "yes", "true", "project", "always")
     kill_always = str(getattr(args, "kill_conflicts", "project")).strip().lower() \
@@ -447,56 +545,49 @@ def cmd_server(args) -> int:
             return 2  # 绑定失败专用 exit code
     import uvicorn
 
-    # 构造并调用 Config.setup_socket() 之前注入 SO_REUSEADDR：
-    # 直接用 uvicorn.run() 传 socket_options 最快（uvicorn 0.19+ 支持此 kwargs 透传）
-    try:
-        import socket as _sk
-        sock_opts = [(_sk.SOL_SOCKET, _sk.SO_REUSEADDR, 1)]
-        # uvicorn stubs 未声明kwargs透传，老版本自动忽略；TypeError 兜底分支在下
-        _extra_run_kwargs: dict = {
-            "socket_options": sock_opts,
-            "reuse_port": (os.name != "nt"),
-            # Ctrl+C 后 uvicorn 默认【无限等待】WS/活动请求关闭——前端页面开着就永远
-            # 卡住不退出（终端无提示符，须重开窗口）。8s 后强制断开继续 lifespan 关停。
-            "timeout_graceful_shutdown": 8,
-        }
-        uvicorn.run(
-            "interfaces.api.server:app",
-            host=host,
-            port=port,
-            reload=bool(args.reload),
-            log_level=args.log_level,
-            **_extra_run_kwargs,
-        )
-    except TypeError:
-        # 老版本 uvicorn：逐级降级（去掉 socket_options/reuse_port，保留 graceful 超时）
-        print("ℹ️  当前 uvicorn 版本不支持 socket_options 参数，跳过 SO_REUSEADDR 注入。",
-              file=sys.stderr)
-        try:
-            uvicorn.run(
-                "interfaces.api.server:app",
-                host=host,
-                port=port,
-                reload=bool(args.reload),
-                log_level=args.log_level,
-                timeout_graceful_shutdown=8,
-            )
-        except TypeError:
-            print("ℹ️  当前 uvicorn 版本不支持 timeout_graceful_shutdown，"
-                  "Ctrl+C 后请先关闭前端页面再停服。", file=sys.stderr)
-            uvicorn.run(
-                "interfaces.api.server:app",
-                host=host,
-                port=port,
-                reload=bool(args.reload),
-                log_level=args.log_level,
-            )
+    # 端口单一真源（2026-10-16）：把最终确定的端口写回环境变量，供 app 侧
+    # （启动横幅的局域网提示 / ngrok 隧道目标）读取 —— uvicorn 不从环境变量读端口，
+    # 若不回写，`--port 8010` 启动时横幅仍会提示 8000（此前实测到的提示与实况不符）。
+    os.environ[SERVER_RUNTIME_PORT_ENV] = str(port)
+
+    # Ctrl+C 后 uvicorn 默认【无限等待】WS/活动请求关闭——前端页面开着就永远卡住不退出
+    # （终端无提示符，须重开窗口）；timeout_graceful_shutdown 到点强制断开再走 lifespan。
+    # SO_REUSEADDR / reuse_port / 该超时是否可传，统一由能力探测决定（不再猜版本）。
+    _run_kwargs = _build_uvicorn_run_kwargs(host, port, bool(args.reload), args.log_level)
+    uvicorn.run("interfaces.api.server:app", **_run_kwargs)
     # Windows 兜底（2026-09-09）：CTRL+C 时忽略信号的不肖子进程（zsxq runner/Playwright）
     # 会孤儿化并霸占控制台输入缓冲，导致终端无提示符——连同本进程整树强杀，确保终端释放。
     import subprocess as _sp_tree
     _sp_tree.run(["taskkill", "/F", "/T", "/PID", str(os.getpid())],
                  capture_output=True, check=False)
     return 0
+
+
+def _server_port_from_env() -> int:
+    """--port 的默认值来源：严格读取 PORT 环境变量（唯一真源 SERVER_PORT_ENV_KEYS）。
+
+    严格校验的原因：原实现 `int(os.environ.get("PORT", ...))` 遇到 `PORT=abc` 会直接抛
+    ValueError 崩溃（裸 traceback，用户看不懂），越界端口也照样进 uvicorn 才报错。
+    此处统一在参数解析阶段拦截并给出可操作的提示（退出码 2）。
+    """
+    for key in SERVER_PORT_ENV_KEYS:
+        raw = (os.environ.get(key) or "").strip()
+        if not raw:
+            continue
+        try:
+            port = int(raw)
+        except ValueError:
+            raise SystemExit(
+                f"❌ 环境变量 {key} 非法（必须是整数端口）: {raw!r}；"
+                f"请修正 {key} 或改用 --port 显式指定"
+            )
+        if not (PORT_VALID_MIN <= port <= PORT_VALID_MAX):
+            raise SystemExit(
+                f"❌ 环境变量 {key} 越界（合法范围 {PORT_VALID_MIN}~{PORT_VALID_MAX}）: {port}；"
+                f"请修正 {key} 或改用 --port 显式指定"
+            )
+        return port
+    return DEFAULT_SERVER_PORT
 
 
 # ============================================================
@@ -512,8 +603,7 @@ def _build_parser() -> argparse.ArgumentParser:
     # 1) server
     ps = sub.add_parser("server", help="启动 uvicorn FastAPI HTTP 服务")
     ps.add_argument("--host", default="127.0.0.1")
-    ps.add_argument("--port", type=int,
-                    default=int(os.environ.get("PORT", str(DEFAULT_SERVER_PORT))))
+    ps.add_argument("--port", type=int, default=_server_port_from_env())
     ps.add_argument("--reload", action="store_true", help="开发模式：文件变动自动重启")
     ps.add_argument("--log-level", default="info", choices=["debug", "info", "warning", "error", "critical"])
     ps.add_argument(
