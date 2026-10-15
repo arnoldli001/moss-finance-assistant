@@ -277,9 +277,12 @@ class TestCmdServerPortSingleSource:
         monkeypatch.setattr(main, "_port_is_listening", lambda host, port: None)
         monkeypatch.setattr(main, "_build_uvicorn_run_kwargs",
                             lambda host, port, reload, level: {"host": host, "port": port})
-        # 关停兜底会 taskkill 整树：patch 全局 subprocess.run（main 内部同为函数级 import）
-        monkeypatch.setattr(subprocess, "run",
-                            lambda *a, **kw: subprocess.CompletedProcess(a, 0))
+        # 关停兜底会 taskkill 整树：替换 main 自己的 seam。
+        # 注意不要 patch 全局 subprocess.run —— 那会波及 pytest 自身子进程调用（跨界改动）。
+        killed: list[str] = []
+        monkeypatch.setattr(main, "_kill_own_process_tree", lambda: killed.append("killed"))
+        # 清掉可能的上游污染，保证 resolve_server_port 只由本用例写入的值决定
+        monkeypatch.delenv(C.SERVER_RUNTIME_PORT_ENV, raising=False)
 
         class _Args:
             host = "127.0.0.1"
@@ -295,6 +298,7 @@ class TestCmdServerPortSingleSource:
         assert C.resolve_server_port() == 8010
         assert calls and calls[0]["port"] == 8010
         assert calls[0]["app"] == "interfaces.api.server:app"
+        assert killed == ["killed"], "关停兜底 seam 未被调用（说明走了非预期分支）"
 
     def test_cmd_server_rejects_out_of_range_port(self, monkeypatch):
         """异常路径：--port 越界 → 退出码 2 且不调用 uvicorn（不进入绑定阶段）。"""

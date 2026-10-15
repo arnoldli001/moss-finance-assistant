@@ -557,10 +557,19 @@ def cmd_server(args) -> int:
     uvicorn.run("interfaces.api.server:app", **_run_kwargs)
     # Windows 兜底（2026-09-09）：CTRL+C 时忽略信号的不肖子进程（zsxq runner/Playwright）
     # 会孤儿化并霸占控制台输入缓冲，导致终端无提示符——连同本进程整树强杀，确保终端释放。
+    _kill_own_process_tree()
+    return 0
+
+
+def _kill_own_process_tree() -> None:
+    """关停兜底：连同本进程整树 taskkill（见 cmd_server 注释）。
+
+    抽成独立函数是为了可测性：单测可替换本函数，从而不必 patch 全局
+    ``subprocess.run``（那会波及 pytest 自身的子进程调用，属于跨界改动）。
+    """
     import subprocess as _sp_tree
     _sp_tree.run(["taskkill", "/F", "/T", "/PID", str(os.getpid())],
                  capture_output=True, check=False)
-    return 0
 
 
 def _server_port_from_env() -> int:
