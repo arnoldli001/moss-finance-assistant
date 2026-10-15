@@ -54,7 +54,15 @@ An **enterprise-grade multi-agent financial research system** for retail investo
 ![User input output process](screenshots/9.用户输入含有股票的多源（IMA知识库、知识星球、网络搜索）并发检测输出效结果1.png)
 ![User input output process](screenshots/10.用户输入含有股票的多源（IMA知识库、知识星球、网络搜索）并发检测输出效结果2.png)
 
-### 10、Share-as-image (one-click borderless high-res PNG with diagonal watermark; both report-heat tables and pre-market-news structured tables are drawn as real Canvas tables)
+### 10、User Input — Output Process Display (multi-agent execution monitor, moat tool-call React progress bar, five-dimension moat scorecard)
+#### **多Agent执行监控动画.gif**
+![Multi-agent execution monitor](screenshots/多Agent执行监控动画.gif)
+#### **护城河工具调用，react进度条.png**
+![Moat tool call with React progress bar](screenshots/护城河工具调用，react进度条.png)
+#### **用户咨询个股_护城河五维度评估卡（react应用）.png**
+![Five-dimension moat scorecard for an individual stock query](screenshots/用户咨询个股_护城河五维度评估卡（react应用）.png)
+
+### 11、Share-as-image (one-click borderless high-res PNG with diagonal watermark; both report-heat tables and pre-market-news structured tables are drawn as real Canvas tables)
 > After **Ctrl+F5**, right-click a message → "Share → Generate share image".
 
 ---
