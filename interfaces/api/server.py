@@ -146,6 +146,9 @@ from config.constants import (
     STREAM_RESUME_BODY_LAST_EVENT_ID_ALLOW,
     STREAM_RESUME_COLD_RESTART_SUGGESTION,
     SHUTDOWN_PROC_KILL_WAIT_SEC,
+    STATIC_ASSET_QPM_PER_IP,
+    STATIC_CACHE_CONTROL,
+    STATIC_PUBLIC_PATH_PREFIX,
     REVIEW_STAGE3_ZSXQ_INPUT_CHARS,
     REVIEW_STAGE3_NEWS_INPUT_CHARS,
     REVIEW_STAGE3_FALLBACK_ZSXQ_CHARS,
@@ -1093,11 +1096,18 @@ _AUTH_PUBLIC_PREFIXES: Tuple[str, ...] = (
     "/favicon.ico", "/static/",
     "/api/auth/", "/api/auth-",  # 登录/注册/刷新/游客/改密码 5 端点
 )
+# 静态资源前缀（单一真源 config/constants.py）：/static/* 走独立宽松配额，不与 guest API 配额共享
+_STATIC_ASSET_PREFIX: str = STATIC_PUBLIC_PATH_PREFIX
 # /api/users 白名单在 _is_public 内精细实现：仅 POST /api/users（旧明文登录）与
 # 单段 GET /api/users/{id} 保持公开；/api/users/{uid}/sessions* 一律走 JWT 强制鉴权
 # （P1 修复：白名单曾导致 sessions 端点按匿名 IP guest 档限流——登录用户点会话页签易 429，
 #   且匿名请求绕过行级校验可读任意用户会话列表）
 _AUTH_PUBLIC_EXACT: Tuple[str, ...] = ("/",)
+# 「应用外壳」路径：与静态资源共用宽松配额（STATIC_ASSET_QPM_PER_IP），不占 guest API 配额。
+# 理由（2026-10-16 实测）：首页 / 与 /favicon.ico 同属「加载界面」而非业务 API，
+# 若计入 guest 10 QPM/IP，用户每分钟刷新约 10 次就会被 429 挡在门外（页面直接打不开）；
+# 而真正稀缺的是 LLM/外部数据类 API，它们仍严格走 guest 档。
+_ASSET_LIKE_EXACT_PATHS: frozenset = frozenset({"/", "/favicon.ico"})
 
 # 旧 IP 限流兜底保留：未登录（无 JWT）时用 client_ip 当 key，不再只做 60/60s 统一，
 # 而是按角色 QPM（guest=10 QPM / 登录 user 60 / admin 120 / owner 600）。
@@ -1157,8 +1167,17 @@ class AuthAndRateLimitMiddleware(BaseHTTPMiddleware):
         if is_public and not is_ws:
             # 仅以 IP 为 key 限流（匿名访问保护）
             # auth 端点（/api/auth/*）放宽至 30 QPM：登录/注册按钮重试不应被 10 QPM 拦截
+            # 静态资源（/static/*）走独立宽松配额：前端首页一次加载需 6 个请求，
+            # 若与 guest 10 QPM 同桶，刷新一两次即 429 → JS 被 ERR_ABORTED →
+            # 「按钮全无反应 / 登录框不弹」（2026-10-16 实测线上缺陷，见 constants 注释）
             ip = self._get_client_ip(request)
-            if path.startswith("/api/auth/"):
+            if path.startswith(_STATIC_ASSET_PREFIX) or path in _ASSET_LIKE_EXACT_PATHS:
+                # 独立配额（STATIC_ASSET_QPM_PER_IP，默认 1200 QPM/IP）：静态资源与首页外壳都不是
+                # 稀缺的 LLM 资源，用「独立 identity 前缀 + limit_override」与 guest API 配额彻底隔离，
+                # 同时保留 DDoS 兜底（注意全局 limiter 未开 endpoint 分桶，key 只取 identity）
+                ok, retry = self._limiter.hit(f"static:{ip}", None,
+                                              limit_override=STATIC_ASSET_QPM_PER_IP)
+            elif path.startswith("/api/auth/"):
                 ok, retry = self._limiter.hit(f"auth:{ip}", "user")
             else:
                 ok, retry = self._limiter.hit(f"pub:{ip}", "guest")
@@ -3448,7 +3467,25 @@ async def websocket_endpoint(websocket: WebSocket, thread_id: str):
 # 挂载 static 目录，提供 index.html 及其静态资源
 static_dir = project_root / "static"
 static_dir.mkdir(exist_ok=True)
-app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
+
+class _StaticFilesNoCache(StaticFiles):
+    """静态资源挂载：补 Cache-Control（允许缓存 + 每次回源校验 → 命中 ETag 走 304）。
+
+    Starlette 的 FileResponse 已自动产出 ETag/Last-Modified 并处理 If-None-Match，
+    只需显式声明缓存策略：
+      - 不加 → 浏览器对静态资源做启发式缓存，前端更新后用户可能长期拿旧 JS；
+      - no-store → 每次整包重传，浪费带宽（长图/GIF 尤其明显）；
+      - no-cache（本选择）→ 保留缓存副本，但每次回源校验，未变更返回 304 空响应。
+    """
+
+    def file_response(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        resp = super().file_response(*args, **kwargs)
+        resp.headers["Cache-Control"] = STATIC_CACHE_CONTROL
+        return resp
+
+
+app.mount("/static", _StaticFilesNoCache(directory=str(static_dir)), name="static")
 
 
 @app.get("/", response_class=HTMLResponse)

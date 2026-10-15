@@ -71,14 +71,24 @@ class RateLimiter:
         return self._qpm.get(role, self._fallback)
 
     def hit(self, identity: str, role: Optional[str],
-            *, endpoint: Optional[str] = None) -> Tuple[bool, int]:
+            *, endpoint: Optional[str] = None,
+            limit_override: Optional[int] = None) -> Tuple[bool, int]:
         """尝试放行一次请求。
 
         返回 (ok, retry_after_s)。ok=True 表示已通过（并计数）。
         retry_after_s 为建议重试秒数（仅 ok=False 时 > 0）。
+
+        :param endpoint: 配合 ``endpoint_separate=True`` 做端点级分桶。
+            ⚠️ 全局单例用的是 ``RateLimiter()``（``endpoint_separate=False``），此时该参数
+            不参与 key —— 若需要「独立配额的资源」，应当**用不同的 identity 前缀**
+            （如静态资源用 ``static:{ip}``），不要依赖 endpoint 分桶。
+        :param limit_override: 显式配额覆盖（不改角色档位本身）。供「静态资源」这类
+            非稀缺资源使用：它们不该与 guest API 的 10 QPM 共享配额
+            （2026-10-16 线上缺陷：/static/* 计入 guest 桶导致前端 JS 429、
+             页面能开但按钮无响应），也不该为了这点需求去改 rbac 角色策略。
         """
         key = (identity, endpoint) if self._endpoint_separate and endpoint else (identity, None)
-        limit = self.qpm_for_role(role)
+        limit = int(limit_override) if limit_override is not None else self.qpm_for_role(role)
         now = time.monotonic()
         cutoff = now - self._window
 

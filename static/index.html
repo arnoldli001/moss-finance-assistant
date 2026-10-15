@@ -3805,8 +3805,53 @@ function escapeHtml(s) {
 
 </script>
 <!-- ===== React 监控面板（多Agent并行执行可视化 + 护城河五维度评估卡）===== -->
-<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<!-- React 18 本地内置（static/js/vendor/，随仓库分发）：
+     原先直接引 unpkg.com —— 实测该 CDN 在本机/国内网络会长时间挂起，
+     而**阻塞式 <script> 会把整个页面卡在加载中**：界面能看见却点不动、
+     登录遮罩出不来（等价于 JS 全灭）。
+     升级方式：从 cdn.jsdelivr.net/npm/react@18.3.1/umd/ 拉同名文件覆盖即可。 -->
+<script charset="utf-8" src="/static/js/vendor/react.production.min.js"></script>
+<script charset="utf-8" src="/static/js/vendor/react-dom.production.min.js"></script>
+<!-- 兜底：万一本地 vendor 文件缺失，异步从镜像补拉（jsDelivr → cdnjs），
+     不阻塞 DOMContentLoaded 上的应用初始化（不出现「卡在加载中」）。 -->
+<script>
+(function () {
+  function loadOne(src) {
+    return new Promise(function (resolve) {
+      var s = document.createElement('script');
+      s.src = src; s.async = false;
+      s.onload = function () { resolve(true); };
+      s.onerror = function () { resolve(false); };
+      document.head.appendChild(s);
+    });
+  }
+  function bootFallback() {
+    if (window.React && window.ReactDOM) return;   // 本地已就绪，零外部请求
+    console.warn('[React] 本地 vendor 未就绪，尝试镜像兜底…');
+    loadOne('https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js')
+      .then(function (ok) {
+        return ok && loadOne('https://cdn.jsdelivr.net/npm/react-dom@18.3.1/umd/react-dom.production.min.js');
+      })
+      .then(function (ok) {
+        if (ok) return true;
+        return loadOne('https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js')
+          .then(function (o2) {
+            return o2 && loadOne('https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js');
+          });
+      })
+      .then(function () {
+        if (!(window.React && window.ReactDOM)) {
+          console.error('[React] 兜底失败：React 未加载，监控面板/护城河卡片将不可用（其余功能不受影响）');
+        }
+      });
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', bootFallback);
+  } else {
+    bootFallback();
+  }
+})();
+</script>
 <script charset="utf-8" src="/static/js/react_monitor.js?v=4"></script>
 <script charset="utf-8" src="/static/js/react_moat_card.js?v=12"></script>
 </body>

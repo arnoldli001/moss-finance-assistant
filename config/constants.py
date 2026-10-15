@@ -682,6 +682,17 @@ NGROK_LOCAL_API_PORT: int = 4040
 # 单条未验证数字展示：最多几条（幻觉防护警示对外展示）
 UNVERIFIED_NUMBER_DISPLAY_MAX: int = 5
 
+# ---------- 静态资源（/static/*，前端 JS/CSS/图片）限流与缓存 ----------
+# 背景（2026-10-16 实测线上缺陷）：/static/ 曾被并入匿名白名单的 guest 档（10 QPM/IP）计数，
+# 而前端首页一次加载就要 1 页 + 5 个 JS —— 刷新一两次即耗尽配额，静态 JS 返回 429/ERR_ABORTED，
+# 表现为「页面能开但按钮全无反应、登录框不弹」（MossMonitor/MossMoatCard/MStreamClient 未定义）。
+# 静态资源不是稀缺的 LLM 资源：给独立的宽松上限（仍保留 DDoS 兜底），不与 API 配额共享。
+STATIC_PUBLIC_PATH_PREFIX: str = "/static/"
+STATIC_ASSET_QPM_PER_IP: int = int(os.environ.get("RATE_LIMIT_QPM_STATIC", "1200"))
+# 静态资源缓存策略：no-cache = 允许缓存但每次必须回源校验（配合 ETag/Last-Modified 走 304）。
+# 不用长 max-age，避免前端更新后用户拿到旧 JS；也不用 no-store，304 比整包重传省得多。
+STATIC_CACHE_CONTROL: str = "no-cache"
+
 # 单条未验证股票代码展示：最多几条
 UNVERIFIED_STOCK_CODE_DISPLAY_MAX: int = 5
 
